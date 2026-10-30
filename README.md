@@ -1,11 +1,14 @@
 # UFO 50 Android Online: PFO 50 + MultiMadnessMod
 
-Build your own Android version of **UFO 50** from your own Steam copy. It includes online
-multiplayer from **PFO 50**, 4+ players in many games from **MultiMadnessMod**, and touch
+**v0.2** · Build your own Android version of **UFO 50** from your own Steam copy. It includes
+online multiplayer from **PFO 50**, 4+ players in many games from **MultiMadnessMod**, and touch
 controls made for the game.
 
-This repository contains no part of UFO 50. `build.sh` reads the game from your own Steam
-installation, downloads the mods and tools from their authors' pages, and builds an APK only you
+![Velgress co-op online: the host's phone and the joiner's phone](docs/screenshots/online_coop.png)
+*The same co-op game on two phones, connected online (the LAN tag under each player chip).*
+
+This repository contains no part of UFO 50. The build reads the game from your own Steam
+installation, downloads the mods and tools from their authors' pages, and makes an APK only you
 have. **Please don't share the APK.** UFO 50 is a paid game by a small studio. Buy it
 ([Steam](https://store.steampowered.com/app/1147860/UFO_50/)) and have your friends buy it too.
 
@@ -14,7 +17,20 @@ This is a fork of Skyline969's
 UFO 50 runs on Android's GameMaker runner. The fork rebuilds the runner for UFO 50 1.9.5 and adds
 the mods, the touch overlay and online play.
 
+**Quick start:** install UFO 50 from Steam, download this repository
+([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.2.zip)), unzip
+it, and double-click **`build.bat`**. See [Quick build](#quick-build).
+
 ---
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Lobby browser with a lobby found](docs/screenshots/lobby_browser.png) | ![In the lobby, both players listed, LAN tag](docs/screenshots/lobby_joined.png) |
+| **Online lobby list**: lobbies on your network and on the internet, plus HOST PUBLIC / HOST PRIVATE / JOIN BY CODE | **In the lobby**: both players, and how you're connected (here LAN) |
+| ![Players panel](docs/screenshots/players_panel.png) | ![Layout editor](docs/screenshots/layout_editor.png) |
+| **Players panel**: touch and each gamepad to P1-P4, your name, join code, UPnP, hot seat | **Layout editor**: move, resize and hide controls, opacity, 4-way / 8-way d-pad |
 
 ## Features
 
@@ -47,8 +63,7 @@ the mods, the touch overlay and online play.
   gets a numbered badge.
 - **Hot seat**: in turn-based games, the touch controls follow whoever's turn it is. This covers
   Party House, Bug Hunter, Mortol II, Lords of Diskonia, Avianos, Hot Foot and Grimstone. A yellow
-  **HS** block marks the active player and blinks when the turn changes. Turn it on or off from the
-  player chip's menu.
+  **HS** block marks the active player and blinks when the turn changes.
 
 **Touch controls**
 - A classic d-pad (8-way by default, with a 4-way switch), the two action buttons, MENU and BACK.
@@ -84,86 +99,103 @@ In most conditions you'll be **direct**. The relay is for awkward networks (doub
 firewalls, some emulators). If you see RELAY at home, turning on UPnP on the host's router usually
 gets you DIRECT.
 
+![A lobby connected through the relay](docs/screenshots/lobby_relay.png)
+
 The room server matches players and relays packets when it has to. It holds only the open lobbies
 (name, player count, addresses), and each one disappears when its lobby closes.
 
 The netcode lives in okplay's [`oknative/`](https://github.com/Patrick-Working/okplay/tree/main/oknative)
-folder, so other games can use it too. The build downloads it from there.
+folder, so other games can use it too.
 
-## Building
+## Quick build
 
-You need a Windows PC. The build runs in Git Bash.
+You need **Windows 10 or 11** and **UFO 50 1.9.5 from Steam**. Nothing else to install.
 
-### One-time setup
+1. Download this repository
+   ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.2.zip)) and
+   unzip it anywhere.
+2. Double-click **`build.bat`**. It finds UFO 50 in your Steam library and checks the version, then
+   downloads the tools and mods into `work\`, each checked against a fixed checksum.
+3. **The first time**, the UFO 50 Mod Loader opens with both mods in place. Click **Install**, wait
+   until it's done, and close it. It makes a modded copy of the game and leaves your Steam
+   installation alone. (The Mod Loader's own headless mode doesn't work yet in 2.3.0, hence the
+   click.)
+4. A few minutes later you get **`work\ufo50-online.apk`**.
+
+Copy the APK to the phone and open it. You may need to allow your file manager to install apps.
+If you get "package appears to be invalid", the copy was cut short: copy it again and check it is
+the same size on both ends.
+
+With the phone connected over USB and USB debugging on, `build.bat -Install` installs it directly
+(this needs adb). If UFO 50 isn't found, run `build.bat -GamePath "D:\path\to\UFO 50"`.
+
+The APK is signed with a key made for you on the first build (`work\keys\`). Keep that folder:
+Android only installs an update over an existing install when it's signed with the same key.
+
+**What the quick build does:** it patches the modded game for Android
+(`scripts/android_patch.csx`: hot seat, pad bindings, the lobby menu, Quit). It takes the
+overlay's font and button icons from your copy of the game (`scripts/export_overlay_art.csx`).
+Then it packs the game into the **runner kit** and signs the result (`scripts/pack_apk.csx`).
+
+The runner kit (`kit/ufo50-online-runner-v0.2.apk`) is the part that's the same for everyone:
+GameMaker's Android runner with the touch overlay, the online service and PFO 50's netcode, and no
+game data. The full build makes it from source.
+
+## Full build
+
+For changing the overlay or the netcode: this builds the runner kit's contents from source, then
+does the quick build with it. It runs in Git Bash and needs:
 
 | what | where | notes |
 |---|---|---|
-| **UFO 50 1.9.5** | [Steam](https://store.steampowered.com/app/1147860/UFO_50/) | Install it normally. The build checks the version. |
-| **Git for Windows** | <https://git-scm.com> | Gives you Git Bash and curl. |
-| **Python 3** + Pillow | <https://www.python.org> | Tick "Add to PATH", then run `py -3 -m pip install pillow`. |
-| **JDK 21** (or 17) | `winget install EclipseAdoptium.Temurin.21.JDK` | Any JDK 17 or 21 works. |
-| **Android SDK** | [Android Studio](https://developer.android.com/studio) or the [command-line tools](https://developer.android.com/studio#command-line-tools-only) | Needs platform-tools, build-tools 35.0.0, platform android-35 and NDK 27.2.12479018. If the command-line tools are installed, `build.sh` installs the rest after you accept Google's licences. |
-| **GameMaker** | <https://gamemaker.io> (free account) | Install it and sign in once. Make sure runtime **2024.14.1.253** is installed with the Android module (*File > Preferences > Runtime Feeds*). |
-
-The build uses your GameMaker account to build the game's Android runner, the same thing the
-GameMaker IDE does when you export a game for Android.
-
-Then check that everything is found:
+| **Git for Windows** | <https://git-scm.com> | Git Bash |
+| **JDK 21** (or 17) | `winget install EclipseAdoptium.Temurin.21.JDK` | for GameMaker's Android build |
+| **Android SDK** | [Android Studio](https://developer.android.com/studio) or the [command-line tools](https://developer.android.com/studio#command-line-tools-only) | build-tools 35.0.0, platform android-35, NDK 27.2.12479018. With the command-line tools installed, `build.sh` installs the rest after you accept Google's licences. |
+| **GameMaker** | <https://gamemaker.io> (free account) | Sign in once, and install runtime **2024.14.1.253** with the Android module (*File > Preferences > Runtime Feeds*). |
 
 ```bash
-bash build.sh --check
+bash build.sh --check     # is everything found?
+bash build.sh             # build the runner from source, then the APK
+bash build.sh --kit       # build only the runner kit (work/kit/), the file the quick build uses
 ```
 
-If it can't find something, set the path in `local.env` (copy `local.env.example`).
+Paths it can't find go in `local.env` (copy `local.env.example`). The full build fetches the
+[PFO 50 source](https://github.com/Blaizer/PFO-50), [ENet](https://github.com/lsalzman/enet) and
+okplay's netcode, all at pinned versions. It builds `libPFO.so` with the NDK and the runner
+(`android/gm-project`) with GameMaker's Igor, using your GameMaker account the same way the IDE
+does when you export a game.
 
-### Build
+`scripts/make_icon.py` redraws the app icon (Python 3 + Pillow); you only need it to change the
+icon.
 
-```bash
-bash build.sh
-```
+## Versions
 
-What it does:
+This release (**v0.2**) is made for exactly these versions. The patches are written against them,
+and the build checks the checksums.
 
-1. **Downloads** these, each checked against a fixed checksum:
-   - [UndertaleModTool CLI](https://github.com/UnderminersTeam/UndertaleModTool) 0.9.2.0
-   - [UFO 50 Mod Loader](https://github.com/phil-macrocheira/UFO-50-MOD-LOADER) 2.3.0
-   - [PFO 50](https://gamebanana.com/mods/648717) 0.10.0 and
-     [MultiMadnessMod](https://gamebanana.com/mods/605308) 1.30, from GameBanana
-   - the [PFO 50 source](https://github.com/Blaizer/PFO-50)
-   - [ENet](https://github.com/lsalzman/enet) 1.3.18
-   - okplay's netcode
-2. **Opens the UFO 50 Mod Loader** with both mods in place. Click **Install**, wait until it's
-   done, and close it. It makes a modded copy of the game and leaves your Steam installation alone.
-   You only do this on the first build.
-3. **Builds PFO 50's netcode for Android** (`libPFO.so`) with the NDK, from the PFO 50 source plus
-   this repository's Android port (`pfo/`).
-4. **Builds the GameMaker Android runner** with GameMaker's Igor. The runner project
-   (`android/gm-project`) holds the touch overlay, the players panel and the online service.
-5. **Patches the modded game for Android** (`scripts/android_patch.csx`: hot seat, pad bindings,
-   the lobby menu, Quit). It also takes the overlay's font and button icons from your copy of the
-   game.
-6. **Packs and signs** `work/ufo50-online.apk`, using a key made for you on the first build.
+| part | version | from |
+|---|---|---|
+| UFO 50 | **1.9.5** (Steam) | [Mossmouth](https://50games.fun) |
+| PFO 50 | **0.10.0** | [GameBanana](https://gamebanana.com/mods/648717), source [Blaizer/PFO-50](https://github.com/Blaizer/PFO-50) @ `b8c9327` |
+| MultiMadnessMod | **1.30** | [GameBanana](https://gamebanana.com/mods/605308) |
+| UFO 50 Mod Loader | **2.3.0** (portable) | [phil-macrocheira/UFO-50-MOD-LOADER](https://github.com/phil-macrocheira/UFO-50-MOD-LOADER) |
+| UndertaleModTool CLI | **0.9.2.0** | [UnderminersTeam/UndertaleModTool](https://github.com/UnderminersTeam/UndertaleModTool) |
+| GameMaker runtime | **2024.14.1.253** (VM, Android) | [YoYo Games](https://gamemaker.io) |
+| ENet | **1.3.18** + okplay's relay hooks | [lsalzman/enet](https://github.com/lsalzman/enet) |
+| okplay oknative | `d536388` | [Patrick-Working/okplay](https://github.com/Patrick-Working/okplay/tree/main/oknative) |
+| Android NDK / build-tools / platform | 27.2.12479018 / 35.0.0 / android-35 (full build only) | Google |
+| App | package `com.unofficial.ufo50`, minimum Android 7.0 (API 24), target API 35 | |
 
-The first build takes 10-20 minutes. Later builds reuse what they can.
-
-### Install
-
-With the phone connected over USB and USB debugging on:
-
-```bash
-bash build.sh --install
-```
-
-Or copy `work/ufo50-online.apk` to the phone and open it. You may need to allow your file manager
-to install apps. If you get "package appears to be invalid", the copy was cut short: copy the file
-again and check it is the same size on both ends.
+The okplay room server is `https://oldkid.net/aoe2net/okplay.php`. UFO 50 lobbies use their own
+app id and wire number there, so they never mix with other okplay games.
 
 ## Playing
 
 - **First start**: go to *Settings > Video Settings > Scale*. 4x leaves room for the controls, and
   FILL fills the screen.
 - **Move the controls**: ☰ (top right) opens the layout editor. Drag a control to move it, and
-  pinch it or drag its handle to resize it. The 4-way / 8-way d-pad switch is there too. DONE saves.
+  pinch it or drag its yellow dot to resize it. The 4-way / 8-way d-pad switch is there too. DONE
+  saves.
 - **Gamepads**: connect them, then tap your player chip to open the players panel and give each
   pad a player.
 - **Hot seat**: tap the player chip and turn HOT SEAT on, then pass the phone around.
@@ -181,7 +213,11 @@ again and check it is the same size on both ends.
   turn on UPnP on their router. The relay should still connect you, just more slowly.
 - **Disconnected after switching apps.** Allow the app's notification (Android 13 and later ask).
   Without it Android may freeze the game in the background.
-- **Build errors.** Run `bash build.sh --check` first. Igor's log is `work/gm/igor.log`.
+- **"App not installed" when updating.** The new APK was signed with a different key (a different
+  `work\keys` folder). Uninstall the old one first, which deletes its saves, or build with the old
+  `work\keys` folder.
+- **Build errors.** The quick build prints the failing step. For the full build, run
+  `bash build.sh --check`; Igor's log is `work/gm/igor.log`.
 
 **Testing switches** (for developers), as files in
 `/sdcard/Android/data/com.unofficial.ufo50/files/`:
@@ -193,13 +229,17 @@ again and check it is the same size on both ends.
 
 | path | what |
 |---|---|
-| `build.sh` | the whole build, from the checks to the APK |
+| `build.bat`, `build.ps1` | the quick build |
+| `build.sh` | the full build |
+| `kit/` | the runner kit the quick build uses (made by `build.sh --kit`; no game data) |
 | `android/gm-project/` | the GameMaker runner project: the PFO extension with the touch overlay (`PFO_Android.java`), the online service, and the app icon (original art) |
 | `pfo/` | the Android port of PFO 50: a patch to its `dllmain.cpp`, plus the Android layer in `android/` (Steam lobbies and networking over ENet, the bridge to the GameMaker runner, the hot seat and pad builtins) |
-| `scripts/` | the game patch (an UndertaleModTool script), the font and icon export, the native build, and APK packing |
+| `scripts/` | the game patch, the overlay art export, the APK packer and signer (UndertaleModTool scripts), and the native build |
+| `docs/screenshots/` | the pictures on this page |
 
 Nothing from the game is stored here: no game files, art or music. The only game code is the short
-snippets the patch script searches for in order to patch them.
+snippets the patch script searches for in order to patch them. The screenshots show the game
+running.
 
 ## Credits
 
@@ -213,11 +253,11 @@ snippets the patch script searches for in order to patch them.
 - **[UFO 50 Mod Loader](https://github.com/phil-macrocheira/UFO-50-MOD-LOADER)** by Phil
   Macrocheira, MIT licence: applies the mods.
 - **[UndertaleModTool](https://github.com/UnderminersTeam/UndertaleModTool)** by the Underminers
-  team, GPL-3.0: reads and patches the game data.
+  team, GPL-3.0: reads and patches the game data, and runs the build's scripts.
 - **[ENet](https://github.com/lsalzman/enet)** by Lee Salzman, MIT licence: the network transport.
 - **[okplay](https://github.com/Patrick-Working/okplay)** and the [oldkid.net](https://oldkid.net)
   room server: the lobby list, hole punching, UPnP and the relay.
-- **GameMaker** by YoYo Games: the Android runner, built with your own GameMaker account.
+- **GameMaker** by YoYo Games: the Android runner.
 - Public STUN servers from Cloudflare and Google.
 
 ## Licence

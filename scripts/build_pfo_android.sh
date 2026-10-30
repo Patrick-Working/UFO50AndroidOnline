@@ -25,6 +25,7 @@ for abi in "${ABIS[@]}"; do
     "$TC/clang.exe" --target="$t" -O2 -fPIC -DHAS_SOCKLEN_T=1 -I"$ENET/include" -c "$ENET/$c.c" -o "$o/obj/enet_$c.o"
   done
   "$TC/clang++.exe" --target="$t" -std=c++20 -O2 -fPIC -fvisibility=hidden -DNDEBUG \
+    -ffile-prefix-map="$(cygpath -m "$SRC/..")"=. \
     -Wno-everything -fno-exceptions -fno-rtti \
     -I"$SRC" -I"$ENET/include" \
     -c "$SRC/dllmain.cpp" -o "$o/obj/dllmain.o"
