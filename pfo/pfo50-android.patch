@@ -1,0 +1,87 @@
+diff --git a/PFO/dllmain.cpp b/PFO/dllmain.cpp
+index 7abb85d..2614a85 100644
+--- a/PFO/dllmain.cpp
++++ b/PFO/dllmain.cpp
+@@ -5,7 +5,11 @@
+ #include "Extension_Interface.h"
+ #include "Ref.h"
+ #include "YYRValue.h"
++#if defined(__ANDROID__)
++#define YYEXPORT extern "C" __attribute__((visibility("default")))
++#else
+ #define YYEXPORT __declspec(dllexport)
++#endif
+ 
+ // informational warnings
+ //#pragma warning(error: 4820) // check struct padding
+@@ -934,6 +938,10 @@ namespace
+         }
+     }
+ 
++#if defined(__ANDROID__)
++    void* AllocateRingBuffer(size_t bufferSize) { return AndroidAllocateRingBuffer(bufferSize); }
++    void* AllocateLargeBuffer(size_t bufferSize) { return AndroidAllocateLargeBuffer(bufferSize); }
++#else
+     void* AllocateRingBuffer(size_t bufferSize)
+     {
+         SYSTEM_INFO sysInfo;
+@@ -965,6 +973,8 @@ namespace
+         return VirtualAlloc(nullptr, bufferSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+     }
+ 
++#endif
++
+     struct Session
+     {
+         uint64 m_ChecksumRingBufferHead = c_ChecksumRingBufferSize;
+@@ -3471,7 +3481,18 @@ YYEXPORT void pfo_player_get_input(RValue& result, CInstance* selfinst, CInstanc
+     assert(argc == 1);
+ 
+     int playerIndex = YYGetInt32(arg, 0);
+-    init_int64(result, g_Session.PlayerGetInput(selfinst, playerIndex));
++    int64 input = g_Session.PlayerGetInput(selfinst, playerIndex);
++#if defined(__ANDROID__)
++    // Deterministic input trace: log each player's input whenever it changes, with the frame.
++    // Both devices must print identical lines; compare with scripts/compare_inputs.py.
++    static int64 s_lastInput[c_PlayerLimit] = {};
++    if (playerIndex >= 0 && playerIndex < c_PlayerLimit && input != s_lastInput[playerIndex] && g_Session.m_OnlineState == EOnlineState::Online)
++    {
++        s_lastInput[playerIndex] = input;
++        __android_log_print(ANDROID_LOG_INFO, "PFOINPUT", "frame=%u player=%d input=%llx", g_Session.m_Frame, playerIndex, static_cast<unsigned long long>(input));
++    }
++#endif
++    init_int64(result, input);
+ }
+ 
+ YYEXPORT void pfo_is_online(RValue& result, CInstance* selfinst, CInstance* otherinst, int argc, RValue* arg)
+@@ -4021,3 +4042,8 @@ YYEXPORT void pfo_is_playing_replay(RValue& result, CInstance* selfinst, CInstan
+ 
+     init_bool(result, g_Session.m_ReplayReader.m_Buffer != nullptr);
+ }
++
++#if defined(__ANDROID__)
++#include "android/fakesteam_impl.inc"
++#include "android/runner_bridge.inc"
++#endif
+diff --git a/PFO/pch.h b/PFO/pch.h
+index f1c280c..f203ad3 100644
+--- a/PFO/pch.h
++++ b/PFO/pch.h
+@@ -8,6 +8,10 @@
+ #define PCH_H
+ 
+ // add headers that you want to pre-compile here
++#if defined(__ANDROID__)
++#include "android/compat.h"
++#include "android/steam/steam_api.h"
++#else
+ #include <stddef.h>
+ #include <intrin.h>
+ #include <new>
+@@ -18,5 +22,6 @@
+ #pragma warning(disable: 4365) // signed/unsigned mismatch
+ #include "steam/steam_api.h"
+ #pragma warning(pop)
++#endif
+ 
+ #endif //PCH_H
