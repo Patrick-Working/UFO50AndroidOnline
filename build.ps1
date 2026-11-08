@@ -24,7 +24,7 @@ $Pins = @{
     Mmm          = @("https://gamebanana.com/dl/1836289", "9e4f97abcbb2fd04b71ffdfed86feb53c7625590f946b1bc77aced3b38b4ab99", "multimadnessmod-1.30.zip")
     # the runner kit: GameMaker's Android runner + the touch overlay + libPFO.so, no game data
     # (made by the full build: bash build.sh --kit)
-    Kit          = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.2/kit/ufo50-online-runner-v0.2.apk", "81930baaeb272b475f0c2559fc611f2ba35ed5187b2cf0446a60af42b9bd1d24", "ufo50-online-runner-v0.2.apk")
+    Kit          = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.3/kit/ufo50-online-runner-v0.3.apk", "371bf2421758f1de5c9a509276d4159ddfc11d91cc213922ad20b755e7b98fa1", "ufo50-online-runner-v0.3.apk")
 }
 
 function Say($t) { Write-Host ""; Write-Host "== $t" -ForegroundColor Cyan }
@@ -138,8 +138,8 @@ Say "Patching the game for Android (a few minutes)"
 $game = Join-Path $Work "game"
 if (Test-Path $game) { Remove-Item -Recurse -Force $game }
 Copy-Item -Recurse $modded $game
-$out = Utmt @("load", (Join-Path $modded "data.win"), "-s", (Join-Path $Root "scripts\android_patch.csx"), "-o", (Join-Path $game "data.win"), "-f")
-$out | Where-Object { $_ -match "hot seat|pad bindings|overlay support|lobby menu|quit:|join timeout|Steam lobby" } | ForEach-Object { Write-Host "   $_" }
+$out = Utmt @("load", (Join-Path $modded "data.win"), "-s", (Join-Path $Root "scripts\android_patch.csx"), "-o", (Join-Path $game "data.win"), "-f") @{ PFO_SNAPSHOT_GML = (Join-Path $Root "scripts\pfo_snapshot.gml") }
+$out | Where-Object { $_ -match "hot seat|pad bindings|overlay support|lobby menu|quit:|join timeout|Steam lobby|snapshots|runtime sprites" } | ForEach-Object { Write-Host "   $_" }
 $out = Utmt @("load", (Join-Path $game "data.win"), "-s", (Join-Path $Root "scripts\export_overlay_art.csx")) @{ OUT_DIR = $game }
 Ok "game data"
 

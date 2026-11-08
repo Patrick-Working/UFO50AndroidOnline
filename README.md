@@ -1,8 +1,8 @@
 # UFO 50 Android Online: PFO 50 + MultiMadnessMod
 
-**v0.2** · Build your own Android version of **UFO 50** from your own Steam copy. It includes
-online multiplayer from **PFO 50**, 4+ players in many games from **MultiMadnessMod**, and touch
-controls made for the game.
+**v0.3** · Build your own Android version of **UFO 50** from your own Steam copy. It includes
+online multiplayer from **PFO 50**, 4+ players in many games from **MultiMadnessMod**, touch
+controls made for the game, and **save states**, in single player and online.
 
 ![Velgress co-op online: the host's phone and the joiner's phone](docs/screenshots/online_coop.png)
 *The same co-op game on two phones, connected online (the LAN tag under each player chip).*
@@ -18,8 +18,28 @@ UFO 50 runs on Android's GameMaker runner. The fork rebuilds the runner for UFO 
 the mods, the touch overlay and online play.
 
 **Quick start:** install UFO 50 from Steam, download this repository
-([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.2.zip)), unzip
+([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.3.zip)), unzip
 it, and double-click **`build.bat`**. See [Quick build](#quick-build).
+
+## What's new in v0.3
+
+- **Save states.** Save anywhere in any of the 50 games and load it back in about a second. Tap
+  the disk icon (top right) for the save list: SAVE NOW, pick a save to see its picture and
+  details, LOAD or DELETE. Tick **AUTO SAVE WHEN I PAUSE** to have pausing save into one AUTO slot.
+  See [Save states](#save-states).
+- **Save states online.** SAVE NOW in an online match saves for everyone at the same moment.
+  LOAD asks the other players first ("P1 WANTS TO LOAD", ACCEPT / DECLINE), and everyone loads
+  together. Saves from earlier matches load too, if they had the same number of players.
+- **Drops don't end the match.** If a player's connection drops, everyone waits up to 90 seconds
+  ("WAITING FOR P2 - 1:26") and play resumes when they're back. If their app was closed or crashed,
+  they reopen it and tap **REJOIN**: their phone catches up on the match in a couple of seconds.
+  This works over the relay too.
+- **A tidier overlay.** One chip per player (touch and gamepad icons inside it), a session pill
+  that says how you're connected (SOLO: SAVES ON, ONLINE: LAN 2F, CATCHING UP...) and then
+  settles to a dot, short banners, and online players' names on a tap. In the layout editor,
+  **CHIPS ROW / COLUMN** stacks the chips vertically.
+- Fixes: even line weight in the disk icon, nothing pokes out from under the save list, and the
+  orange warning banners use white text.
 
 ---
 
@@ -31,6 +51,10 @@ it, and double-click **`build.bat`**. See [Quick build](#quick-build).
 | **Online lobby list**: lobbies on your network and on the internet, plus HOST PUBLIC / HOST PRIVATE / JOIN BY CODE | **In the lobby**: both players, and how you're connected (here LAN) |
 | ![Players panel](docs/screenshots/players_panel.png) | ![Layout editor](docs/screenshots/layout_editor.png) |
 | **Players panel**: touch and each gamepad to P1-P4, your name, join code, UPnP, hot seat | **Layout editor**: move, resize and hide controls, opacity, 4-way / 8-way d-pad |
+| ![Save states](docs/screenshots/save_states.png) | ![Loading a save online](docs/screenshots/online_load_vote.png) |
+| **Save states**: the save list with each save's picture, game, players and time into the game | **Loading online**: the other players see what you want to load and accept or decline |
+| ![Waiting for a dropped player](docs/screenshots/waiting_for_player.png) | ![Rejoining a match](docs/screenshots/rejoin.png) |
+| **A dropped player**: everyone waits, with a countdown, until they're back | **Rejoining**: reopen the app and tap REJOIN to catch up with the match |
 
 ## Features
 
@@ -44,12 +68,12 @@ it, and double-click **`build.bat`**. See [Quick build](#quick-build).
   - The join box has PASTE, which picks the code out of a pasted message.
 - Internet lobbies are listed by the [okplay](https://github.com/Patrick-Working/okplay) room
   server at [oldkid.net](https://oldkid.net). See [How online play connects](#how-online-play-connects).
-- A tag under your player chip shows how you're connected:
-  - **LAN** (green): same network.
-  - **DIRECT** (blue): peer to peer over the internet.
-  - **RELAY** (orange): through the server.
-
-  The host's tag shows the slowest link among its players.
+- The pill next to the player chips says how you're connected when it changes, then settles to a
+  dot: **LAN** (same network), **DIRECT** (peer to peer over the internet) or **RELAY** (through
+  the server), with the input delay in frames. Tap it to see it again. **CATCHING UP** (orange)
+  means your phone is behind and running faster to catch up.
+- Each player has a chip in their colour: yours shows your input (touch, a gamepad), the others a
+  globe. Their names show when the match starts and when you tap the chips.
 - You stay connected when you switch apps or the screen turns off. While you're online, a quiet
   notification ("UFO 50 - online") stops Android from freezing the game in the background.
 - Your seat is locked while online. Each phone plays its own player, so nobody can take over a
@@ -62,17 +86,52 @@ it, and double-click **`build.bat`**. See [Quick build](#quick-build).
   Config > Pad Assign*. Bind the touch controls and each connected gamepad to P1-P4 or OFF. Each pad
   gets a numbered badge.
 - **Hot seat**: in turn-based games, the touch controls follow whoever's turn it is. This covers
-  Party House, Bug Hunter, Mortol II, Lords of Diskonia, Avianos, Hot Foot and Grimstone. A yellow
-  **HS** block marks the active player and blinks when the turn changes.
+  Party House, Bug Hunter, Mortol II, Lords of Diskonia, Avianos, Hot Foot and Grimstone. Every
+  player has a chip; the one whose turn it is is solid, and it pulses when the turn changes.
 
 **Touch controls**
 - A classic d-pad (8-way by default, with a 4-way switch), the two action buttons, MENU and BACK.
 - Buttons carry the labels the game itself shows: the keys it has bound (Z / X, or DEL / END on
   player 2's side of the keyboard). They follow your rebinds and use UFO 50's own font and colours.
 - The layout editor (the ☰ button, top right) lets you move, resize and hide controls and change
-  their opacity.
+  their opacity, and stack the player chips in a column (CHIPS ROW / COLUMN).
 - *Settings > Video Settings > Scale* works. 4x leaves room beside the picture for the controls,
   and FILL fills the screen.
+
+<a id="save-states"></a>
+**Save states**
+- The disk icon (top right) opens the save list. **SAVE NOW** saves; each save keeps a picture,
+  the game, who was playing and how far into the game. Saves are kept until you delete them.
+- In single player, saving needs a recorded session: tap **START SOLO PLAY** in the save list once
+  (it starts you in the library). The pill then says SOLO: SAVES ON.
+- **Loading** takes about a second for a save made since the app started: the game puts its state
+  back and checks the next two seconds of play against what was recorded. Older saves (after the
+  app restarted) replay the session at high speed instead, a few seconds per minute of play. Either
+  way the result is checked against PFO's own checksums.
+- **AUTO SAVE WHEN I PAUSE** (in the save list) saves into one AUTO slot each time you pause,
+  replacing the last one. Its picture is from just before the pause.
+- Every game works: all 50 were tested loading in the same room, from the library and from inside
+  another game.
+
+**Save states online**
+- **SAVE NOW** in an online match saves on every phone at the same frame, so everyone gets the save
+  (the save carries a command in the game's input, like PFO 50's own commands).
+- **LOAD** asks the others: they see the save's picture and details and have 15 seconds to
+  ACCEPT or DECLINE. When everyone with a seat accepts, every phone loads it at the same frame and
+  the match carries on from there. A decline, or no answer, cancels it for everyone.
+- Saves from an earlier match load too, if it had the same number of players: your phone sends the
+  save to the others first, and everyone restarts the match from it.
+- Players watching without a seat can't save or vote.
+
+**Drops and rejoining**
+- When a player's connection drops, the match freezes for everyone with an orange banner:
+  **WAITING FOR P2 - 1:26**. The phones keep trying to reconnect, and when they do, play carries on
+  where it stopped (**P2 IS BACK**). After 90 seconds the match ends as before.
+- If a player's app was closed or crashed, reopening it offers **REJOIN YOUR MATCH?**. REJOIN
+  takes their old place: another player sends the match so far, their phone replays it in a couple
+  of seconds and joins back in. It works over the relay too.
+- With three or more players, the ones left share the dropped player's last inputs so they all wait
+  at the same point. (Rejoining has been tested with two players.)
 
 **Other fixes**
 - Quit in the main menu closes the app.
@@ -112,7 +171,7 @@ folder, so other games can use it too.
 You need **Windows 10 or 11** and **UFO 50 1.9.5 from Steam**. Nothing else to install.
 
 1. Download this repository
-   ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.2.zip)) and
+   ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.3.zip)) and
    unzip it anywhere.
 2. Double-click **`build.bat`**. It finds UFO 50 in your Steam library and checks the version, then
    downloads the tools and mods into `work\`, each checked against a fixed checksum.
@@ -170,7 +229,7 @@ icon.
 
 ## Versions
 
-This release (**v0.2**) is made for exactly these versions. The patches are written against them,
+This release (**v0.3**) is made for exactly these versions. The patches are written against them,
 and the build checks the checksums.
 
 | part | version | from |
@@ -203,6 +262,10 @@ app id and wire number there, so they never mix with other okplay games.
   - HOST PUBLIC to be listed, HOST PRIVATE to get a code, JOIN BY CODE to enter one.
   - Everyone needs this same build, with the same game version and the same mods.
 - **Names**: players panel > NAME. Change it while you're not in a lobby.
+- **Save states**: the disk icon (top right). In single player, START SOLO PLAY first. Online,
+  SAVE NOW saves for everyone and LOAD asks the others.
+- **Someone dropped**: wait for them (the banner counts down). If your app closed, reopen it and
+  tap REJOIN within about a minute and a half.
 
 ## Troubleshooting
 
@@ -216,6 +279,10 @@ app id and wire number there, so they never mix with other okplay games.
 - **"App not installed" when updating.** The new APK was signed with a different key (a different
   `work\keys` folder). Uninstall the old one first, which deletes its saves, or build with the old
   `work\keys` folder.
+- **"COULDN'T REJOIN THE MATCH".** The others stopped waiting (90 seconds after the drop), or
+  your phone can't reach them. Start a new match from the lobby.
+- **A save won't load online.** It needs the same number of players as the match ("THAT SAVE IS
+  FOR 1 PLAYER"), and everyone with a seat has to accept.
 - **Build errors.** The quick build prints the failing step. For the full build, run
   `bash build.sh --check`; Igor's log is `work/gm/igor.log`.
 
@@ -233,8 +300,8 @@ app id and wire number there, so they never mix with other okplay games.
 | `build.sh` | the full build |
 | `kit/` | the runner kit the quick build uses (made by `build.sh --kit`; no game data) |
 | `android/gm-project/` | the GameMaker runner project: the PFO extension with the touch overlay (`PFO_Android.java`), the online service, and the app icon (original art) |
-| `pfo/` | the Android port of PFO 50: a patch to its `dllmain.cpp`, plus the Android layer in `android/` (Steam lobbies and networking over ENet, the bridge to the GameMaker runner, the hot seat and pad builtins) |
-| `scripts/` | the game patch, the overlay art export, the APK packer and signer (UndertaleModTool scripts), and the native build |
+| `pfo/` | the Android port of PFO 50: a patch to its `dllmain.cpp`, plus the Android layer in `android/` (Steam lobbies and networking over ENet, the bridge to the GameMaker runner, the hot seat and pad builtins, and save states, online saves and rejoining in `savestate.inc`) |
+| `scripts/` | the game patch (with `pfo_snapshot.gml`, the game-side half of save states), the overlay art export, the APK packer and signer (UndertaleModTool scripts), and the native build |
 | `docs/screenshots/` | the pictures on this page |
 
 Nothing from the game is stored here: no game files, art or music. The only game code is the short

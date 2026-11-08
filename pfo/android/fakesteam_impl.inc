@@ -65,6 +65,11 @@ namespace fakesteam
         DiscoverReply,    // UDP unicast
         PunchRequest,     // member -> owner: targetId (please make target punch toward me)
         PunchRelay,       // owner -> member: fromId, ip, port (punch toward them)
+        RejoinHello,      // a player whose app restarted -> a player still in the match: send me the match
+        RejoinData,       // -> the rejoiner: the match so far (savestate.inc)
+        RejoinReady,      // rejoiner -> the others: caught up to frame R, carry on
+        LoadOffer,        // a save from another match, sent to everyone before it's proposed (savestate.inc)
+        LostInputs,       // a lost player's last inputs, shared among the players still in (savestate.inc)
     };
 
     int64 NowMs()
@@ -239,6 +244,15 @@ namespace fakesteam
         DebugConsoleOutput(("PFO LAN: player name is now " + g_MyName + "\n").c_str());
     }
     uint32 g_TimeoutConnectedMs = 60000;
+    // a connection made again to the same peer carries on its message numbers (PFO takes only
+    // numbers above the last it saw, and acks by number)
+    std::map<uint64, int64> g_NextNumberFor;
+    // testing: drop everything received until then (files/ss_cmd "netdrop <seconds>")
+    std::atomic<int64> g_DropUntilMs{0};
+    // rejoin messages, handled by savestate.inc on the game thread (they're not game traffic, so
+    // they don't go through PFO or into its replay)
+    struct RejoinMsg { uint8 type = 0; uint64 from = 0; std::vector<uint8> body; };
+    std::deque<RejoinMsg> g_RejoinInbox;
 
     std::map<HSteamNetConnection, Conn> g_Conns;
     HSteamNetConnection g_NextConn = 1;
@@ -764,6 +778,7 @@ namespace fakesteam
 
     int ENET_CALLBACK RendezvousIntercept(ENetHost* host, ENetEvent*)
     {
+        if (g_DropUntilMs.load() != 0 && NowMs() < g_DropUntilMs.load()) return 1;   // testing: a dead network
         if (host->receivedDataLength < 5) return 0;
         if (StunHandle(host->receivedData, host->receivedDataLength)) return 1;
         In in(host->receivedData, host->receivedDataLength);
@@ -820,6 +835,22 @@ namespace fakesteam
 
     // ---- ENet event handling ----
     Conn* ConnFor(HSteamNetConnection h) { auto it = g_Conns.find(h); return it == g_Conns.end() ? nullptr : &it->second; }
+
+    // a rejoin message to a player we're connected to (false: not connected)
+    bool SendRejoin(uint64 to, Msg type, const std::vector<uint8>& body)
+    {
+        for (auto& kv : g_Conns)
+        {
+            Conn& c = kv.second;
+            if (c.remoteId != to || c.state != k_ESteamNetworkingConnectionState_Connected || !c.peer) continue;
+            Out o; o.u8(static_cast<uint8>(type));
+            o.b.insert(o.b.end(), body.begin(), body.end());
+            Send(c.peer, c_ChanControl, o, true);
+            enet_host_flush(g_Host);
+            return true;
+        }
+        return false;
+    }
 
     void OnReceive(ENetPeer* peer, ENetPacket* pkt, uint8 channel)
     {
@@ -990,6 +1021,20 @@ namespace fakesteam
         case Msg::LobbyClosed:
         {
             if (peer == g_OwnerPeer) { peer->data = nullptr; OnLobbyLostAsMember(); }
+            break;
+        }
+        case Msg::RejoinHello:
+        case Msg::RejoinData:
+        case Msg::RejoinReady:
+        case Msg::LoadOffer:
+        case Msg::LostInputs:
+        {
+            Conn* c = ConnFor(P2PFromTag(peer->data));
+            RejoinMsg r;
+            r.type = static_cast<uint8>(type);
+            r.from = c ? c->remoteId : 0;
+            r.body.assign(pkt->data + 1, pkt->data + pkt->dataLength);
+            g_RejoinInbox.push_back(std::move(r));
             break;
         }
         default:
@@ -1420,7 +1465,7 @@ void ISteamNetworkingSockets::SendMessages(int count, SteamNetworkingMessage_t* 
             continue;
         }
         bool reliable = (m->m_nFlags & k_nSteamNetworkingSend_Reliable) != 0;
-        int64 number = c->nextMessageNumber++;
+        int64 number = ++g_NextNumberFor[c->remoteId];
         Out o;
         o.b.reserve(9 + m->m_cbSize);
         o.u8(static_cast<uint8>(Msg::Data));

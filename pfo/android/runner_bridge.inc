@@ -384,7 +384,13 @@ extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeN
     int v = fakesteam::g_ConnKind & 15;
     if (fakesteam::g_InLobby) v |= 16;
     if (fakesteam::g_InLobby && fakesteam::g_IsOwner) v |= 32;
-    if (g_Session.m_OnlineState >= EOnlineState::Online) v |= 64;
+    if (g_Session.m_OnlineState >= EOnlineState::Online)
+    {
+        v |= 64;
+        if (g_Session.m_CatchupState > 0) v |= 128;   // running fast to catch up with the others
+        int i = g_Session.m_ClientIndex;
+        if (i >= 0 && i < countof(g_Session.m_ClientData)) v |= (std::min(255, std::max(0, g_Session.m_ClientData[i].m_InputDelay)) & 255) << 8;   // input delay, frames
+    }
     return v;
 }
 
@@ -584,8 +590,55 @@ extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeH
     return pfo_android::g_TurnPlayer;
 }
 
+// Speed probe (development): files/speedtest holding "<speed multiplier> <draw 0|1>" sets PFO's
+// game speed multiplier and turns drawing on or off; logcat tag PFOSPEED reports game steps per
+// second. How fast the runner can step decides how fast a save state can replay.
+namespace pfo_android
+{
+    void SpeedProbe(CInstance* self)
+    {
+        static int enabled = -1;
+        static int64 windowStart = 0;
+        static int steps = 0;
+        static double lastMult = 1.0;
+        static int lastDraw = 1;
+        static int drawFn = -1;
+        const char* path = "/sdcard/Android/data/" PFO_PACKAGE "/files/speedtest";
+        if (enabled < 0) enabled = access(path, F_OK) == 0;
+        if (!enabled) return;
+        steps++;
+        int64 now = fakesteam::NowMs();
+        if (windowStart == 0) windowStart = now;
+        if (now - windowStart < 1000) return;
+        __android_log_print(ANDROID_LOG_INFO, "PFOSPEED", "%d steps/s (multiplier %.1f, draw %d, target %.0f fps, frame %u)",
+            static_cast<int>(steps * 1000 / (now - windowStart)), lastMult, lastDraw, g_FinalGameSpeedFPS, g_Session.m_Frame);
+        steps = 0;
+        windowStart = now;
+        double mult = 1.0; int draw = 1;
+        if (FILE* f = fopen(path, "r")) { if (fscanf(f, "%lf %d", &mult, &draw) < 1) mult = 1.0; fclose(f); }
+        if (mult != lastMult)
+        {
+            lastMult = mult;
+            g_Session.m_SpeedMultiplier = mult;
+            g_Session.UpdateGameSpeed(self);
+        }
+        if (draw != lastDraw)
+        {
+            lastDraw = draw;
+            if (drawFn < 0) Code_Function_Find("draw_enable_drawevent", &drawFn);
+            if (drawFn >= 0)
+            {
+                RValue result = {}; RValue a; init_bool(a, draw != 0);
+                Script_Perform(drawFn, self, self, 1, &result, &a);
+            }
+        }
+    }
+}
+
+#include "savestate.inc"
+
 #define PFO_BUILTIN(name) \
-    static void pfo_builtin_##name(RValue& r, CInstance* s, CInstance* o, int argc, RValue* arg) {         std::lock_guard<std::recursive_mutex> netLock(fakesteam::g_NetMutex);   /* the background pump waits while the game runs */         fakesteam::g_LastGameCallMs = fakesteam::NowMs();         pfo_android::EnsureExtensionInitialised(); pfo_android::InputProbe(); pfo_android::RefreshPadSlots(); name(r, s, o, argc, arg); }
+    static void pfo_builtin_##name(RValue& r, CInstance* s, CInstance* o, int argc, RValue* arg) {         std::lock_guard<std::recursive_mutex> netLock(fakesteam::g_NetMutex);   /* the background pump waits while the game runs */         fakesteam::g_LastGameCallMs = fakesteam::NowMs();         pfo_android::EnsureExtensionInitialised(); pfo_android::InputProbe(); pfo_android::RefreshPadSlots();         const bool isUpdate = reinterpret_cast<void*>(&name) == reinterpret_cast<void*>(&pfo_update);   /* once per game step */         if (isUpdate) { pfo_android::g_LastAdvanceArg = argc > 0 ? YYGetBool(arg, 0) : true; pfo_android::SpeedProbe(s); pfo_android::StateBeforeUpdate(s); }         if (isUpdate && pfo_android::g_SnapSkipUpdate) { r.kind = VALUE_UNDEFINED; return; }   /* a snapshot load is changing room */         name(r, s, o, argc, arg);         if (isUpdate) pfo_android::StateAfterUpdate(s); }
 #include "builtins.inc"
 #undef PFO_BUILTIN
 
@@ -637,6 +690,10 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*)
     functionAdd("pfo_android_keys", &pfo_android_keys, 8, false); count++;
     functionAdd("pfo_android_ask_code", &pfo_android_ask_code, 0, false); count++;
     functionAdd("pfo_android_quit", &pfo_android_quit, 0, false); count++;
+    functionAdd("pfo_android_screen", &pfo_android_screen, 6, false); count++;
+    functionAdd("pfo_runner_mark", &pfo_runner_mark, 0, false); count++;
+    functionAdd("pfo_runner_rehide", &pfo_runner_rehide, 0, false); count++;
+    functionAdd("pfo_runner_settle", &pfo_runner_settle, 0, false); count++;
     char msg[96];
     snprintf(msg, sizeof(msg), "PFO: registered %d built-in functions", count);
     __android_log_write(ANDROID_LOG_INFO, "yoyo", msg);

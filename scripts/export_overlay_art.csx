@@ -2,6 +2,7 @@
 //   pfo_font.png      sFontDefault, the first 95 frames (ASCII 32-126, see scrInitFonts) in one strip
 //   pfo_keyicons.png  sKeyIcons, every frame in one strip (frame number = Windows key code)
 //   pfo_vinputs.png   sVirtualInputs, every frame in one strip (the I / II / SYS lettering)
+//   pfo_gameicons.png sIconGraphics, every frame in one strip (the save list's game pictures: game N is frame (N-1)*2)
 // Usage: OUT_DIR=<game folder> UndertaleModCli load <data.win> -s export_overlay_art.csx
 using System.Linq;
 using ImageMagick;
@@ -37,5 +38,6 @@ Directory.CreateDirectory(outDir);
 Strip("sFontDefault", 95, "pfo_font.png");
 Strip("sKeyIcons", int.MaxValue, "pfo_keyicons.png");
 Strip("sVirtualInputs", int.MaxValue, "pfo_vinputs.png");
+Strip("sIconGraphics", int.MaxValue, "pfo_gameicons.png");
 worker.Dispose();
 try { Directory.Delete(tmp, true); } catch { }

@@ -159,27 +159,39 @@ Console.WriteLine("Steam lobby/user functions now resolve to libPFO.so built-ins
 // 2. Report each player's keyboard bindings (pfo_android_keys) so touch sends the keys the
 //    game has bound, rebinds included, and can show their key icons.
 {
-    if (Data.Functions.ByName("pfo_android_keys") == null)
-        Data.Functions.Add(new UndertaleFunction { Name = Data.Strings.MakeString("pfo_android_keys") });
+    foreach (var fn in new[] { "pfo_android_keys", "pfo_android_screen" })
+        if (Data.Functions.ByName(fn) == null)
+            Data.Functions.Add(new UndertaleFunction { Name = Data.Strings.MakeString(fn) });
     var ctx = new UndertaleModLib.Decompiler.GlobalDecompileContext(Data);
     var group = new UndertaleModLib.Compiler.CodeImportGroup(Data);
     int n = 0;
     var edits = new (string code, string find, string replace)[] {
         ("gml_Object_oScreenHandler_Draw_75", "var window_is_fullscreen = window_get_fullscreen();",
             "var window_is_fullscreen = window_get_fullscreen() || os_type == os_android;"),
+        // 3. Report where the picture is drawn: the overlay crops save-state screenshots to it.
+        ("gml_Object_oScreenHandler_Draw_75", "    if (global_scanlines && global_scale > 1)",
+            "    pfo_android_screen(screenX, screenY, screenWidth, screenHeight, window_get_width(), window_get_height());\n    if (global_scanlines && global_scale > 1)"),
+        // 4. PFO's "Delay: Nf" / catch-up text: the overlay's session pill shows those on Android.
+        ("gml_Object_oController_Draw_64", "if (showDelay && (pfo_get_frame() > 4 || playingReplay))",
+            "if (showDelay && os_type != os_android && (pfo_get_frame() > 4 || playingReplay))"),
         ("gml_GlobalScript_scrGetInput", "var key_map = global.keyMap[arg0];",
             "var key_map = global.keyMap[arg0];\npfo_android_keys(arg0, key_map[0], key_map[1], key_map[2], key_map[3], key_map[4], key_map[5], key_map[6]);"),
     };
+    var texts = new Dictionary<string, string>();   // several edits to one script build on each other
     foreach (var (name, find, replace) in edits)
     {
-        var code = Data.Code.ByName(name);
-        string text = new Underanalyzer.Decompiler.DecompileContext(ctx, code, Data.ToolInfo.DecompilerSettings).DecompileToString();
-        if (!text.Contains(find)) { Console.WriteLine($"overlay support: {name} not patched"); continue; }
-        group.QueueReplace(name, text.Replace(find, replace));
+        if (!texts.ContainsKey(name))
+        {
+            var code = Data.Code.ByName(name);
+            texts[name] = new Underanalyzer.Decompiler.DecompileContext(ctx, code, Data.ToolInfo.DecompilerSettings).DecompileToString();
+        }
+        if (!texts[name].Contains(find)) { Console.WriteLine($"overlay support: {name} edit not applied: {find.Trim().Substring(0, Math.Min(40, find.Trim().Length))}"); continue; }
+        texts[name] = texts[name].Replace(find, replace);
         n++;
     }
+    foreach (var kv in texts) group.QueueReplace(kv.Key, kv.Value);
     group.Import();
-    Console.WriteLine($"overlay support: patched {n} scripts (screen scale, key bindings)");
+    Console.WriteLine($"overlay support: applied {n} of {edits.Length} edits (screen scale, picture position, delay text, key bindings)");
 }
 
 
@@ -275,4 +287,101 @@ Console.WriteLine("Steam lobby/user functions now resolve to libPFO.so built-ins
         Console.WriteLine("join timeout: 20 s (room for the relay fallback)");
     }
     else Console.WriteLine("join timeout: not patched");
+}
+
+
+// ---- save-state snapshots: the game-side code ----
+// scripts/pfo_snapshot.gml (path in PFO_SNAPSHOT_GML) becomes the global script pfo_snapshot;
+// libPFO calls its functions by name (android/savestate.inc).
+{
+    string path = Environment.GetEnvironmentVariable("PFO_SNAPSHOT_GML");
+    if (string.IsNullOrEmpty(path) || !File.Exists(path)) Console.WriteLine("snapshots: PFO_SNAPSHOT_GML not set, not added");
+    else
+    {
+        // GameMaker functions the script uses that the game itself never calls: the compiler only
+        // knows the ones the game uses, and would take the rest for variables
+        var builtins = new[] {
+            "array_length", "array_push", "string_char_at", "object_get_name", "buffer_seek", "string_length", "instance_change", "instance_activate_object", "ds_map_exists", "ds_map_delete", "asset_get_index", "instance_number", "array_sort", "audio_stop_all", "buffer_create", "buffer_delete",
+            "buffer_md5", "buffer_tell", "buffer_write", "camera_get_view_height", "camera_get_view_width", "camera_get_view_x",
+            "camera_get_view_y", "camera_set_view_pos", "camera_set_view_size", "camera_get_view_target", "camera_get_view_border_x", "camera_get_view_border_y", "camera_get_view_speed_x", "camera_get_view_speed_y", "camera_get_view_angle", "camera_set_view_target", "camera_set_view_border", "camera_set_view_speed", "camera_set_view_angle", "ds_exists", "ds_grid_create", "ds_grid_get",
+            "ds_grid_height", "ds_grid_resize", "ds_grid_set", "ds_grid_width", "ds_list_add", "ds_list_clear",
+            "ds_list_create", "ds_list_destroy", "ds_list_find_value", "ds_list_size", "ds_map_clear", "ds_map_create",
+            "ds_map_find_value", "ds_map_keys_to_array", "ds_map_set", "ds_priority_copy", "ds_priority_create", "ds_priority_size",
+            "ds_queue_copy", "ds_queue_create", "ds_queue_size", "ds_stack_copy", "ds_stack_create", "ds_stack_size",
+            "instance_activate_all", "instance_create_depth", "instance_create_layer", "instance_deactivate_object", "instance_destroy", "instance_exists",
+            "is_array", "is_bool", "is_int32", "is_int64", "is_method", "is_real",
+            "is_string", "is_struct", "layer_depth", "layer_exists", "layer_get_all", "layer_get_all_elements",
+            "layer_get_depth", "layer_get_element_type", "layer_get_hspeed", "layer_get_id", "layer_get_name", "layer_get_visible",
+            "layer_get_vspeed", "layer_get_x", "layer_get_y", "layer_hspeed", "layer_set_visible", "layer_vspeed",
+            "layer_x", "layer_y", "method", "method_get_index", "method_get_self", "real",
+            "room_get_name", "room_goto", "show_debug_message", "static_get", "static_set", "string",
+            "string_copy", "string_delete", "string_pos", "struct_remove", "tilemap_get", "tilemap_get_height",
+            "tilemap_get_width", "tilemap_set", "typeof", "variable_global_exists", "variable_global_get", "variable_global_set",
+            "variable_instance_get", "variable_instance_get_names", "variable_instance_set", "variable_struct_exists", "variable_struct_get", "variable_struct_get_names",
+            "variable_struct_set",
+            "pfo_runner_mark", "pfo_runner_rehide", "pfo_runner_settle",   // libPFO (savestate.inc)
+            "sprite_exists", "sprite_duplicate", "sprite_collision_mask", "sprite_delete", "array_concat",
+            "string_replace_all",
+        };
+        int added = 0;
+        foreach (var fn in builtins)
+            if (Data.Functions.ByName(fn) == null) { Data.Functions.Add(new UndertaleFunction { Name = Data.Strings.MakeString(fn) }); added++; }
+        // an object with no events: a restore makes instances as this and turns them into their
+        // object with instance_change(obj, false), so no Create (or Destroy) event runs
+        if (Data.GameObjects.ByName("oPfoSnapShell") == null)
+        {
+            var shell = new UndertaleGameObject();
+            shell.Name = Data.Strings.MakeString("oPfoSnapShell");
+            shell.Visible = false;
+            Data.GameObjects.Add(shell);
+        }
+        var group = new UndertaleModLib.Compiler.CodeImportGroup(Data);
+        group.AutoCreateAssets = true;
+        group.QueueReplace("gml_GlobalScript_pfo_snapshot", File.ReadAllText(path));
+        var result = group.Import();
+        Console.WriteLine("snapshots: game-side code added (" + (Data.Code.ByName("gml_GlobalScript_pfo_snapshot") != null ? "ok" : "MISSING") + ", " + added + " functions declared)");
+    }
+}
+
+
+// ---- development only (build with PFO_RNG_TRACE=1): note every call of UFO 50's own random
+// generator (event and object) so libPFO's input log can show who drew a number each frame ----
+if (Environment.GetEnvironmentVariable("PFO_RNG_TRACE") == "1")
+{
+    var tctx = new UndertaleModLib.Decompiler.GlobalDecompileContext(Data);
+    var tgroup = new UndertaleModLib.Compiler.CodeImportGroup(Data);
+    var rcode = Data.Code.ByName("gml_GlobalScript_rng_random");
+    string rtext = new Underanalyzer.Decompiler.DecompileContext(tctx, rcode, Data.ToolInfo.DecompilerSettings).DecompileToString();
+    string head = "function rng_random()\n{\n";
+    string trace = "    if (!variable_global_exists(\"pfo_rng_trace\")) global.pfo_rng_trace = \"\";\n" +
+                   "    var _who = \"?\";\n    try { _who = object_get_name(object_index); } catch (_e) { _who = \"?\"; }\n" +
+                   "    if (string_length(global.pfo_rng_trace) < 4000) global.pfo_rng_trace += string(event_type) + \".\" + string(event_number) + \":\" + _who + \",\";\n";
+    if (rtext.Contains(head)) { tgroup.QueueReplace("gml_GlobalScript_rng_random", rtext.Replace(head, head + trace)); tgroup.Import(); Console.WriteLine("rng trace: on"); }
+    else Console.WriteLine("rng trace: rng_random not patched");
+}
+
+
+// ---- save states: runtime sprites ----
+// The games that copy sprites at run time (sprite_duplicate + sprite_collision_mask, deleted with
+// sprite_delete) call pfo_snapshot.gml's wrappers instead, which note each copy so a snapshot can
+// make it again.
+{
+    // (after the snapshot code: the wrappers must already be script functions, or the compiler would
+    // take them for runner built-ins, which don't exist)
+    var sctx = new UndertaleModLib.Decompiler.GlobalDecompileContext(Data);
+    var sgroup = new UndertaleModLib.Compiler.CodeImportGroup(Data);
+    int routed = 0;
+    foreach (var code in Data.Code)
+    {
+        if (code.ParentEntry != null || !(code.Name.Content.StartsWith("gml_Object_o04_") || code.Name.Content.StartsWith("gml_Object_o41_"))) continue;
+        string text;
+        try { text = new Underanalyzer.Decompiler.DecompileContext(sctx, code, Data.ToolInfo.DecompilerSettings).DecompileToString(); }
+        catch { continue; }
+        if (!text.Contains("sprite_duplicate(") && !text.Contains("sprite_collision_mask(") && !text.Contains("sprite_delete(")) continue;
+        text = text.Replace("sprite_duplicate(", "pfo_sprite_duplicate(").Replace("sprite_collision_mask(", "pfo_sprite_collision_mask(").Replace("sprite_delete(", "pfo_sprite_delete(");
+        sgroup.QueueReplace(code.Name.Content, text);
+        routed++;
+    }
+    sgroup.Import();
+    Console.WriteLine("runtime sprites: " + routed + " scripts route through the snapshot wrappers");
 }
