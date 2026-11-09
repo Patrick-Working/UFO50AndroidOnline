@@ -654,6 +654,7 @@ void pfo_android::EnsureExtensionInitialised()
     p_buffer_set_used_size = Sym<TYYBuiltin>("_Z20F_BUFFER_SetUsedSizeR6RValueP9CInstanceS2_iPS_");
     p_buffer_get_used_size = Sym<TYYBuiltin>("_Z20F_BUFFER_GetUsedSizeR6RValueP9CInstanceS2_iPS_");
     RunSelfTest();
+    KeepAudioLogQuiet();   // savestate.inc: the audio library's log, made safe from its own threads
     YYExtensionInitialise(&g_Interface, sizeof(g_Interface));
     RValue result = {};
     pfo_init(result, nullptr, nullptr, 0, nullptr);

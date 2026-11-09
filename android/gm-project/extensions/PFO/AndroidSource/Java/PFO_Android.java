@@ -104,6 +104,8 @@ public class PFO_Android {
     static native String nativeRejoinOffer();                // a match we were in and didn't see end: "<s ago>|<seat>|<names>" or ""
     static native int nativeRejoinResult();                  // 1 rejoined, -1 couldn't, 0 nothing new
     static native int nativeOfferRefused();                  // a save that can't load in this match: its player count
+    static native int[] nativeEstimates();                   // rewind 15/30/60 s estimates (ms, -1 not possible), replay frames/s
+    static native boolean nativeSnapReady(int slot);         // the slot loads from its snapshot (about a second)
     static native void nativeVoteAnswer(boolean accept);     // our answer: ACCEPT or DECLINE
     static native int nativeMatchSave(int slot);             // this match's save number for a slot (0: not loadable online)
     static native int[] nativeScreenRect();                  // where the game draws: x, y, w, h, window w, window h
@@ -551,6 +553,7 @@ public class PFO_Android {
             if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
                 int i = e.getActionIndex();
                 if (restoring()) return true;
+                if (confirmShown()) { confirmTap(e.getX(i), e.getY(i)); return true; }
                 if (voteShown()) { voteTap(e.getX(i), e.getY(i)); return true; }
                 if (rejoinShown()) { rejoinTap(e.getX(i), e.getY(i)); return true; }
                 if (statesOpen) { stateDown(e.getX(i), e.getY(i)); return true; }
@@ -586,7 +589,7 @@ public class PFO_Android {
                     return true;
                 }
             }
-            if (panelOpen || naming || inviting || statesOpen || restoring() || voteShown() || rejoinShown()) return true;
+            if (panelOpen || naming || inviting || statesOpen || restoring() || voteShown() || rejoinShown() || confirmShown()) return true;
             updatePressed(e, action);
             return true;
         }
@@ -1597,6 +1600,7 @@ public class PFO_Android {
             pollVote();
             pollWaiting();
             pollRejoin();
+            if (statesOpen) pollEstimates();
             keepCleanFrame();
             watchPill();
             int ask = -1;
@@ -1806,6 +1810,7 @@ public class PFO_Android {
             if (!editing && statesOpen) drawStates(canvas, u);
             if (!editing && vote[0] != 0) drawVote(canvas, u);
             if (!editing && rejoinShown()) drawRejoin(canvas, u);
+            if (!editing && confirmShown()) drawConfirm(canvas, u);
             if (restoring()) drawRestore(canvas, u);
         }
 
@@ -1958,6 +1963,9 @@ public class PFO_Android {
         final List<RectF> stateHits = new ArrayList<>();
         final List<Integer> stateCodes = new ArrayList<>();
         static final int ST_CLOSE = -10, ST_SOLO = -11, ST_SAVE = -12, ST_LOAD = -13, ST_DELETE = -14;   // >= 0: a list row (save id)
+        static final int ST_REWIND = -20;   // -20, -21, -22: back 15, 30, 60 seconds
+        static final int[] REWIND_SECONDS = { 15, 30, 60 };
+        static final int CONFIRM_FROM_MS = 5000;   // a load this slow asks first, with its estimate
         final List<Integer> saves = new ArrayList<>();                 // save ids, newest first
         final java.util.HashMap<Integer, org.json.JSONObject> saveInfo = new java.util.HashMap<>();
         final java.util.HashMap<Integer, Bitmap> saveThumb = new java.util.HashMap<>();
@@ -2197,6 +2205,85 @@ public class PFO_Android {
             postInvalidateDelayed(500);
         }
 
+        // ---- how long a load will take, and asking first when it's slow ----
+        int[] estimates = { -1, -1, -1, 700 };
+        String confirmTitle = null, confirmLine = null, confirmYes = null;
+        Runnable confirmAction;
+        final RectF confirmYesRect = new RectF(), confirmNoRect = new RectF();
+
+        void pollEstimates() {
+            int[] e;
+            try { e = nativeEstimates(); } catch (Throwable t) { return; }
+            // shown rounded to seconds: redraw when that changes
+            boolean changed = false;
+            for (int i = 0; i < 3; i++) if ((e[i] < 0) != (estimates[i] < 0) || Math.round(e[i] / 1000f) != Math.round(estimates[i] / 1000f)) changed = true;
+            estimates = e;
+            if (changed) invalidate();
+        }
+
+        // a save's load time: about a second from its snapshot, else replaying its session
+        int loadEstimateMs(int slot) {
+            boolean ready = false;
+            try { ready = nativeSnapReady(slot); } catch (Throwable t) { }
+            if (ready) return 1200;
+            org.json.JSONObject o = saveInfo.get(slot);
+            long frames = o != null ? o.optLong("frame", 0) : 0;
+            return (int) (800 + frames * 1000L / Math.max(100, estimates[3]));
+        }
+
+        static String aboutSeconds(int ms) {
+            int sec = Math.max(1, Math.round(ms / 1000f));
+            return sec < 60 ? "ABOUT " + sec + " S" : "ABOUT " + (sec / 60) + " MIN " + (sec % 60 > 0 ? (sec % 60) + " S" : "");
+        }
+
+        void ask(String title, String line, String yes, Runnable action) {
+            confirmTitle = title; confirmLine = line; confirmYes = yes; confirmAction = action;
+            invalidate();
+        }
+
+        boolean confirmShown() { return confirmTitle != null; }
+
+        void confirmTap(float x, float y) {
+            if (confirmYesRect.contains(x, y)) { Runnable r = confirmAction; confirmTitle = null; confirmAction = null; if (r != null) r.run(); }
+            else if (confirmNoRect.contains(x, y)) { confirmTitle = null; confirmAction = null; }
+            else return;
+            performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+            invalidate();
+        }
+
+        void drawConfirm(Canvas cv, float u) {
+            float pw = Math.min(getWidth() * 0.8f, u * 1.2f), ph = u * 0.4f, gap = u * 0.02f;
+            float left = (getWidth() - pw) / 2f, top = (getHeight() - ph) / 2f;
+            solid(fill, 0xFF000000, 0.55f); cv.drawRect(0, 0, getWidth(), getHeight(), fill);
+            tmp.set(left, top, left + pw, top + ph);
+            solid(fill, 0xFF000000, 0.95f); cv.drawRoundRect(tmp, gap, gap, fill);
+            solid(line, 0xFFFFFFFF, 0.9f); cv.drawRoundRect(tmp, gap, gap, line);
+            float lineH = u * 0.034f, y = top + gap + lineH * 1.3f;
+            txt(cv, confirmTitle, left + pw / 2f, y, u * 0.045f, 0xFFFFFFFF, 255);
+            y += lineH * 1.7f;
+            float sz = lineH * 0.85f;
+            while (font_w(confirmLine, sz) > pw - gap * 2 && sz > lineH * 0.4f) sz *= 0.9f;
+            txt(cv, confirmLine, left + pw / 2f, y, sz, 0xFFC8C8C8, 255);
+            float btnH = u * 0.075f, bw = (pw - gap * 3) / 2f, by = top + ph - gap - btnH;
+            confirmNoRect.set(left + gap, by, left + gap + bw, by + btnH);
+            confirmYesRect.set(confirmNoRect.right + gap, by, left + pw - gap, by + btnH);
+            stateHits.clear(); stateCodes.clear();
+            button(cv, confirmNoRect, "CANCEL", BTN_NEUTRAL, true, btnH, ST_CLOSE);
+            button(cv, confirmYesRect, confirmYes, BTN_PRIMARY, true, btnH, ST_CLOSE);
+        }
+
+        void startRewind(final int seconds) {
+            statesOpen = false;
+            pendingSlot = -2; pendingWhat = 4; pendingAuto = false;
+            nativeStateRequest(30, seconds);
+        }
+
+        void startLoad(final int slot) {
+            statesOpen = false;
+            pendingSlot = slot; pendingWhat = 3; pendingAuto = false;
+            nativeStateRequest(3, slot);
+        }
+
         boolean soloSession() { return (stateStatus & 1) != 0; }
         boolean canSaveState() { return (stateStatus & 2) != 0; }
         boolean restoring() { return (stateStatus & 4) != 0; }
@@ -2386,7 +2473,8 @@ public class PFO_Android {
             } else {
                 fresh.delete();
                 if (pendingAuto && pendingWhat == 2) { pendingAuto = false; return; }   // an auto save that couldn't happen: say nothing
-                if (result == 3) notePill("LOADED", 2000);
+                if (result == 3) notePill(pendingWhat == 4 ? "REWOUND" : "LOADED", 2000);
+                else if (result == -6) showBanner("NOTHING TO REWIND THAT FAR YET", 1500);
                 else if (result == -3) showBanner("LOADED - BUT IT DIDN'T CHECK OUT", 3000, ATTN);
                 else if (result == -2) showBanner("THAT SAVE CAN'T BE READ", 1800);
                 else if (result == -4) { }   // a rejoin that didn't work: pollRejoin says so
@@ -2437,6 +2525,14 @@ public class PFO_Android {
                 performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
                 if (code >= 0) { selectedSave = code; deleteArmedUntil = 0; }
                 else if (code == ST_CLOSE) statesOpen = false;
+                else if (code <= ST_REWIND && code > ST_REWIND - 3) {
+                    final int seconds = REWIND_SECONDS[ST_REWIND - code];
+                    int est = estimates[ST_REWIND - code];
+                    if (est < 0) { showBanner("NOTHING TO REWIND " + seconds + " S YET", 1500); break; }
+                    if (est >= CONFIRM_FROM_MS)
+                        ask("REWIND " + seconds + " SECONDS?", aboutSeconds(est) + " TO LOAD", "REWIND", new Runnable() { @Override public void run() { startRewind(seconds); } });
+                    else startRewind(seconds);
+                }
                 else if (code == ST_AUTO) {
                     autoSavePause = !autoSavePause;
                     prefs.edit().putBoolean("autosave_pause", autoSavePause).apply();
@@ -2458,9 +2554,11 @@ public class PFO_Android {
                 } else if (code == ST_LOAD && selectedSave >= 0) {
                     boolean onlineNow = (netStatus & 64) != 0 && !soloSession();
                     if (onlineNow && onlineSeat < 0) { showBanner("ONLY PLAYERS WITH A SEAT CAN LOAD", 1800); break; }
-                    statesOpen = false;
-                    pendingSlot = selectedSave; pendingWhat = 3; pendingAuto = false;
-                    nativeStateRequest(3, selectedSave);
+                    final int slot = selectedSave;
+                    int est = onlineNow ? 0 : loadEstimateMs(slot);
+                    if (est >= CONFIRM_FROM_MS)
+                        ask("LOAD THIS SAVE?", aboutSeconds(est) + " TO LOAD (IT REPLAYS THE SESSION)", "LOAD", new Runnable() { @Override public void run() { startLoad(slot); } });
+                    else startLoad(slot);
                 } else if (code == ST_DELETE && selectedSave >= 0) {
                     long now = android.os.SystemClock.uptimeMillis();
                     if (now > deleteArmedUntil) { deleteArmedUntil = now + 2500; postDelayed(new Runnable() { @Override public void run() { invalidate(); } }, 2600); }
@@ -2532,8 +2630,17 @@ public class PFO_Android {
             else button(cv, new RectF(save.left - u * 0.3f, save.top, save.right, save.bottom), "START SOLO PLAY", BTN_PRIMARY, true, btnH, ST_SOLO);
             if (!soloSession() && !online)
                 txt(cv, "SOLO PLAY RECORDS YOUR SESSION SO YOU CAN SAVE (IT STARTS IN THE LIBRARY)", left + pw / 2f, top + gap * 2 + btnH + lineH * 0.5f, lineH * 0.75f, 0xFFC8C8C8, 255);
-            // the list (left) and the selected save (right)
+            // solo: rewind 15 / 30 / 60 seconds, each with how long it takes
             float bodyTop = top + gap * 3 + btnH + lineH, bodyBottom = top + ph - gap;
+            if (soloSession()) {
+                float rh = btnH * 0.8f, ry = top + gap * 2 + btnH, rw = (pw - gap * 4) / 3f;
+                for (int k = 0; k < 3; k++) {
+                    RectF r = new RectF(left + gap + k * (rw + gap), ry, left + gap + k * (rw + gap) + rw, ry + rh);
+                    int est = estimates[k];
+                    button(cv, r, "REWIND " + REWIND_SECONDS[k] + " S" + (est >= 0 ? "  -  " + Math.max(1, Math.round(est / 1000f)) + " S" : ""), BTN_NEUTRAL, est >= 0, rh, ST_REWIND - k);
+                }
+                bodyTop = ry + rh + gap;
+            }
             float listW = pw * 0.42f;
             float btnTop = bodyBottom - btnH;
             listRect.set(left + gap, bodyTop, left + gap + listW, btnTop - gap);
@@ -2625,6 +2732,10 @@ public class PFO_Android {
                 txt(cv, gf > 0 ? clock(gf) + " INTO THE GAME" : "IN THE LIBRARY", cxd, y, lineH * 0.8f, 0xFFC8C8C8, 255);
                 y += lineH * 1.05f;
                 txt(cv, "SAVED " + when(o.optLong("savedAt", 0)), cxd, y, lineH * 0.75f, 0xFF8F8F8F, 255);
+                if (!online || soloSession()) {
+                    y += lineH * 1.0f;
+                    txt(cv, "LOADS IN " + aboutSeconds(loadEstimateMs(selectedSave)), cxd, y, lineH * 0.75f, 0xFF8F8F8F, 255);
+                }
                 float bw = (dr - dl - gap) / 2f;
                 RectF ld = new RectF(dl, bodyBottom - btnH, dl + bw, bodyBottom);
                 RectF del = new RectF(ld.right + gap, ld.top, dr, ld.bottom);
@@ -2660,12 +2771,12 @@ public class PFO_Android {
                 txt(cv, title, cx0 + isz * 0.25f, ty, u * 0.05f, 0xFFFFFFFF, 255);
                 long gf = o.optLong("gameFrames", 0);
                 txt(cv, kindOf(o) + "  -  " + (gf > 0 ? clock(gf) + " IN" : "LIBRARY") + "  -  " + when(o.optLong("savedAt", 0)), cx0, ty + u * 0.05f, u * 0.03f, 0xFFC8C8C8, 255);
-            } else txt(cv, "LOADING", cx0, ty, u * 0.05f, 0xFFFFFFFF, 255);
+            } else txt(cv, pendingWhat == 4 ? "REWINDING" : "LOADING", cx0, ty, u * 0.05f, 0xFFFFFFFF, 255);
             float bw = u * 0.9f, bh = u * 0.03f;
             RectF bar = new RectF(cx0 - bw / 2f, ty + u * 0.09f, cx0 + bw / 2f, ty + u * 0.09f + bh);
             solid(line, 0xFFFFFFFF, 0.8f); cv.drawRect(bar, line);
             solid(fill, 0xFF008456, 1f); cv.drawRect(bar.left + 2, bar.top + 2, bar.left + 2 + (bar.width() - 4) * pct / 100f, bar.bottom - 2, fill);
-            txt(cv, "LOADING  " + pct + "%", cx0, bar.bottom + u * 0.04f, u * 0.035f, 0xFFC8C8C8, 255);
+            txt(cv, (pendingWhat == 4 ? "REWINDING  " : "LOADING  ") + pct + "%", cx0, bar.bottom + u * 0.04f, u * 0.035f, 0xFFC8C8C8, 255);
         }
 
         // the save-states button, left of the menu button: a little floppy disk

@@ -45,8 +45,11 @@ namespace pfo_android
         StateHeader header;
         int64 startMs = 0;
         int slot = 0;
+        bool rewind = false;           // a rewind: no final checksum to compare (the replay's own ones check it)
+        uint32 fromFrame = 0;          // where the fast replay started (for the speed estimate)
     };
     Restore g_Restore;
+    double g_ReplayFps = 700.0;        // how fast this device replays, measured by each load (estimates)
 
     // Frames (in this session's timeline) where a capture had to switch every instance on to read
     // it. That changes the game a little, so replays do the same at the same frames ("touch").
@@ -402,7 +405,7 @@ namespace pfo_android
 
     bool Save(int slot, CInstance* self)
     {
-        if (!CanSave()) { SetResult(-1); return false; }
+        if (!CanSave()) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "save slot %d: refused (solo %d, restoring %d, replaying %d)", slot, InSoloSession() ? 1 : 0, g_Restore.active ? 1 : 0, g_Session.m_ReplayReader.m_Buffer ? 1 : 0); SetResult(-1); return false; }
         return SaveCore(slot, self, 0);
     }
 
@@ -437,17 +440,18 @@ namespace pfo_android
 
     bool SnapLoadBegin(int id, CInstance* self);
     void RejoinAfterReplay(CInstance* self);
+    void RewindFromStart(CInstance* self);
     bool RejoinReplayOk(bool match);   // false: a rejoin whose replay didn't check out (it's given up)
     bool g_ForceReplay = false;   // testing: the next load replays even if its snapshot is here
 
     bool Load(int slot, CInstance* self)
     {
-        if (g_Restore.active) return false;
-        if (g_Session.m_OnlineState != EOnlineState::Offline && !InSoloSession()) { SetResult(-1); return false; }
+        if (g_Restore.active) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: refused, a load is already under way", slot); return false; }
+        if (g_Session.m_OnlineState != EOnlineState::Offline && !InSoloSession()) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: refused, not in solo play", slot); SetResult(-1); return false; }
         if (!g_ForceReplay && SnapLoadBegin(slot, self)) return true;
         g_ForceReplay = false;   // instant, if this run of the app has its snapshot
         FILE* f = fopen(StatePath(slot).c_str(), "rb");
-        if (!f) { SetResult(-2); return false; }
+        if (!f) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: no such save", slot); SetResult(-2); return false; }
         StateHeader h;
         bool ok = fread(&h, sizeof(h), 1, f) == 1 && h.magic == c_StateMagic && h.version == c_StateVersion
             && h.replayVersion == c_ReplayVersion && h.replaySize > 0;
@@ -490,7 +494,13 @@ namespace pfo_android
         auto& me = s.m_ClientData[s.m_ClientIndex];
         uint32 checksum = me.m_ChecksumData[s.m_Frame & (countof(me.m_ChecksumData) - 1)].m_Checksum;
         // on track all the way: the replay's own checksums (one every 255 frames) and the final one
-        bool match = checksum == h.checksum && s.m_Frame == h.frame && g_ReplayFirstMismatchFrame == 0;
+        bool match = (g_Restore.rewind || checksum == h.checksum) && s.m_Frame == h.frame && g_ReplayFirstMismatchFrame == 0;
+        {
+            int64 took = fakesteam::NowMs() - g_Restore.startMs;
+            uint32 frames = s.m_Frame > g_Restore.fromFrame ? s.m_Frame - g_Restore.fromFrame : 0;
+            if (took > 300 && frames > 600) g_ReplayFps = 0.5 * g_ReplayFps + 0.5 * (frames * 1000.0 / took);
+        }
+        g_Restore.rewind = false; g_Restore.fromFrame = 0;
 
         reset(s.m_ReplayReader, nullptr, 0);
         reset(s.m_ReplayWriter, g_ReplayBuffer, narrow_cast<int>(c_ReplayBufferSize - 1u));
@@ -562,6 +572,7 @@ namespace pfo_android
     {
         int id = 0;
         bool ready = false;
+        bool keyframe = false;                // taken for rewinds, while the game was paused or starting
         bool mp = false;                      // an online save: loaded forward, without the 120-frame check
         uint32 frame = 0;
         int64 takenMs = 0;
@@ -878,7 +889,9 @@ namespace pfo_android
     // forward: an online load (put the game state back on the current frame, leave PFO's session alone)
     // nested: an online load met while replaying (a rejoin, or a load by replay): the replay's own
     // restore carries on around it
-    struct SnapLoad { int phase = 0, id = 0; int64 startMs = 0; bool forward = false, nested = false; } g_SnapLoad;
+    // rewind: the snapshot is a starting point; the replay then runs on to the rewind's frame
+    struct SnapLoad { int phase = 0, id = 0; int64 startMs = 0; bool forward = false, nested = false, rewind = false; } g_SnapLoad;
+    std::vector<uint32> g_RewindTouches;      // a rewind's touch frames, up to its frame
     bool g_DiffAfterFinal = false;   // phase 1 restore, 2 check, 3 restore again
     bool g_SnapSkipUpdate = false;            // this step, don't run pfo_update (waiting for a room change)
     bool g_SnapSettle = false;                // a restore finished this step: "settle" after pfo_update
@@ -896,6 +909,8 @@ namespace pfo_android
     }
 
     constexpr size_t c_MpSnapKeep = 24;      // online saves kept for loading in this match
+    constexpr size_t c_KeyframeKeep = 4;     // rewind keyframes
+    bool g_CaptureKeyframe = false;
 
     void SnapCapture(int id, CInstance* self, bool mp)
     {
@@ -933,19 +948,21 @@ namespace pfo_android
         n.lastWrittenAtFrame = s.m_ReplayLastFrameWritten;
         n.touches = g_TouchFrames;
         n.mp = mp;
+        n.keyframe = !mp && g_CaptureKeyframe;
         n.ready = mp;   // an online save is loaded forward: nothing to collect
         g_Snaps[id] = std::move(n);
-        // keep the newest few of each kind
-        for (int kind = 0; kind < 2; kind++)
+        // keep the newest few of each kind (saves, online saves, rewind keyframes)
+        for (int kind = 0; kind < 3; kind++)
         {
-            size_t keep = kind ? c_MpSnapKeep : c_SnapKeep;
+            size_t keep = kind == 1 ? c_MpSnapKeep : kind == 2 ? c_KeyframeKeep : c_SnapKeep;
             while (true)
             {
                 size_t count = 0;
                 auto oldest = g_Snaps.end();
                 for (auto it = g_Snaps.begin(); it != g_Snaps.end(); ++it)
                 {
-                    if (it->second.mp != (kind == 1)) continue;
+                    int k = it->second.mp ? 1 : it->second.keyframe ? 2 : 0;
+                    if (k != kind) continue;
                     count++;
                     if (oldest == g_Snaps.end() || it->second.takenMs < oldest->second.takenMs) oldest = it;
                 }
@@ -1035,23 +1052,31 @@ namespace pfo_android
         else
         {
             // read the replay from the snapshot's frame on: the next chunk's frame delta comes first
+            // (a rewind reads the session's own replay, cut at the rewind's frame)
+            const std::vector<uint8>& rp = g_SnapLoad.rewind ? g_Restore.data : n.replay;
             reset(s.m_ReplayWriter, nullptr, 0);
-            reset(s.m_ReplayReader, n.replay.data(), static_cast<int>(n.replay.size()));
-            if (n.offsetAtFrame < static_cast<int>(n.replay.size()))
+            reset(s.m_ReplayReader, rp.data(), static_cast<int>(rp.size()));
+            if (n.offsetAtFrame < static_cast<int>(rp.size()))
             {
-                s.m_ReplayLastFrameRead = n.lastWrittenAtFrame + n.replay[n.offsetAtFrame];
+                s.m_ReplayLastFrameRead = n.lastWrittenAtFrame + rp[n.offsetAtFrame];
                 s.m_ReplayReader.m_Offset = n.offsetAtFrame + 1;
             }
             else
             {
-                s.m_ReplayLastFrameRead = n.frame + c_SnapVerifyFrames + 1000;
-                s.m_ReplayReader.m_Offset = static_cast<int>(n.replay.size());
+                s.m_ReplayLastFrameRead = (g_SnapLoad.rewind ? g_Restore.header.frame : n.frame + c_SnapVerifyFrames) + 1000;
+                s.m_ReplayReader.m_Offset = static_cast<int>(rp.size());
             }
         }
         g_ReplayChecksumsChecked = 0;
         g_ReplayFirstMismatchFrame = 0;
         g_TouchFrames = n.touches;
         g_ReplayTouch = final ? std::vector<uint32>() : n.touchesAfter;
+        if (g_SnapLoad.rewind)
+        {
+            g_TouchFrames = g_RewindTouches;
+            g_ReplayTouch.clear();
+            for (uint32 t : g_RewindTouches) if (t > n.frame) g_ReplayTouch.push_back(t);
+        }
         g_ReplayTouchNext = 0;
         s.m_SpeedMultiplier = final ? 1.0 : c_RestoreSpeed;
         g_FinalGameSpeedFPS = 0;   // make UpdateGameSpeed apply it
@@ -1076,6 +1101,15 @@ namespace pfo_android
     void SnapLoadFail(const char* why, CInstance* self)
     {
         int id = g_SnapLoad.id;
+        if (g_SnapLoad.rewind)
+        {
+            __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "rewind: snapshot %d didn't work (%s), replaying from the start", id, why);
+            g_SnapLoad.phase = 0; g_SnapLoad.rewind = false;
+            g_Snaps.erase(id);
+            Snap("drop", id, self);
+            RewindFromStart(self);
+            return;
+        }
         if (g_SnapLoad.forward)
         {
             // online there's no replaying from the start: the other devices' checksums will tell
@@ -1148,6 +1182,14 @@ namespace pfo_android
         bool final = g_SnapLoad.phase == 3 || g_SnapLoad.forward;
         SnapApplyNative(it->second, final, self);              // again: the room change steps ran the game
         g_SnapSettle = true;
+        if (!final && g_SnapLoad.rewind)
+        {
+            // the snapshot was the starting point: the replay runs on to the rewind's frame (FinishRestore)
+            g_SnapLoad.phase = 0; g_SnapLoad.rewind = false;
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rewind: from snapshot %d (frame %u), replaying to frame %u",
+                g_SnapLoad.id, it->second.frame, g_Restore.header.frame);
+            return;
+        }
         if (!final) { g_SnapLoad.phase = 2; return; }
         if (g_SnapLoad.forward && g_SnapLoad.nested)
         {
@@ -1228,6 +1270,7 @@ namespace pfo_android
         else if (!strcmp(cmd, "sleep")) g_StateRequest = 15;                                  // a 550 ms hitch, nothing else
         else if (!strcmp(cmd, "netdrop")) { fakesteam::g_DropUntilMs = fakesteam::NowMs() + 1000LL * slot; __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "network dropped for %d s", slot); }
         else if (!strcmp(cmd, "rejoin")) g_StateRequest = 20;                                 // rejoin the last match
+        else if (!strcmp(cmd, "rewind")) { g_StateRequestSlot = slot; g_StateRequest = 30; }   // rewind <seconds>
         else if (!strcmp(cmd, "accept")) g_StateRequest = 17;                                 // online: answer the load vote
         else if (!strcmp(cmd, "decline")) g_StateRequest = 18;
     }
@@ -1979,14 +2022,188 @@ namespace pfo_android
         __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "load from another match (slot %d): replaying %u frames, then reconnecting", slot, h.frame);
     }
 
+    // ---- rewind (solo) ----
+    // Back 15, 30 or 60 seconds: start from the newest snapshot of this timeline at or before that
+    // frame (a save, an auto save, or a keyframe taken while the game was paused or starting), else
+    // from the session's start, and replay the recorded inputs flat out to the frame. The recording
+    // is cut there, so play carries on from that point as if the rest hadn't happened.
+    constexpr int c_RewindFps = 60;
+
+    // the replay cut at frame t: its length, and the frame of the last chunk kept
+    int CutReplay(const uint8* b, int size, uint32 t, uint32& lastKept)
+    {
+        int off = 10;   // the header: magic, version, client count, client index
+        uint32 frame = 0;
+        lastKept = 0;
+        while (off + 2 <= size)
+        {
+            uint32 f = frame + b[off];
+            if (f > t) break;
+            uint8 code = b[off + 1];
+            int other = code >> 4;
+            int payload = !(code & 1) ? other : other ? 4 : -1;
+            if (payload < 0) { if (off + 6 > size) break; int32 n; memcpy(&n, b + off + 2, 4); payload = 4 + n; }
+            if (off + 2 + payload > size) break;
+            off += 2 + payload;
+            frame = f;
+            lastKept = f;
+        }
+        return off;
+    }
+
+    // the newest snapshot of the current timeline at or before frame t, within the first cut bytes
+    const NativeSnap* RewindBase(uint32 t, int cut)
+    {
+        auto& w = g_Session.m_ReplayWriter;
+        const NativeSnap* best = nullptr;
+        for (auto& kv : g_Snaps)
+        {
+            const NativeSnap& n = kv.second;
+            if (!n.ready || n.mp || n.frame > t || n.offsetAtFrame > cut || n.replay.size() < static_cast<size_t>(n.offsetAtFrame)) continue;
+            if (memcmp(n.replay.data(), w.m_Buffer, n.offsetAtFrame) != 0) continue;   // another timeline
+            if (!best || n.frame > best->frame) best = &n;
+        }
+        return best;
+    }
+
+    // how long a rewind of this many seconds would take, in ms (-1: not that far back)
+    int RewindEstimateMs(int seconds)
+    {
+        auto& s = g_Session;
+        if (!CanSave()) return -1;
+        uint32 back = static_cast<uint32>(seconds * c_RewindFps);
+        if (s.m_Frame < back + 60) return -1;
+        uint32 t = s.m_Frame - back, last = 0;
+        int cut = CutReplay(s.m_ReplayWriter.m_Buffer, s.m_ReplayWriter.m_Offset, t, last);
+        const NativeSnap* base = RewindBase(t, cut);
+        double frames = base ? t - base->frame : t;
+        return static_cast<int>((base ? 1000.0 : 800.0) + frames * 1000.0 / std::max(100.0, g_ReplayFps));
+    }
+
+    void RewindStart(uint32 t, const NativeSnap* base, CInstance* self);
+
+    void Rewind(int seconds, CInstance* self)
+    {
+        auto& s = g_Session;
+        uint32 back = static_cast<uint32>(seconds * c_RewindFps);
+        if (!CanSave() || s.m_Frame < back + 60) { SetResult(-6); return; }
+        uint32 t = s.m_Frame - back, last = 0;
+        int cut = CutReplay(s.m_ReplayWriter.m_Buffer, s.m_ReplayWriter.m_Offset, t, last);
+        g_Restore.data.assign(s.m_ReplayWriter.m_Buffer, s.m_ReplayWriter.m_Buffer + cut);
+        g_Restore.header = StateHeader();
+        g_Restore.header.frame = t;
+        g_Restore.header.lastFrameWritten = last;
+        g_Restore.header.replaySize = static_cast<uint32>(cut);
+        g_RewindTouches.clear();
+        for (uint32 f : g_TouchFrames) if (f <= t) g_RewindTouches.push_back(f);
+        RewindStart(t, RewindBase(t, cut), self);
+    }
+
+    void RewindStart(uint32 t, const NativeSnap* base, CInstance* self)
+    {
+        g_Restore.active = true;
+        g_Restore.rewind = true;
+        g_Restore.slot = -2;
+        g_Restore.startMs = fakesteam::NowMs();
+        g_ReplayChecksumsChecked = 0; g_ReplayFirstMismatchFrame = 0;
+        if (base)
+        {
+            g_Restore.fromFrame = base->frame;
+            g_SnapLoad = { 1, base->id, fakesteam::NowMs(), false, false, true };
+            SnapApplyNative(g_Snaps[base->id], false, self);
+            SetFastForward(true, self);
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rewind to frame %u: from snapshot %d (frame %u), %u frames to replay", t, base->id, base->frame, t - base->frame);
+            return;
+        }
+        RewindFromStart(self);
+    }
+
+    void RewindFromStart(CInstance* self)
+    {
+        g_Restore.active = true;
+        g_Restore.rewind = true;
+        g_Restore.fromFrame = 0;
+        g_Restore.startMs = fakesteam::NowMs();
+        PreloadLibrary(self);
+        g_ReplayChecksumsChecked = 0; g_ReplayFirstMismatchFrame = 0;
+        g_ReplayTouch = g_RewindTouches; g_ReplayTouchNext = 0; g_TouchFrames = g_RewindTouches;
+        g_Session.PlayReplay(g_Restore.data.data(), static_cast<int>(g_Restore.data.size()), 0, self);
+        SetFastForward(true, self);
+        __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rewind to frame %u: replaying from the start", g_Restore.header.frame);
+    }
+
+    // Keyframes for rewinds, only when a capture's hitch can't be felt: while the game is paused, and
+    // two seconds into a game that just started. At most one every ten seconds of play.
+    uint32 g_LastKeyframe = 0, g_KeyframeAt = 0;
+    int g_KeyframeCount = 0;
+
+    void KeyframeTick(CInstance* self)
+    {
+        auto& s = g_Session;
+        if (!CanSave() || g_SnapLoad.phase != 0 || !g_LastAdvanceArg) return;
+        if (s.m_Frame < g_LastKeyframe + 600 && s.m_Frame >= g_LastKeyframe) return;
+        RValue v;
+        bool paused = GlobalGet("paused", v, self) && YYGetBool(&v, 0);
+        bool starting = g_KeyframeAt != 0 && s.m_Frame >= g_KeyframeAt;
+        if (!paused && !starting) return;
+        g_KeyframeAt = 0;
+        g_LastKeyframe = s.m_Frame;
+        g_CaptureKeyframe = true;
+        SnapCapture(3000000 + (++g_KeyframeCount), self);
+        g_CaptureKeyframe = false;
+    }
+
+    // for the overlay: rewind estimates (ms, -1 not possible) and this device's replay speed
+    std::atomic<int> g_RewindEst[3] = { {-1}, {-1}, {-1} };
+    std::atomic<int> g_ReplayFpsPub{700};
+    std::vector<int> g_PubReadySlots;   // slots with a ready snapshot (fast loads), under g_PubMutex
+
+    void PublishEstimates()
+    {
+        static int64 last = 0;
+        int64 now = fakesteam::NowMs();
+        if (now - last < 700) return;
+        last = now;
+        const int secs[3] = { 15, 30, 60 };
+        for (int i = 0; i < 3; i++) g_RewindEst[i] = InSoloSession() ? RewindEstimateMs(secs[i]) : -1;
+        g_ReplayFpsPub = static_cast<int>(g_ReplayFps);
+        std::vector<int> ready;
+        for (auto& kv : g_Snaps) if (kv.second.ready && !kv.second.keyframe && kv.first < 1000000) ready.push_back(kv.first);
+        std::lock_guard<std::mutex> lock(g_PubMutex);
+        g_PubReadySlots.swap(ready);
+    }
+
+    // GameMaker's audio library logs through one function pointer (yyal::log::_log). Its default
+    // logger is YYWarning, which reads the game thread's current script to label the message, and
+    // the audio library calls it from its decoding thread ("Decoding bgm15_shop..."). When the game
+    // thread is busy (a load replaying flat out while a game's music decodes) that read now and then
+    // lands mid-change and crashes (null pointer in YYWarning, about one load in forty). Ours writes
+    // the message to the Android log and touches nothing of the game's.
+    void QuietAudioLog(int level, const char* msg)
+    {
+        __android_log_print(level >= 2 ? ANDROID_LOG_WARN : ANDROID_LOG_DEBUG, "yyal", "%s", msg ? msg : "");
+    }
+
+    void KeepAudioLogQuiet()
+    {
+        static void** logger = Sym<void**>("_ZN4yyal3log4_logE");
+        if (logger && *logger != reinterpret_cast<void*>(&QuietAudioLog))
+        {
+            if (*logger) __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "audio log: routed to logcat (was %p)", *logger);
+            *logger = reinterpret_cast<void*>(&QuietAudioLog);
+        }
+    }
+
     void StateBeforeUpdate(CInstance* self)
     {
+        KeepAudioLogQuiet();
         BeforeDraw();
         DiffAtFrame(self);
         ReplayTouches(self);
         SnapLoadBefore(self);
         if (g_SnapLoad.phase != 0) return;
         RejoinTick(self);
+        if (!g_Restore.active) KeyframeTick(self);
         if (g_MpSavePending) { int i = g_MpSavePending; bool a = g_MpSavePendingAuto; g_MpSavePending = 0; g_MpSavePendingAuto = false; MpSave(i, self, a); }
         if (int a = g_VoteAnswerRequest.exchange(0)) AnswerVote(a == 1);
         if (g_ReseedPending) { int t = g_ReseedPending; g_ReseedPending = 0; StartReseed(t, self); return; }
@@ -2015,6 +2232,7 @@ namespace pfo_android
         else if (req == 16) { g_ForceReplay = true; Load(g_StateRequestSlot, self); }
         else if (req == 17 || req == 18) AnswerVote(req == 17);
         else if (req == 20) StartRejoin(self);
+        else if (req == 30) Rewind(g_StateRequestSlot, self);
         else if (req == 21) remove(MatchFilePath().c_str());   // "no thanks"
         else if (req == 15) { usleep(550 * 1000); __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "slept 550 ms at frame %u", g_Session.m_Frame); }
         else if (req == 14)
@@ -2126,6 +2344,7 @@ namespace pfo_android
         InputLog(self);
         if (g_SnapLoad.phase == 0) ScanCommands(self);
         PublishVote();
+        PublishEstimates();
         {
             static bool inMatch = false;
             bool now = InOnlineMatch() && g_Session.m_ReplayReader.m_Buffer == nullptr && g_Rejoin.phase == 0;
@@ -2142,7 +2361,11 @@ namespace pfo_android
             if (GlobalGet("currGameID", v, self))
             {
                 int id = static_cast<int>(YYGetReal(&v, 0));
-                if (id != g_TrackedGameID) { g_TrackedGameID = id; g_GameStartFrame = g_Session.m_Frame; }
+                if (id != g_TrackedGameID)
+                {
+                    g_TrackedGameID = id; g_GameStartFrame = g_Session.m_Frame;
+                    if (id > 0 && InSoloSession() && g_Session.m_ReplayReader.m_Buffer == nullptr) g_KeyframeAt = g_Session.m_Frame + 120;
+                }
             }
         }
         else g_TrackedGameID = -1;
@@ -2180,6 +2403,7 @@ namespace pfo_android
         if (g_Session.m_OnlineState != EOnlineState::Online && g_Session.m_OnlineState != EOnlineState::GoingOnline)
         {
             // the replay ended the session (shouldn't happen): give the controls back
+            __android_log_print(ANDROID_LOG_ERROR, "PFOSTATE", "load slot %d: the replay ended the session at frame %u (state %d)", g_Restore.slot, g_Session.m_Frame, static_cast<int>(g_Session.m_OnlineState));
             SetFastForward(false, self);
             g_Restore.active = false;
             SetResult(-3);
@@ -2315,6 +2539,24 @@ extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeO
 extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeRejoinResult(JNIEnv*, jclass)
 {
     return pfo_android::g_RejoinResult.exchange(0);
+}
+
+// rewind estimates in ms for 15 / 30 / 60 s (-1: not possible), then this device's replay speed (frames/s)
+extern "C" JNIEXPORT jintArray JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeEstimates(JNIEnv* env, jclass)
+{
+    using namespace pfo_android;
+    jint v[4] = { g_RewindEst[0].load(), g_RewindEst[1].load(), g_RewindEst[2].load(), g_ReplayFpsPub.load() };
+    jintArray a = env->NewIntArray(4);
+    env->SetIntArrayRegion(a, 0, 4, v);
+    return a;
+}
+
+// does this slot load from its snapshot (about a second) rather than by replaying?
+extern "C" JNIEXPORT jboolean JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeSnapReady(JNIEnv*, jclass, jint slot)
+{
+    std::lock_guard<std::mutex> lock(pfo_android::g_PubMutex);
+    for (int s : pfo_android::g_PubReadySlots) if (s == slot) return JNI_TRUE;
+    return JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeLastSavedSlot(JNIEnv*, jclass)

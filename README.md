@@ -27,6 +27,10 @@ it, and double-click **`build.bat`**. See [Quick build](#quick-build).
   the disk icon (top right) for the save list: SAVE NOW, pick a save to see its picture and
   details, LOAD or DELETE. Tick **AUTO SAVE WHEN I PAUSE** to have pausing save into one AUTO slot.
   See [Save states](#save-states).
+- **Rewind.** REWIND 15 S / 30 S / 60 S in the save list takes you back that far, to the exact
+  frame. Each button shows how long it will take; anything 5 seconds or more asks first. It
+  doesn't add stutters to play: it starts from your saves and from snapshots taken only while the
+  game is paused or just starting, and replays your inputs from there.
 - **Save states online.** SAVE NOW in an online match saves for everyone at the same moment.
   LOAD asks the other players first ("P1 WANTS TO LOAD", ACCEPT / DECLINE), and everyone loads
   together. Saves from earlier matches load too, if they had the same number of players.
@@ -38,8 +42,14 @@ it, and double-click **`build.bat`**. See [Quick build](#quick-build).
   that says how you're connected (SOLO: SAVES ON, ONLINE: LAN 2F, CATCHING UP...) and then
   settles to a dot, short banners, and online players' names on a tap. In the layout editor,
   **CHIPS ROW / COLUMN** stacks the chips vertically.
+- **A crash fixed.** About one load in forty, and now and then opening a game, could crash the app
+  (GameMaker's audio decoding read the game thread's state). Fixed; 40 of 40 test loads ran clean.
 - Fixes: even line weight in the disk icon, nothing pokes out from under the save list, and the
   orange warning banners use white text.
+
+The full list is in [CHANGELOG.md](CHANGELOG.md). How save states, rewind and rejoining work:
+[docs/SAVE_STATES.md](docs/SAVE_STATES.md). How it was tested, and what hasn't been:
+[docs/TESTING.md](docs/TESTING.md).
 
 ---
 
@@ -112,6 +122,14 @@ it, and double-click **`build.bat`**. See [Quick build](#quick-build).
   replacing the last one. Its picture is from just before the pause.
 - Every game works: all 50 were tested loading in the same room, from the library and from inside
   another game.
+- **Rewind** (single player): **REWIND 15 S / 30 S / 60 S** in the save list go back that far, to
+  the exact frame, and play carries on from there. Each shows how long it will take, measured on
+  your device; if it's 5 seconds or more you're asked first ("REWIND 60 SECONDS? ABOUT 40 S TO
+  LOAD"), and LOAD does the same for a save that has to replay. A rewind starts from the newest
+  snapshot before that point (your saves, auto saves, and snapshots the game takes while it's
+  paused or a game is just starting) and replays your inputs from there, so play never stutters
+  for it.
+- How it all works: [docs/SAVE_STATES.md](docs/SAVE_STATES.md).
 
 **Save states online**
 - **SAVE NOW** in an online match saves on every phone at the same frame, so everyone gets the save
@@ -135,6 +153,7 @@ it, and double-click **`build.bat`**. See [Quick build](#quick-build).
 
 **Other fixes**
 - Quit in the main menu closes the app.
+- A crash in GameMaker's audio decoding (now and then when loading or opening a game) is fixed.
 - Runs on arm64 phones and on x86_64 emulators (BlueStacks, Android Studio's emulator).
 
 ## How online play connects
@@ -196,7 +215,7 @@ Android only installs an update over an existing install when it's signed with t
 overlay's font and button icons from your copy of the game (`scripts/export_overlay_art.csx`).
 Then it packs the game into the **runner kit** and signs the result (`scripts/pack_apk.csx`).
 
-The runner kit (`kit/ufo50-online-runner-v0.2.apk`) is the part that's the same for everyone:
+The runner kit (`kit/ufo50-online-runner-v0.3.apk`) is the part that's the same for everyone:
 GameMaker's Android runner with the touch overlay, the online service and PFO 50's netcode, and no
 game data. The full build makes it from source.
 
@@ -264,6 +283,7 @@ app id and wire number there, so they never mix with other okplay games.
 - **Names**: players panel > NAME. Change it while you're not in a lobby.
 - **Save states**: the disk icon (top right). In single player, START SOLO PLAY first. Online,
   SAVE NOW saves for everyone and LOAD asks the others.
+- **Rewind**: the save list's REWIND buttons, in single player (after START SOLO PLAY).
 - **Someone dropped**: wait for them (the banner counts down). If your app closed, reopen it and
   tap REJOIN within about a minute and a half.
 
@@ -281,6 +301,11 @@ app id and wire number there, so they never mix with other okplay games.
   `work\keys` folder.
 - **"COULDN'T REJOIN THE MATCH".** The others stopped waiting (90 seconds after the drop), or
   your phone can't reach them. Start a new match from the lobby.
+- **The save list says START SOLO PLAY / rewind isn't there.** Single-player saves and rewind need
+  a recorded session: tap START SOLO PLAY once after starting the app. It takes you to the library.
+- **A load or rewind is slow.** Saves from before the app restarted, and long rewinds without a
+  snapshot nearby, replay the session: a few seconds per minute of play. Pausing now and then
+  gives rewind more places to start from.
 - **A save won't load online.** It needs the same number of players as the match ("THAT SAVE IS
   FOR 1 PLAYER"), and everyone with a seat has to accept.
 - **Build errors.** The quick build prints the failing step. For the full build, run
@@ -291,6 +316,8 @@ app id and wire number there, so they never mix with other okplay games.
 - An empty file named `forcerelay` makes that phone join through the relay only.
 - An `okplay.txt` file holding a URL points the game at another room server. okplay's
   `rdv_standin.py` runs one locally.
+- `ss_cmd` takes test commands (save, load, rewind, netdrop, rejoin...). See
+  [docs/TESTING.md](docs/TESTING.md) for those, the development switches and the test scripts.
 
 ## What's in this repository
 
@@ -302,11 +329,21 @@ app id and wire number there, so they never mix with other okplay games.
 | `android/gm-project/` | the GameMaker runner project: the PFO extension with the touch overlay (`PFO_Android.java`), the online service, and the app icon (original art) |
 | `pfo/` | the Android port of PFO 50: a patch to its `dllmain.cpp`, plus the Android layer in `android/` (Steam lobbies and networking over ENet, the bridge to the GameMaker runner, the hot seat and pad builtins, and save states, online saves and rejoining in `savestate.inc`) |
 | `scripts/` | the game patch (with `pfo_snapshot.gml`, the game-side half of save states), the overlay art export, the APK packer and signer (UndertaleModTool scripts), and the native build |
-| `docs/screenshots/` | the pictures on this page |
+| `docs/` | [SAVE_STATES.md](docs/SAVE_STATES.md) (how save states, rewind, online saves and rejoining work), [TESTING.md](docs/TESTING.md) (how it was tested), and the screenshots on this page |
+| `tests/` | the scripts that test save states, rewind and online play on BlueStacks (see TESTING.md) |
+| `CHANGELOG.md` | what changed in each version |
 
 Nothing from the game is stored here: no game files, art or music. The only game code is the short
 snippets the patch script searches for in order to patch them. The screenshots show the game
 running.
+
+## Tested on
+
+v0.3 was tested on **BlueStacks 5** (Android 9, x86_64), two instances side by side for online
+play: every game's save states (150 of 150 runs), every online scenario (save, load, declined load,
+drop, rejoin, loading an earlier match's save), and rewind. It hasn't been tested on a real phone,
+on arm64, or with three or more players online yet. If you try it on a phone, please open an issue
+with how it went. Details: [docs/TESTING.md](docs/TESTING.md).
 
 ## Credits
 

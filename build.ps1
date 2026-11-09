@@ -24,7 +24,7 @@ $Pins = @{
     Mmm          = @("https://gamebanana.com/dl/1836289", "9e4f97abcbb2fd04b71ffdfed86feb53c7625590f946b1bc77aced3b38b4ab99", "multimadnessmod-1.30.zip")
     # the runner kit: GameMaker's Android runner + the touch overlay + libPFO.so, no game data
     # (made by the full build: bash build.sh --kit)
-    Kit          = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.3/kit/ufo50-online-runner-v0.3.apk", "371bf2421758f1de5c9a509276d4159ddfc11d91cc213922ad20b755e7b98fa1", "ufo50-online-runner-v0.3.apk")
+    Kit          = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.3/kit/ufo50-online-runner-v0.3.apk", "9304c33e6a83f6380bd4e8ff68140edff73d5f64affba6cf05e3058804b9f7f9", "ufo50-online-runner-v0.3.apk")
 }
 
 function Say($t) { Write-Host ""; Write-Host "== $t" -ForegroundColor Cyan }

@@ -3,3 +3,4 @@
 bin/java
 work/
 local.env
+tests/out/
