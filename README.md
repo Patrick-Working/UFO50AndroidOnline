@@ -62,7 +62,9 @@ The full list is in [CHANGELOG.md](CHANGELOG.md). How save states, rewind and re
 | ![Players panel](docs/screenshots/players_panel.png) | ![Layout editor](docs/screenshots/layout_editor.png) |
 | **Players panel**: touch and each gamepad to P1-P4, your name, join code, UPnP, hot seat | **Layout editor**: move, resize and hide controls, opacity, 4-way / 8-way d-pad |
 | ![Save states](docs/screenshots/save_states.png) | ![Loading a save online](docs/screenshots/online_load_vote.png) |
-| **Save states**: the save list with each save's picture, game, players and time into the game | **Loading online**: the other players see what you want to load and accept or decline |
+| **Save states**: the save list with each save's picture, game, players and time into the game, and the REWIND buttons with how long each takes | **Loading online**: the other players see what you want to load and accept or decline |
+| ![Rewind asks first when it will take a while](docs/screenshots/rewind_confirm.png) | ![Rewinding](docs/screenshots/rewinding.png) |
+| **Rewind**: a rewind that will take 5 seconds or more asks first, with the estimate | **Rewinding**: your inputs replay at high speed to the exact frame |
 | ![Waiting for a dropped player](docs/screenshots/waiting_for_player.png) | ![Rejoining a match](docs/screenshots/rejoin.png) |
 | **A dropped player**: everyone waits, with a countdown, until they're back | **Rejoining**: reopen the app and tap REJOIN to catch up with the match |
 
