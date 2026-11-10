@@ -1,6 +1,6 @@
 # UFO 50 Android Online: PFO 50 + MultiMadnessMod
 
-**v0.3** · Build your own Android version of **UFO 50** from your own Steam copy. It includes
+**v0.3.1** · Build your own Android version of **UFO 50** from your own Steam copy. It includes
 online multiplayer from **PFO 50**, 4+ players in many games from **MultiMadnessMod**, touch
 controls made for the game, and **save states**, in single player and online.
 
@@ -18,8 +18,15 @@ UFO 50 runs on Android's GameMaker runner. The fork rebuilds the runner for UFO 
 the mods, the touch overlay and online play.
 
 **Quick start:** install UFO 50 from Steam, download this repository
-([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.3.zip)), unzip
+([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.3.1.zip)), unzip
 it, and double-click **`build.bat`**. See [Quick build](#quick-build).
+
+## What's new in v0.3.1
+
+- **Load and rewind times you can trust.** Estimates now know how fast this device replays each
+  game (some replay over twice as fast as others), so a long rewind no longer takes much longer
+  than it said: in tests they're within 10%, leaning long. The loading screen shows the time left.
+- The ask-first box fits its contents, and REWINDING shows once.
 
 ## What's new in v0.3
 
@@ -64,7 +71,7 @@ The full list is in [CHANGELOG.md](CHANGELOG.md). How save states, rewind and re
 | ![Save states](docs/screenshots/save_states.png) | ![Loading a save online](docs/screenshots/online_load_vote.png) |
 | **Save states**: the save list with each save's picture, game, players and time into the game, and the REWIND buttons with how long each takes | **Loading online**: the other players see what you want to load and accept or decline |
 | ![Rewind asks first when it will take a while](docs/screenshots/rewind_confirm.png) | ![Rewinding](docs/screenshots/rewinding.png) |
-| **Rewind**: a rewind that will take 5 seconds or more asks first, with the estimate | **Rewinding**: your inputs replay at high speed to the exact frame |
+| **Rewind**: a rewind that will take 5 seconds or more asks first, with the estimate | **Rewinding**: your inputs replay at high speed to the exact frame, with the time left |
 | ![Waiting for a dropped player](docs/screenshots/waiting_for_player.png) | ![Rejoining a match](docs/screenshots/rejoin.png) |
 | **A dropped player**: everyone waits, with a countdown, until they're back | **Rejoining**: reopen the app and tap REJOIN to catch up with the match |
 
@@ -192,7 +199,7 @@ folder, so other games can use it too.
 You need **Windows 10 or 11** and **UFO 50 1.9.5 from Steam**. Nothing else to install.
 
 1. Download this repository
-   ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.3.zip)) and
+   ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.3.1.zip)) and
    unzip it anywhere.
 2. Double-click **`build.bat`**. It finds UFO 50 in your Steam library and checks the version, then
    downloads the tools and mods into `work\`, each checked against a fixed checksum.
@@ -217,7 +224,7 @@ Android only installs an update over an existing install when it's signed with t
 overlay's font and button icons from your copy of the game (`scripts/export_overlay_art.csx`).
 Then it packs the game into the **runner kit** and signs the result (`scripts/pack_apk.csx`).
 
-The runner kit (`kit/ufo50-online-runner-v0.3.apk`) is the part that's the same for everyone:
+The runner kit (`kit/ufo50-online-runner-v0.3.1.apk`) is the part that's the same for everyone:
 GameMaker's Android runner with the touch overlay, the online service and PFO 50's netcode, and no
 game data. The full build makes it from source.
 
@@ -250,7 +257,7 @@ icon.
 
 ## Versions
 
-This release (**v0.3**) is made for exactly these versions. The patches are written against them,
+This release (**v0.3.1**) is made for exactly these versions. The patches are written against them,
 and the build checks the checksums.
 
 | part | version | from |
@@ -341,7 +348,7 @@ running.
 
 ## Tested on
 
-v0.3 was tested on **BlueStacks 5** (Android 9, x86_64), two instances side by side for online
+v0.3.1 was tested on **BlueStacks 5** (Android 9, x86_64), two instances side by side for online
 play: every game's save states (150 of 150 runs), every online scenario (save, load, declined load,
 drop, rejoin, loading an earlier match's save), and rewind. It hasn't been tested on a real phone,
 on arm64, or with three or more players online yet. If you try it on a phone, please open an issue

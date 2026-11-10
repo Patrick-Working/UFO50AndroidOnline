@@ -63,6 +63,7 @@ Files in `/sdcard/Android/data/com.unofficial.ufo50/files/` that change how the 
 | `okplay.txt` (a URL) | use another room server |
 | `snapdebug` | development: a snapshot also remembers the whole game state one frame later, and a load compares against it (logcat `PFOSNAP`) |
 | `snapdiffat` (`<frame>` or `<first> <step> <count>`) | development: live play remembers the whole state at those frames, a replay compares there |
+| `replay_speed.txt` | not a switch: the replay speed this device has measured in each game (`<game id> <frames a second>`, `-100` overall). Delete it to start over. |
 | `inputlog` | development: every frame's input and random-generator position go to `inputlog_live.txt` / `inputlog_replay.txt`, to compare the two |
 
 Remove the development switches after use: they slow saves and loads down.
@@ -74,7 +75,7 @@ All are in `tests/`; run them with Python 3 from anywhere.
 | script | what it checks | usage |
 |---|---|---|
 | `sweep4.py` | **Every game's save states.** Per game: a fresh app, solo session, opens the game through the library with key presses, plays, saves, leaves to the library (or into another game, or stays), loads (snapshot + its 120-frame check), plays, saves again, then loads that save by replay only. Every step checks which game is running; a run that went astray is retried from a fresh app (up to 3 tries) and kept apart from real failures, with its logcat, screen and files kept as `noresult_*`. | `sweep4.py 1,2,3 out.txt [library\|other\|same]` (game numbers as in the library, 1-50) |
-| `rewind_test.py` | **Rewind.** Solo session, opens Velgress, plays with a pause (so there's a keyframe), then rewinds 15 s and 60 s; each must land on its frame with the replay checksums matching. | `rewind_test.py [port]` |
+| `rewind_test.py` | **Rewind and its estimates.** Solo session, opens Velgress, plays with a pause (so there's a keyframe), then rewinds 15 s and 60 s; each must land on its frame with the replay checksums matching. Then twice: plays 2.5 minutes, rewinds 60 s, and compares the time it took with its estimate (it fails if it took over 25% longer). Prints the learned replay speeds. | `rewind_test.py [port]` |
 | `mp_test.py` | **One online save and load.** Starts both apps, hosts a public lobby, joins, readies, picks a profile; the host saves, plays on, proposes loading; the joiner accepts or declines. Checks both logs: same save frame and checksum, same load frame, no desync after. | `mp_test.py [accept\|decline] [--no-start]` |
 | `mp_regress.py` | **Every online scenario**, one after another, each judged automatically: 1 save + accepted load, 2 declined load, 3 rejoin through an online save and load, 4 a 20-second network drop, 5 the joiner's app killed and rejoining, 6 loading a save from an earlier match. | `mp_regress.py [1,4,5]` |
 | `cmd_stress.py` | **The test channel itself**: sends `where` N times and counts lost commands (a harness check). | `cmd_stress.py [port] [count]` |
@@ -82,7 +83,7 @@ All are in `tests/`; run them with Python 3 from anywhere.
 
 `mp_test.py` writes its logs and screenshots to `tests/out/`.
 
-## Results for v0.3
+## Results for v0.3 and v0.3.1
 
 On the build in this release:
 
@@ -92,6 +93,7 @@ On the build in this release:
 | 40 single-player save + load runs back to back, after the audio crash fix | **40 of 40** clean, no retries (5 crashes and 7 retries before the fix) |
 | `mp_regress.py` 1-6 | **6 of 6** pass: both phones on the same game, frame and checksum afterwards |
 | `rewind_test.py` 15 s and 60 s | **2 of 2** pass, both verified |
+| Rewind estimates (v0.3.1, per-game speeds) | 60 s rewinds took 0.89x and 0.96x of their estimate (before: up to 1.6x) |
 
 Measured on BlueStacks: a snapshot load takes about 1 second; replays run at about 550-1,100 frames
 a second, so a replayed load or rewind takes a few seconds per minute of play.

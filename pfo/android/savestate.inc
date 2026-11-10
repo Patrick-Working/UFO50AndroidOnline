@@ -49,7 +49,141 @@ namespace pfo_android
         uint32 fromFrame = 0;          // where the fast replay started (for the speed estimate)
     };
     Restore g_Restore;
-    double g_ReplayFps = 700.0;        // how fast this device replays, measured by each load (estimates)
+    double g_ReplayFps = 450.0;        // how fast this device replays, all games together (a fallback)
+
+    // Replay speed differs a lot between games (the library replays at well over 1,000 frames a
+    // second, Velgress's later floors at about 430), so estimates know which game each stretch of
+    // the session was in, and this device's replay speed in each game, measured by every replay
+    // and kept between runs (files/replay_speed.txt).
+    std::vector<std::pair<uint32, int>> g_GameSpans;   // (first frame, game id), in frame order
+    std::map<int, double> g_GameFps;                    // game id -> frames a second while replaying
+    std::map<int, double> g_GameFpsPub;                 // a copy for the overlay, under g_SpeedMutex
+    std::mutex g_SpeedMutex;
+    bool g_GameFpsLoaded = false;
+    std::map<int, std::pair<double, double>> g_SpeedAcc; // this replay so far: game -> (frames, ms)
+    int g_SpeedGame = -2; uint32 g_SpeedFrame = 0; int64 g_SpeedMs = 0;
+
+    const char* SpeedPath() { return "/sdcard/Android/data/" PFO_PACKAGE "/files/replay_speed.txt"; }
+
+    void LoadGameFps()
+    {
+        if (g_GameFpsLoaded) return;
+        g_GameFpsLoaded = true;
+        if (FILE* f = fopen(SpeedPath(), "r"))
+        {
+            int game; double fps;
+            while (fscanf(f, "%d %lf", &game, &fps) == 2) if (fps >= 50 && fps < 100000) { if (game == -100) g_ReplayFps = fps; else g_GameFps[game] = fps; }
+            fclose(f);
+        }
+        std::lock_guard<std::mutex> lock(g_SpeedMutex);
+        g_GameFpsPub = g_GameFps;
+    }
+
+    double FpsFor(int game)
+    {
+        auto it = g_GameFps.find(game);
+        return std::max(50.0, it != g_GameFps.end() ? it->second : g_ReplayFps);
+    }
+
+    // which game each frame was in: called every step, live and while replaying
+    void NoteGameSpan(uint32 frame, int game)
+    {
+        while (!g_GameSpans.empty() && g_GameSpans.back().first > frame) g_GameSpans.pop_back();   // the timeline went back
+        if (!g_GameSpans.empty() && g_GameSpans.back().first == frame) g_GameSpans.back().second = game;
+        else if (g_GameSpans.empty() || g_GameSpans.back().second != game) g_GameSpans.push_back({ frame, game });
+    }
+
+    // frames from..to as (game, frames) stretches; frames before anything was noted count as game -100
+    template <typename F> void ForEachStretch(uint32 from, uint32 to, F f)
+    {
+        if (to <= from) return;
+        uint32 at = from;
+        if (g_GameSpans.empty() || g_GameSpans[0].first > from)
+        {
+            uint32 end = g_GameSpans.empty() ? to : std::min(to, g_GameSpans[0].first);
+            if (end > at) { f(-100, end - at); at = end; }
+        }
+        for (size_t i = 0; i < g_GameSpans.size() && at < to; i++)
+        {
+            uint32 end = i + 1 < g_GameSpans.size() ? std::min(to, g_GameSpans[i + 1].first) : to;
+            if (end > at && g_GameSpans[i].first <= at) { f(g_GameSpans[i].second, end - at); at = end; }
+        }
+    }
+
+    // estimates lean long: a load that takes a little less than said is fine, more is a surprise
+    constexpr double c_EstimateHeadroom = 1.1;
+
+    // how long replaying frames from..to takes on this device, in ms
+    double ReplayMs(uint32 from, uint32 to)
+    {
+        LoadGameFps();
+        double ms = 0;
+        ForEachStretch(from, to, [&](int game, uint32 frames) { ms += frames * 1000.0 / (game == -100 ? std::max(50.0, g_ReplayFps) : FpsFor(game)); });
+        return ms * c_EstimateHeadroom;
+    }
+
+    // a save's mix of games, "game:frames,..." (its details file keeps it for the load estimate)
+    std::string GameMix(uint32 to)
+    {
+        std::map<int, uint32> mix;
+        ForEachStretch(0, to, [&](int game, uint32 frames) { mix[game] += frames; });
+        std::string out;
+        for (auto& kv : mix) out += (out.empty() ? "" : ",") + std::to_string(kv.first) + ":" + std::to_string(kv.second);
+        return out;
+    }
+
+    void SaveGameFps()
+    {
+        if (FILE* f = fopen(SpeedPath(), "w"))
+        {
+            fprintf(f, "-100 %.0f\n", g_ReplayFps);
+            for (auto& kv : g_GameFps) fprintf(f, "%d %.0f\n", kv.first, kv.second);
+            fclose(f);
+        }
+        std::lock_guard<std::mutex> lock(g_SpeedMutex);
+        g_GameFpsPub = g_GameFps;
+    }
+
+    // a measurement: slower ones count at once (an estimate that's too short is the one that
+    // surprises), faster ones only gradually
+    double Blend(double old, double now) { return now < old ? 0.3 * old + 0.7 * now : 0.8 * old + 0.2 * now; }
+
+    // every step: measure replay speed per game while replaying; when a replay ends, keep it
+    void MeasureReplaySpeed(bool replaying, int game, uint32 frame)
+    {
+        int64 now = fakesteam::NowMs();
+        if (replaying)
+        {
+            if (game == g_SpeedGame && frame > g_SpeedFrame)
+            {
+                if (frame - g_SpeedFrame >= 60)
+                {
+                    auto& a = g_SpeedAcc[game];
+                    a.first += frame - g_SpeedFrame; a.second += static_cast<double>(now - g_SpeedMs);
+                    g_SpeedFrame = frame; g_SpeedMs = now;
+                }
+                return;
+            }
+            g_SpeedGame = game; g_SpeedFrame = frame; g_SpeedMs = now;
+            return;
+        }
+        g_SpeedGame = -2;
+        if (g_SpeedAcc.empty()) return;
+        LoadGameFps();
+        double frames = 0, ms = 0;
+        for (auto& kv : g_SpeedAcc)
+        {
+            frames += kv.second.first; ms += kv.second.second;
+            if (kv.second.first < 300 || kv.second.second < 100) continue;
+            double fps = kv.second.first * 1000.0 / kv.second.second;
+            auto it = g_GameFps.find(kv.first);
+            g_GameFps[kv.first] = it == g_GameFps.end() ? fps : Blend(it->second, fps);
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "replay speed: game %d, %.0f frames/s (%.0f frames), now %.0f", kv.first, fps, kv.second.first, g_GameFps[kv.first]);
+        }
+        if (frames >= 600 && ms >= 300) g_ReplayFps = Blend(g_ReplayFps, frames * 1000.0 / ms);
+        g_SpeedAcc.clear();
+        SaveGameFps();
+    }
 
     // Frames (in this session's timeline) where a capture had to switch every instance on to read
     // it. That changes the game a little, so replays do the same at the same frames ("touch").
@@ -384,7 +518,7 @@ namespace pfo_android
         }
         players += "]";
         std::string json = "{\"version\":1,\"slot\":" + std::to_string(slot) + ",\"savedAt\":" + std::to_string(h.savedAt)
-            + ",\"frame\":" + std::to_string(h.frame) + ",\"gameFrames\":" + std::to_string(icon > 0 ? h.frame - g_GameStartFrame : 0)
+            + ",\"frame\":" + std::to_string(h.frame) + ",\"mix\":\"" + GameMix(h.frame) + "\",\"gameFrames\":" + std::to_string(icon > 0 ? h.frame - g_GameStartFrame : 0)
             + ",\"game\":" + std::to_string(game) + ",\"icon\":" + std::to_string(icon) + ",\"title\":" + JsonStr(title.c_str())
             + ",\"online\":" + (clients > 1 ? "true" : "false")
             + ",\"numPlayers\":" + std::to_string(numPlayers) + ",\"clients\":" + std::to_string(clients)
@@ -495,11 +629,7 @@ namespace pfo_android
         uint32 checksum = me.m_ChecksumData[s.m_Frame & (countof(me.m_ChecksumData) - 1)].m_Checksum;
         // on track all the way: the replay's own checksums (one every 255 frames) and the final one
         bool match = (g_Restore.rewind || checksum == h.checksum) && s.m_Frame == h.frame && g_ReplayFirstMismatchFrame == 0;
-        {
-            int64 took = fakesteam::NowMs() - g_Restore.startMs;
-            uint32 frames = s.m_Frame > g_Restore.fromFrame ? s.m_Frame - g_Restore.fromFrame : 0;
-            if (took > 300 && frames > 600) g_ReplayFps = 0.5 * g_ReplayFps + 0.5 * (frames * 1000.0 / took);
-        }
+        uint32 replayedFrom = g_Restore.fromFrame;
         g_Restore.rewind = false; g_Restore.fromFrame = 0;
 
         reset(s.m_ReplayReader, nullptr, 0);
@@ -540,8 +670,8 @@ namespace pfo_android
         g_Restore.data.shrink_to_fit();
         int64 ms = fakesteam::NowMs() - g_Restore.startMs;
         __android_log_print(match ? ANDROID_LOG_INFO : ANDROID_LOG_WARN, "PFOSTATE",
-            "load slot %d: reached frame %u in %lld ms (%.0f frames/s), checksum %08x vs saved %08x, %d replay checksums%s%s: %s",
-            g_Restore.slot, s.m_Frame, static_cast<long long>(ms), ms > 0 ? s.m_Frame * 1000.0 / ms : 0.0,
+            "load slot %d: reached frame %u in %lld ms (%u frames replayed at %.0f/s), checksum %08x vs saved %08x, %d replay checksums%s%s: %s",
+            g_Restore.slot, s.m_Frame, static_cast<long long>(ms), s.m_Frame - replayedFrom, ms > 0 ? (s.m_Frame - replayedFrom) * 1000.0 / ms : 0.0,
             checksum, h.checksum, g_ReplayChecksumsChecked, g_ReplayFirstMismatchFrame ? ", first mismatch at frame " : "",
             g_ReplayFirstMismatchFrame ? std::to_string(g_ReplayFirstMismatchFrame).c_str() : "", match ? "verified" : "MISMATCH");
         SetResult(match ? 3 : -3);
@@ -2076,8 +2206,7 @@ namespace pfo_android
         uint32 t = s.m_Frame - back, last = 0;
         int cut = CutReplay(s.m_ReplayWriter.m_Buffer, s.m_ReplayWriter.m_Offset, t, last);
         const NativeSnap* base = RewindBase(t, cut);
-        double frames = base ? t - base->frame : t;
-        return static_cast<int>((base ? 1000.0 : 800.0) + frames * 1000.0 / std::max(100.0, g_ReplayFps));
+        return static_cast<int>((base ? 1000.0 : 800.0) + ReplayMs(base ? base->frame : 0, t));
     }
 
     void RewindStart(uint32 t, const NativeSnap* base, CInstance* self);
@@ -2112,7 +2241,7 @@ namespace pfo_android
             g_SnapLoad = { 1, base->id, fakesteam::NowMs(), false, false, true };
             SnapApplyNative(g_Snaps[base->id], false, self);
             SetFastForward(true, self);
-            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rewind to frame %u: from snapshot %d (frame %u), %u frames to replay", t, base->id, base->frame, t - base->frame);
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rewind to frame %u: from snapshot %d (frame %u), %u frames to replay, estimate %.0f ms", t, base->id, base->frame, t - base->frame, 1000.0 + ReplayMs(base->frame, t));
             return;
         }
         RewindFromStart(self);
@@ -2129,7 +2258,7 @@ namespace pfo_android
         g_ReplayTouch = g_RewindTouches; g_ReplayTouchNext = 0; g_TouchFrames = g_RewindTouches;
         g_Session.PlayReplay(g_Restore.data.data(), static_cast<int>(g_Restore.data.size()), 0, self);
         SetFastForward(true, self);
-        __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rewind to frame %u: replaying from the start", g_Restore.header.frame);
+        __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rewind to frame %u: replaying from the start, estimate %.0f ms", g_Restore.header.frame, 800.0 + ReplayMs(0, g_Restore.header.frame));
     }
 
     // Keyframes for rewinds, only when a capture's hitch can't be felt: while the game is paused, and
@@ -2361,6 +2490,8 @@ namespace pfo_android
             if (GlobalGet("currGameID", v, self))
             {
                 int id = static_cast<int>(YYGetReal(&v, 0));
+                NoteGameSpan(g_Session.m_Frame, id);
+                MeasureReplaySpeed(g_Session.m_ReplayReader.m_Buffer != nullptr, id, g_Session.m_Frame);
                 if (id != g_TrackedGameID)
                 {
                     g_TrackedGameID = id; g_GameStartFrame = g_Session.m_Frame;
@@ -2427,7 +2558,12 @@ namespace pfo_android
             if (g_SnapLoad.phase != 0)
                 pct = g_SnapLoad.phase == 1 ? 10 : g_SnapLoad.phase == 3 ? 95
                     : 15 + std::min<uint32>(80, (g_Session.m_Frame - std::min(g_Session.m_Frame, g_Restore.header.frame)) * 80 / c_SnapVerifyFrames);
-            else pct = std::min<uint32>(100, g_Session.m_Frame * 100 / std::max<uint32>(1, g_Restore.header.frame));
+            else
+            {
+                // the share of the frames being replayed (a rewind from a snapshot starts part way in)
+                uint32 from = g_Restore.fromFrame, to = g_Restore.header.frame, at = g_Session.m_Frame;
+                pct = at <= from || to <= from ? 0 : std::min<uint32>(100, static_cast<uint32>((static_cast<uint64>(at - from) * 100) / (to - from)));
+            }
             v |= (pct & 0xff) << 8;
         }
         v |= (g_StateResult.load() & 0xff) << 16;
@@ -2549,6 +2685,30 @@ extern "C" JNIEXPORT jintArray JNICALL Java_com_unofficial_ufo50_PFO_1Android_na
     jintArray a = env->NewIntArray(4);
     env->SetIntArrayRegion(a, 0, 4, v);
     return a;
+}
+
+// how long replaying a save with this mix of games ("game:frames,...") takes on this device, in ms
+extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeMixEstimate(JNIEnv* env, jclass, jstring jmix)
+{
+    using namespace pfo_android;
+    const char* mix = jmix ? env->GetStringUTFChars(jmix, nullptr) : nullptr;
+    if (!mix) return -1;
+    double ms = 0, fallback;
+    {
+        std::lock_guard<std::mutex> lock(g_SpeedMutex);
+        fallback = std::max(50.0, static_cast<double>(g_ReplayFpsPub.load()));
+        for (const char* p = mix; *p; )
+        {
+            int game = 0; unsigned frames = 0, used = 0;
+            if (sscanf(p, "%d:%u%n", &game, &frames, &used) < 2 || used == 0) break;
+            auto it = g_GameFpsPub.find(game);
+            ms += frames * 1000.0 / (it != g_GameFpsPub.end() ? std::max(50.0, it->second) : fallback);
+            p += used;
+            if (*p == ',') p++;
+        }
+    }
+    env->ReleaseStringUTFChars(jmix, mix);
+    return static_cast<jint>(ms * c_EstimateHeadroom);
 }
 
 // does this slot load from its snapshot (about a second) rather than by replaying?

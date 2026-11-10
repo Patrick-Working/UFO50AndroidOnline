@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.1 (2026-11-09)
+
+- **Load and rewind estimates are per game.** Replay speed differs a lot between games (the
+  library replays over twice as fast as some games), so a single speed made long rewinds take up to
+  60% longer than their estimate (13 s shown, 21 s taken). The app now notes which game each stretch
+  of play was in and learns this device's replay speed in each game, kept between runs. In tests
+  the estimate is now within 10%, leaning long.
+- **The loading screen shows the time left** ("37% - ABOUT 8 S LEFT"), and its bar counts the
+  frames actually being replayed (a rewind from a snapshot used to start part way along).
+- The ask-first box fits its contents (no empty gap), and REWINDING shows once.
+
 ## v0.3 (2026-11-09)
 
 ### Save states (single player)

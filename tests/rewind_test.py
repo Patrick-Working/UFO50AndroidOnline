@@ -1,5 +1,6 @@
 # Rewind check (solo) on one BlueStacks instance: start a solo session, open Velgress, play with a
 # pause, then rewind 15 s and 60 s; each must land on its frame with the replay's checksums matching.
+# Then twice: play 2.5 minutes, rewind 60 s, and compare the time it took with its estimate.
 # Usage: rewind_test.py [adb port, default 5555]
 import os, sys, time, subprocess, re, random
 ADB = os.environ.get('ADB') or os.path.expandvars(r'%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe')
@@ -35,5 +36,26 @@ for secs in (15, 60):
     ok = ok and good
     print(f'rewind {secs} s: {"PASS" if good else "FAIL"} {start[-1:]} {res[-1:]}', flush=True)
     mash(8)
+# estimates: after a few minutes more play, a long rewind's estimate (in its log line) against the
+# time it really took. Too short is what matters (people agree to the wait first).
+def timed_rewind(secs):
+    adb('logcat', '-c'); cmd(f'rewind {secs}')
+    t = time.time(); res = []
+    while time.time() - t < 300:
+        time.sleep(2)
+        res = re.findall(r'load slot -2: reached frame (\d+) in (\d+) ms.* (verified|MISMATCH)', log())
+        if res: break
+    est = re.findall(r'rewind to frame \d+: .*estimate (\d+) ms', log())
+    if not res or not est: return None
+    return int(est[-1]), int(res[-1][1]), res[-1][2]
+for round_ in (1, 2):
+    mash(150)
+    r = timed_rewind(60)
+    if r is None: print(f'estimate {round_}: FAIL (no result)'); ok = False; continue
+    est, took, v = r
+    good = v == 'verified' and took <= est * 1.25
+    ok = ok and good
+    print(f'estimate {round_}: {"PASS" if good else "FAIL"} estimated {est} ms, took {took} ms ({took / max(1, est):.2f}x), {v}', flush=True)
+print('replay speeds:', ' | '.join(adb('shell', f'cat {D}/replay_speed.txt').split(chr(10))).strip())
 bad = re.search(r'FATAL|SIGSEGV|Assertion failed', adb('logcat', '-d'))
 print('rewind:', 'PASS' if ok and not bad else 'FAIL')

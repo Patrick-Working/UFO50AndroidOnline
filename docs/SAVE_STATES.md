@@ -101,9 +101,15 @@ The save list's **REWIND 15 S / 30 S / 60 S** goes back that far in the current 
 quarter of a second, so they're only taken when that can't be felt: while the game is paused, and
 two seconds into a game that has just started (at most one every ten seconds; four are kept).
 
-**Estimates**: the time a rewind or a load will take is estimated from the frames to replay and the
-replay speed measured on this device by its previous loads. Anything estimated at 5 seconds or more
-asks first.
+**Estimates**: replay speed differs a lot between games: the library replays at well over 1,000
+frames a second, Velgress's later floors at about 430 on BlueStacks. So the session notes which game
+every stretch of frames was in, and every replay measures this device's speed in each game it passes
+through (`files/replay_speed.txt` keeps them between runs; a slower measurement counts at once, a
+faster one gradually). A rewind's estimate adds up its stretches at their games' speeds; a save's
+details file keeps its mix of games (`"mix": "0:400,40:3000"`) for its load estimate. Estimates lean
+10% long, since a load that finishes early is fine and one that runs long is a surprise. Anything
+estimated at 5 seconds or more asks first, and the loading screen shows the time left, worked out
+from how fast the replay is actually going.
 
 ## Online saves
 

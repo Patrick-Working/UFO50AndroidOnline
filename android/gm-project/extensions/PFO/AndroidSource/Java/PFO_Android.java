@@ -106,6 +106,7 @@ public class PFO_Android {
     static native int nativeOfferRefused();                  // a save that can't load in this match: its player count
     static native int[] nativeEstimates();                   // rewind 15/30/60 s estimates (ms, -1 not possible), replay frames/s
     static native boolean nativeSnapReady(int slot);         // the slot loads from its snapshot (about a second)
+    static native int nativeMixEstimate(String mix);         // ms to replay a save's mix of games ("game:frames,...")
     static native void nativeVoteAnswer(boolean accept);     // our answer: ACCEPT or DECLINE
     static native int nativeMatchSave(int slot);             // this match's save number for a slot (0: not loadable online)
     static native int[] nativeScreenRect();                  // where the game draws: x, y, w, h, window w, window h
@@ -1811,7 +1812,8 @@ public class PFO_Android {
             if (!editing && vote[0] != 0) drawVote(canvas, u);
             if (!editing && rejoinShown()) drawRejoin(canvas, u);
             if (!editing && confirmShown()) drawConfirm(canvas, u);
-            if (restoring()) drawRestore(canvas, u);
+            if (restoring()) { if (pendingStartMs == 0) pendingStartMs = android.os.SystemClock.uptimeMillis(); drawRestore(canvas, u); }
+            else pendingStartMs = 0;
         }
 
         void setFill(int color, float alpha) { fill.setStyle(Paint.Style.FILL); fill.setColor(color); fill.setAlpha(a(alpha)); }
@@ -1957,6 +1959,7 @@ public class PFO_Android {
         static final String STATE_DIR = "/sdcard/Android/data/com.unofficial.ufo50/files/savestates";
         boolean statesOpen = false;
         int stateStatus = 0, lastResultSeq = -1, pendingSlot = 0, pendingWhat = 0;
+        long pendingStartMs = 0;   // when the load or rewind on screen started (for the time left)
         IconStrip gameIcons;
         Control statesBtn;
         final RectF statesRect = new RectF(), listRect = new RectF();
@@ -2227,6 +2230,10 @@ public class PFO_Android {
             try { ready = nativeSnapReady(slot); } catch (Throwable t) { }
             if (ready) return 1200;
             org.json.JSONObject o = saveInfo.get(slot);
+            String mix = o != null ? o.optString("mix", "") : "";
+            if (!mix.isEmpty()) {
+                try { int ms = nativeMixEstimate(mix); if (ms >= 0) return 800 + ms; } catch (Throwable t) { }
+            }
             long frames = o != null ? o.optLong("frame", 0) : 0;
             return (int) (800 + frames * 1000L / Math.max(100, estimates[3]));
         }
@@ -2252,7 +2259,10 @@ public class PFO_Android {
         }
 
         void drawConfirm(Canvas cv, float u) {
-            float pw = Math.min(getWidth() * 0.8f, u * 1.2f), ph = u * 0.4f, gap = u * 0.02f;
+            float pw = Math.min(getWidth() * 0.8f, u * 1.2f), gap = u * 0.02f;
+            float lineH0 = u * 0.034f, btnH0 = u * 0.075f;
+            // as tall as what it holds: title, one line, a little air, the buttons
+            float ph = gap + lineH0 * 1.3f + lineH0 * 1.7f + lineH0 * 1.9f + btnH0 + gap;
             float left = (getWidth() - pw) / 2f, top = (getHeight() - ph) / 2f;
             solid(fill, 0xFF000000, 0.55f); cv.drawRect(0, 0, getWidth(), getHeight(), fill);
             tmp.set(left, top, left + pw, top + ph);
@@ -2274,7 +2284,7 @@ public class PFO_Android {
 
         void startRewind(final int seconds) {
             statesOpen = false;
-            pendingSlot = -2; pendingWhat = 4; pendingAuto = false;
+            pendingSlot = -2; pendingWhat = 4; pendingAuto = false; pendingStartMs = android.os.SystemClock.uptimeMillis();
             nativeStateRequest(30, seconds);
         }
 
@@ -2776,7 +2786,10 @@ public class PFO_Android {
             RectF bar = new RectF(cx0 - bw / 2f, ty + u * 0.09f, cx0 + bw / 2f, ty + u * 0.09f + bh);
             solid(line, 0xFFFFFFFF, 0.8f); cv.drawRect(bar, line);
             solid(fill, 0xFF008456, 1f); cv.drawRect(bar.left + 2, bar.top + 2, bar.left + 2 + (bar.width() - 4) * pct / 100f, bar.bottom - 2, fill);
-            txt(cv, (pendingWhat == 4 ? "REWINDING  " : "LOADING  ") + pct + "%", cx0, bar.bottom + u * 0.04f, u * 0.035f, 0xFFC8C8C8, 255);
+            // the title already says REWINDING or LOADING when there's no save to name
+            long took = pendingStartMs > 0 ? android.os.SystemClock.uptimeMillis() - pendingStartMs : 0;
+            String left = pct >= 5 && pct < 100 && took > 1500 ? "  -  " + aboutSeconds((int) (took * (100 - pct) / pct)) + " LEFT" : "";
+            txt(cv, (o != null ? "LOADING  " : "") + pct + "%" + left, cx0, bar.bottom + u * 0.04f, u * 0.035f, 0xFFC8C8C8, 255);
         }
 
         // the save-states button, left of the menu button: a little floppy disk
