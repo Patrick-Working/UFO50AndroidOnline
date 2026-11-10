@@ -6,6 +6,12 @@ rewind in place of PFO 50's Steam networking. It plays with the phones: the same
 
 It is a second game folder next to your Steam installation, not a change to it.
 
+New in v0.4.0, and so far tested on one Windows 10 PC only (two copies of the game side by side,
+and one with an Android emulator): see [TESTING.md](TESTING.md) for what was and wasn't tried. If
+something doesn't work for you, the log (`%LOCALAPPDATA%\ufo50_online\pfo_online.log`) says most of
+what happened; it holds network addresses, so look through it before you post it anywhere.
+
+
 ## What it is and isn't
 
 - **It never talks to Steam.** The folder has no Steam library in it (the build leaves out
@@ -59,6 +65,8 @@ with the one it compiled).
 Keyboard as in the Steam game (Z, X, arrows, Esc pauses) and gamepads as GameMaker finds them.
 What the touch overlay is on a phone is here a menu made for a keyboard and a controller:
 
+![The menu](screenshots/windows_menu.png)
+
 | | keyboard | controller |
 |---|---|---|
 | open or close the online menu | **F1** | **press both sticks in** |
@@ -89,6 +97,8 @@ The **menu** has, depending on where you are:
 - ENTER A JOIN CODE, PLAYER NAME (empty: this computer's name)
 - UPNP: whether hosting asks your router to open the port. The forward is taken back when the game
   closes.
+
+![The list of saves](screenshots/windows_saves.png)
 
 Outside the menu the game shows, as the overlay does on a phone:
 

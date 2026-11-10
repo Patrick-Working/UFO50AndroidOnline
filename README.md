@@ -20,6 +20,12 @@ This is a fork of Skyline969's
 UFO 50 runs on Android's GameMaker runner. The fork rebuilds the runner for UFO 50 1.9.5 and adds
 the mods, the touch overlay and online play.
 
+> **An early release.** So far it has only been tested on emulators (BlueStacks) and on one
+> Windows 10 PC: not yet on a real phone, with a real controller on Windows, on a second PC, or
+> with more than two players online. Expect rough edges, and please
+> [open an issue](https://github.com/Patrick-Working/UFO50AndroidOnline/issues) with what you
+> find, good or bad. What was tested and what wasn't: [docs/TESTING.md](docs/TESTING.md).
+
 **Quick start:** install UFO 50 from Steam, download this repository
 ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.4.0.zip)), unzip
 it, and double-click **`build.bat`**. See [Quick build](#quick-build).
@@ -31,13 +37,20 @@ it, and double-click **`build.bat`**. See [Quick build](#quick-build).
   same lobbies as the phones (your network, oldkid.net rooms, the relay) with the same invite codes
   and online saves. It never talks to Steam and keeps its own saves, so your Steam game and its
   saves are left alone. See [Windows version](#windows-version).
+- **A menu for keyboard and controller on Windows.** **F1**, or both sticks pressed in, opens what
+  the touch overlay is on a phone: your seat and connection, the invite code, SAVE, the list of
+  saves with their pictures, rewind, auto save, your name. A load another player asks for shows in
+  a box with the save's picture (**F2** accepts, **F3** declines).
+- **Save states work the same on Windows**: a save loads in about a second, and an accepted load
+  in a match puts every device, phone or PC, back on the same frame.
 - **Everyone in a lobby needs the same version.** v0.4.0 and earlier versions can't join each
   other's lobbies any more (a match between them would go out of step), so update every device.
 - **Online fixes.** A dropped player who has no player in the current game (a third player watching
   a 2-player game) is waited for like anyone else, instead of being left behind for good.
   Reconnecting after loading a save from another match no longer stalls for half a minute over the
   relay. A load that restarts the match starts on every device as soon as one device starts it, so
-  none is left in the old match.
+  none is left in the old match. Loading a library save from inside a game no longer stops the host
+  with an error.
 - **Overlay fixes.** A tap that closes a box no longer presses the control under it; a vote takes
   your first answer; seats P5 to P8 have colours.
 - Many smaller fixes from a review of the whole code: see [CHANGELOG.md](CHANGELOG.md).
@@ -95,6 +108,8 @@ The full list is in [CHANGELOG.md](CHANGELOG.md). How save states, rewind and re
 | **Rewind**: a rewind that will take 5 seconds or more asks first, with the estimate | **Rewinding**: your inputs replay at high speed to the exact frame, with the time left |
 | ![Waiting for a dropped player](docs/screenshots/waiting_for_player.png) | ![Rejoining a match](docs/screenshots/rejoin.png) |
 | **A dropped player**: everyone waits, with a countdown, until they're back | **Rejoining**: reopen the app and tap REJOIN to catch up with the match |
+| ![The Windows version's menu](docs/screenshots/windows_menu.png) | ![The Windows version's list of saves](docs/screenshots/windows_saves.png) |
+| **Windows: the menu** (F1, or both sticks pressed in), for keyboard and controller | **Windows: the list of saves**, with the chosen save's picture and how long it takes to load |
 
 The first four pictures (lobby list, lobby, players panel, layout editor) are from v0.2. The overlay
 has changed since: the connection (LAN, DIRECT or RELAY) is no longer a tag under the player chip,
@@ -431,9 +446,11 @@ final sources (save, load, declined load, drop, rejoin, loading an earlier match
 without snapshots, a join between two versions being refused), and so did rewind. On Windows every
 game's save states passed (50 of 50) and the menu was walked through by keyboard and by a stand-in
 for a controller. The Android sweep of every game's save states (150 of 150 runs) is from v0.3.1
-and wasn't repeated. It hasn't been tested on a real phone, on arm64, on a second PC, with a real
-controller on Windows, or with three or more players online yet. If you try it on a phone, please open an issue with how it went. Details:
-[docs/TESTING.md](docs/TESTING.md).
+and wasn't repeated.
+
+**Not tested yet:** a real phone, arm64, a second PC, a real controller on Windows, three or more
+players online, and a `ufo50.exe` other than 1.9.5's. If you try any of these, please open an issue
+with how it went. Details: [docs/TESTING.md](docs/TESTING.md).
 
 ## Credits
 
