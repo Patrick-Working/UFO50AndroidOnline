@@ -1,6 +1,8 @@
 // Implementation of the fake Steam API (see android/steam/steam_api.h).
-// Included at the end of dllmain.cpp on Android so it can use PFO's helpers
-// (init_real, init_int64, YYCreateString, CreateDsMap, logging...).
+// Included at the end of dllmain.cpp in our builds (PFO_OURS: Android, and Windows with
+// PFO_WINDOWS_OURS) so it can use PFO's helpers (init_real, init_int64, YYCreateString,
+// CreateDsMap, logging...). On Windows the POSIX names used here come from win/compat_win.h
+// and win/file_macros.h.
 //
 // Transport: one ENet host per device (UDP, game port 50650+).
 //   channel 0: control (lobby + connection handshakes), reliable
@@ -10,8 +12,10 @@
 // snapshots to members. Discovery: UDP broadcast queries on port 50649.
 
 #include <enet/enet.h>
+#include <enet/time.h>
 extern "C" int (*enet_virtual_send_hook)(const ENetAddress*, const ENetBuffer*, size_t);
 extern "C" int (*enet_virtual_receive_hook)(ENetAddress*, ENetBuffer*, size_t);
+#if !defined(_WIN32)
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -20,13 +24,14 @@ extern "C" int (*enet_virtual_receive_hook)(ENetAddress*, ENetBuffer*, size_t);
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/system_properties.h>
+#include <netdb.h>
 #include <time.h>
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <condition_variable>
 #include <mutex>
-#include <netdb.h>
 #include <sstream>
 #include <thread>
 #include <deque>
@@ -45,8 +50,20 @@ namespace fakesteam
     constexpr int c_Channels = 3;
     constexpr uint8 c_ChanControl = 0, c_ChanReliable = 1, c_ChanUnreliable = 2;
     constexpr uint32 c_Magic = 0x55463530; // "UF50"
-    constexpr uint16 c_ProtocolVersion = 1;
+    constexpr uint16 c_ProtocolVersion = 2;        // of the lobby search on the local network (1: up to v0.3.1)
+    // Which builds can share a lobby. It goes at the end of the lobby hello and of its answer, and
+    // both sides want their own number back: a match between two versions would go out of step
+    // (v0.4 has matches without snapshots, which earlier builds don't know). Builds up to v0.3.1
+    // send nothing there, which reads as 0.
+    constexpr uint8 c_BuildWire = 4;
     constexpr uint32 c_DisconnectGraceful = 1;
+    // the other side ended its session on purpose (it left the match): nobody waits for it to
+    // come back. Builds before this one send 1 for every close and read 2 as a timeout.
+    constexpr uint32 c_DisconnectSessionEnded = 2;
+    // the other side is on a newer timeline (below): the low byte, then its timeline and the
+    // offer that started it. Builds before this one read it as a timeout.
+    constexpr uint32 c_DisconnectTimeline = 3;
+    constexpr int c_CloseNewTimeline = k_ESteamNetConnectionEnd_App_Generic + 2;   // CloseConnection's reason for it
     constexpr int64 c_ListSearchMs = 1200;
     int64 g_ListStartMs = 0;
     constexpr int64 c_JoinTimeoutMs = 6000;
@@ -253,10 +270,39 @@ namespace fakesteam
     // they don't go through PFO or into its replay)
     struct RejoinMsg { uint8 type = 0; uint64 from = 0; std::vector<uint8> body; };
     std::deque<RejoinMsg> g_RejoinInbox;
+    constexpr size_t c_RejoinInboxMax = 64;
 
     std::map<HSteamNetConnection, Conn> g_Conns;
     HSteamNetConnection g_NextConn = 1;
     bool g_Listening = false;
+
+    // ---- timelines ----
+    // A load that restarts the match (a save from another match, and every load in a match
+    // without snapshots) puts the devices on a new timeline one after another: each closes its
+    // game connections, replays the save and connects again. g_Timeline counts those loads. It
+    // travels in a game connection's hello and in the close, so that two devices never talk
+    // across timelines (the inputs and checksums of one mean nothing in the other), and so that
+    // a device that hasn't started the load hears that another has: savestate.inc starts it
+    // then (TimelineTick).
+    constexpr uint8 c_TimelineUnknown = 255;       // a rejoining app: it takes the timeline of the first player it reaches
+    uint8 g_Timeline = 0, g_TimelineTag = 0;       // the count, and the offer that started this timeline
+    struct TimelineNews { bool has = false, said = false; uint64 from = 0; uint8 timeline = 0, tag = 0; };
+    TimelineNews g_TimelineNews;                   // a player of ours is one timeline ahead
+    uint8 NextTimeline(uint8 t) { return t == c_TimelineUnknown ? t : static_cast<uint8>((t + 1) % 255); }
+    uint32 TimelineCloseData() { return c_DisconnectTimeline | (static_cast<uint32>(g_Timeline) << 8) | (static_cast<uint32>(g_TimelineTag) << 16); }
+    void TimelineHeard(uint64 from, uint8 timeline, uint8 tag)
+    {
+        if (g_Timeline == c_TimelineUnknown || timeline == c_TimelineUnknown || timeline != NextTimeline(g_Timeline)) return;
+        if (g_TimelineNews.has && g_TimelineNews.timeline == timeline) return;
+        g_TimelineNews = TimelineNews();
+        g_TimelineNews.has = true; g_TimelineNews.from = from; g_TimelineNews.timeline = timeline; g_TimelineNews.tag = tag;
+    }
+    // unknown here: take theirs
+    void TimelineAdopt(uint8 timeline, uint8 tag)
+    {
+        if (g_Timeline != c_TimelineUnknown || timeline == c_TimelineUnknown) return;
+        g_Timeline = timeline; g_TimelineTag = tag;
+    }
     constexpr HSteamListenSocket c_ListenHandle = 1;
     std::map<uint64, ENetAddress> g_AddressBook;
     std::map<uint64, std::string> g_Names;
@@ -340,16 +386,32 @@ namespace fakesteam
 
     std::string DeviceName()
     {
+#if defined(_WIN32)
+        // the computer's name, cut to what the lobby shows (plain ASCII)
+        char model[32] = {};
+        char name[MAX_COMPUTERNAME_LENGTH + 1] = {};
+        DWORD size = sizeof(name);
+        if (GetComputerNameA(name, &size))
+        {
+            size_t n = 0;
+            for (const char* q = name; *q && n < 11; q++) if (*q > 32 && *q < 127) model[n++] = *q;
+        }
+        const char* fallback = "PC";
+#else
         char model[PROP_VALUE_MAX] = {};
         __system_property_get("ro.product.model", model);
+        const char* fallback = "ANDROID";
+#endif
         char buf[96];
-        snprintf(buf, sizeof(buf), "%s %04X", model[0] ? model : "ANDROID", static_cast<unsigned>(g_MyId & 0xffff));
+        snprintf(buf, sizeof(buf), "%s %04X", model[0] ? model : fallback, static_cast<unsigned>(g_MyId & 0xffff));
         return buf;
     }
 
     void ChdirToAppFiles()
     {
         // PFO writes logs/replays with relative paths; point them at the app's files dir.
+        // (Windows: they stay in the working directory, the game's folder.)
+#if !defined(_WIN32)
         char cmdline[256] = {};
         FILE* f = fopen("/proc/self/cmdline", "rb");
         if (!f) return;
@@ -364,6 +426,7 @@ namespace fakesteam
             dir = std::string("/data/user/0/") + cmdline + "/files";
             chdir(dir.c_str());
         }
+#endif
     }
 
     bool Init()
@@ -690,7 +753,7 @@ namespace fakesteam
     //   LIST -> LIST_REPLY           lobby search
     //   PUNCH me, target             server tells target to send us a packet (opens its NAT)
     //                                and replies with the target's public address
-    // A real backend (e.g. okplay) can replace tools/rendezvous_server.py with the same messages.
+    // (Only a development server ever spoke this; the rooms on okplay (okplay_client.inc) took its place.)
     constexpr uint32 c_RvMagic = 0x52354655; // "UF5R"
     enum class Rv : uint8 { Reg = 1, RegAck, Publish, Unpublish, List, ListReply, Punch, PunchFrom, Ping };
     bool g_RvEnabled = false;
@@ -784,6 +847,9 @@ namespace fakesteam
         In in(host->receivedData, host->receivedDataLength);
         if (in.u32() != c_RvMagic) return 0; // normal ENet traffic
         auto type = static_cast<Rv>(in.u8());
+        // lobby lists and addresses are only taken from the rendezvous server itself
+        if ((type == Rv::ListReply || type == Rv::PunchFrom || type == Rv::Punch)
+            && (!g_RvEnabled || host->receivedAddress.host != g_RvServer.host || host->receivedAddress.port != g_RvServer.port)) return 1;
         switch (type)
         {
         case Rv::ListReply:
@@ -882,11 +948,21 @@ namespace fakesteam
         {
             uint64 fromId = in.u64();
             uint64 targetId = in.u64();
-            if (!in.ok || targetId != g_MyId || !g_Listening)
+            uint8 timeline = c_TimelineUnknown, tag = 0;   // (builds before this one don't send them)
+            if (in.ok && in.o + 2 <= in.n) { timeline = in.u8(); tag = in.u8(); }
+            // on another timeline than ours: no connection. If they're behind they hear where
+            // we are, if they're ahead we've heard it now.
+            bool otherTimeline = in.ok && targetId == g_MyId && timeline != c_TimelineUnknown && g_Timeline != c_TimelineUnknown && timeline != g_Timeline;
+            if (!in.ok || targetId != g_MyId || !g_Listening || otherTimeline)
             {
-                enet_peer_disconnect_later(peer, 0);
+                __android_log_print(ANDROID_LOG_INFO, "yoyo", "PFO LAN: game connection from player %04x refused (%s)", static_cast<unsigned>(fromId & 0xffff),
+                    !in.ok ? "bad message" : targetId != g_MyId ? "meant for another player" : otherTimeline ? "on another timeline" : "not in a game");
+                if (otherTimeline) TimelineHeard(fromId, timeline, tag);
+                enet_peer_disconnect_later(peer, otherTimeline ? TimelineCloseData() : 0);
                 return;
             }
+            TimelineAdopt(timeline, tag);
+            __android_log_print(ANDROID_LOG_INFO, "yoyo", "PFO LAN: game connection from player %04x", static_cast<unsigned>(fromId & 0xffff));
             HSteamNetConnection h = g_NextConn++;
             Conn& c = g_Conns[h];
             c.peer = peer;
@@ -904,6 +980,8 @@ namespace fakesteam
             Conn* c = ConnFor(h);
             if (c && c->state == k_ESteamNetworkingConnectionState_Connecting)
             {
+                if (in.o + 2 <= in.n) { uint8 timeline = in.u8(), tag = in.u8(); TimelineAdopt(timeline, tag); }
+                __android_log_print(ANDROID_LOG_INFO, "yoyo", "PFO LAN: game connection to player %04x: connected", static_cast<unsigned>(c->remoteId & 0xffff));
                 c->state = k_ESteamNetworkingConnectionState_Connected;
                 QueueStatus(h, *c, k_ESteamNetworkingConnectionState_Connecting, 0, "");
             }
@@ -914,16 +992,31 @@ namespace fakesteam
             uint64 lobbyId = in.u64();
             uint64 memberId = in.u64();
             std::string name = in.str();
+            uint8 wire = in.ok && in.o + 1 <= in.n ? in.u8() : 0;
             Out reply; reply.u8(static_cast<uint8>(Msg::JoinResult));
             bool ok = in.ok && g_IsOwner && lobbyId == g_Lobby.id && g_Lobby.joinable
-                && static_cast<int>(g_Lobby.members.size()) < g_Lobby.limit && memberId != 0;
+                && static_cast<int>(g_Lobby.members.size()) < g_Lobby.limit && memberId != 0 && memberId != g_MyId;
+            if (ok && wire != c_BuildWire)
+            {
+                __android_log_print(ANDROID_LOG_WARN, "yoyo", "PFO LAN: player %04x can't join: another version of the build (theirs %d, ours %d)",
+                    static_cast<unsigned>(memberId & 0xffff), wire, c_BuildWire);
+                ok = false;
+            }
+            // An id that's already in the lobby: fine when it's that member joining again (their
+            // old connection went quiet, or it's the same address); refused while the member is
+            // still talking to us from another address.
+            ENetPeer* old = nullptr;
+            for (auto& [mp, mid] : g_MemberPeers) if (mid == memberId && mp != peer) old = mp;
+            if (ok && old && old->address.host != peer->address.host && ENET_TIME_DIFFERENCE(enet_time_get(), old->lastReceiveTime) < 5000) ok = false;
             reply.u8(ok);
+            reply.u8(c_BuildWire);
             Send(peer, c_ChanControl, reply, true);
             if (!ok)
             {
                 enet_peer_disconnect_later(peer, 0);
                 return;
             }
+            if (old) { g_MemberPeers.erase(old); old->data = nullptr; enet_peer_reset(old); }   // replaced by this one
             peer->data = reinterpret_cast<void*>(PeerKind::LobbyMember);
             g_MemberPeers[peer] = memberId;
             g_AddressBook[memberId] = peer->address;
@@ -940,7 +1033,17 @@ namespace fakesteam
         }
         case Msg::JoinResult: // member side
         {
-            if (!in.u8())
+            if (peer != g_OwnerPeer) return;
+            bool ok = in.u8() != 0;
+            uint8 wire = in.ok && in.o + 1 <= in.n ? in.u8() : 0;
+            if (ok && wire != c_BuildWire)
+            {
+                // (a host from before v0.4 let us in: it doesn't look at versions)
+                __android_log_print(ANDROID_LOG_WARN, "yoyo", "PFO LAN: can't join: the host has another version of the build (theirs %d, ours %d)", wire, c_BuildWire);
+                enet_peer_disconnect_later(peer, 0);
+                ok = false;
+            }
+            if (!ok)
             {
                 g_OwnerPeer = nullptr;
                 peer->data = nullptr;
@@ -1029,10 +1132,13 @@ namespace fakesteam
         case Msg::LoadOffer:
         case Msg::LostInputs:
         {
+            // only from a player we have a game connection with, and no more than the game
+            // thread could be behind on
             Conn* c = ConnFor(P2PFromTag(peer->data));
+            if (!c || c->state != k_ESteamNetworkingConnectionState_Connected || g_RejoinInbox.size() >= c_RejoinInboxMax) return;
             RejoinMsg r;
             r.type = static_cast<uint8>(type);
-            r.from = c ? c->remoteId : 0;
+            r.from = c->remoteId;
             r.body.assign(pkt->data + 1, pkt->data + pkt->dataLength);
             g_RejoinInbox.push_back(std::move(r));
             break;
@@ -1052,10 +1158,17 @@ namespace fakesteam
             c->peer = nullptr;
             auto old = c->state;
             if (old == k_ESteamNetworkingConnectionState_ClosedByPeer || old == k_ESteamNetworkingConnectionState_ProblemDetectedLocally) return;
-            if (data == c_DisconnectGraceful)
+            bool newTimeline = (data & 0xff) == c_DisconnectTimeline;
+            __android_log_print(ANDROID_LOG_INFO, "yoyo", "PFO LAN: game connection with player %04x ended (%s)", static_cast<unsigned>(c->remoteId & 0xffff),
+                data == c_DisconnectSessionEnded ? "they ended the session" : data == c_DisconnectGraceful ? "they closed it"
+                : newTimeline ? "they've started a load that restarts the match"
+                : old == k_ESteamNetworkingConnectionState_Connecting ? "no answer" : "timed out");
+            if (newTimeline) TimelineHeard(c->remoteId, static_cast<uint8>(data >> 8), static_cast<uint8>(data >> 16));
+            if (data == c_DisconnectGraceful || data == c_DisconnectSessionEnded || newTimeline)
             {
                 c->state = k_ESteamNetworkingConnectionState_ClosedByPeer;
-                QueueStatus(h, *c, old, k_ESteamNetConnectionEnd_App_Generic, "Closed by peer");
+                bool ended = data == c_DisconnectSessionEnded;
+                QueueStatus(h, *c, old, k_ESteamNetConnectionEnd_App_Generic + (ended ? 1 : 0), ended ? "Session ended" : "Closed by peer");
             }
             else
             {
@@ -1113,7 +1226,7 @@ namespace fakesteam
                 }
                 if (ev.peer == g_OwnerPeer)
                 {
-                    Out o; o.u8(static_cast<uint8>(Msg::HelloLobby)); o.u64(g_JoinLobbyId); o.u64(g_MyId); o.str(g_MyName);
+                    Out o; o.u8(static_cast<uint8>(Msg::HelloLobby)); o.u64(g_JoinLobbyId); o.u64(g_MyId); o.str(g_MyName); o.u8(c_BuildWire);
                     Send(ev.peer, c_ChanControl, o, true);
                 }
                 else if (HSteamNetConnection h = P2PFromTag(ev.peer->data))
@@ -1121,7 +1234,7 @@ namespace fakesteam
                     if (Conn* c = ConnFor(h); c && !c->incoming && !c->p2pHelloSent)
                     {
                         c->p2pHelloSent = true;
-                        Out o; o.u8(static_cast<uint8>(Msg::HelloP2P)); o.u64(g_MyId); o.u64(c->remoteId);
+                        Out o; o.u8(static_cast<uint8>(Msg::HelloP2P)); o.u64(g_MyId); o.u64(c->remoteId); o.u8(g_Timeline); o.u8(g_TimelineTag);
                         Send(ev.peer, c_ChanControl, o, true);
                     }
                 }
@@ -1369,6 +1482,8 @@ HSteamNetConnection ISteamNetworkingSockets::ConnectP2P(const SteamNetworkingIde
     if (it == g_AddressBook.end()) return k_HSteamNetConnection_Invalid;
     ENetAddress addr = it->second;
     ENetPeer* peer = enet_host_connect(g_Host, &addr, c_Channels, 0);
+    __android_log_print(ANDROID_LOG_INFO, "yoyo", "PFO LAN: game connection to player %04x: dialling%s%s", static_cast<unsigned>(identity.GetSteamID64() & 0xffff),
+        IsVirtual(addr) ? " (relay)" : "", peer ? "" : " FAILED");
     if (!peer) return k_HSteamNetConnection_Invalid;
     HSteamNetConnection h = g_NextConn++;
     Conn& c = g_Conns[h];
@@ -1384,7 +1499,7 @@ EResult ISteamNetworkingSockets::AcceptConnection(HSteamNetConnection h)
     using namespace fakesteam;
     Conn* c = ConnFor(h);
     if (!c || !c->incoming || c->state != k_ESteamNetworkingConnectionState_Connecting || !c->peer) return k_EResultInvalidParam;
-    Out o; o.u8(static_cast<uint8>(Msg::P2PAccepted));
+    Out o; o.u8(static_cast<uint8>(Msg::P2PAccepted)); o.u8(g_Timeline); o.u8(g_TimelineTag);
     Send(c->peer, c_ChanControl, o, true);
     enet_host_flush(g_Host);
     c->state = k_ESteamNetworkingConnectionState_Connected;
@@ -1392,7 +1507,7 @@ EResult ISteamNetworkingSockets::AcceptConnection(HSteamNetConnection h)
     return k_EResultOK;
 }
 
-bool ISteamNetworkingSockets::CloseConnection(HSteamNetConnection h, int, const char*, bool)
+bool ISteamNetworkingSockets::CloseConnection(HSteamNetConnection h, int reason, const char*, bool)
 {
     using namespace fakesteam;
     auto it = g_Conns.find(h);
@@ -1401,7 +1516,9 @@ bool ISteamNetworkingSockets::CloseConnection(HSteamNetConnection h, int, const 
     if (c.peer)
     {
         c.peer->data = nullptr;
-        enet_peer_disconnect_later(c.peer, c_DisconnectGraceful);
+        // PFO closes with App_Generic + 1 ("Session ended") when its session ends
+        enet_peer_disconnect_later(c.peer, reason == k_ESteamNetConnectionEnd_App_Generic + 1 ? c_DisconnectSessionEnded
+            : reason == c_CloseNewTimeline ? TimelineCloseData() : c_DisconnectGraceful);
     }
     for (auto* m : c.inbox) m->Release();
     g_Conns.erase(it);
@@ -1524,7 +1641,11 @@ void SteamAPI_RunCallbacks()
 // ---- GML-facing replacements for the Steamworks extension functions PFO's GML uses ----
 // These are registered on the PFO extension (instead of Steamworks) in the Android data.win.
 
+#if defined(_WIN32)
+#define LAN_EXPORT extern "C"   // win/runner_bridge_win.inc exports them under the names the runner asks for
+#else
 #define LAN_EXPORT extern "C" __attribute__((visibility("default")))
+#endif
 #define LAN_FN(name) LAN_EXPORT void name(RValue& result, CInstance* selfinst, CInstance* otherinst, int argc, RValue* arg)
 
 namespace

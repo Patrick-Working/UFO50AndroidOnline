@@ -22,6 +22,8 @@ string[] moved = {
 string[] added = { "pfo_lan_get_port", "pfo_lan_add_host" };
 
 var pfo = Data.Extensions.FirstOrDefault(e => e.Name.Content == "PFO");
+// An edit that can't be applied fails the script (a build with half the edits would only show it in play).
+var failures = new List<string>();
 if (pfo == null) throw new ScriptException("PFO extension not found - is PFO 50 installed in this data.win?");
 // On Android, libPFO.so registers PFO's functions as runner built-ins itself (see
 // android/runner_bridge.inc), so the extension keeps only its options here.
@@ -185,7 +187,7 @@ Console.WriteLine("Steam lobby/user functions now resolve to libPFO.so built-ins
             var code = Data.Code.ByName(name);
             texts[name] = new Underanalyzer.Decompiler.DecompileContext(ctx, code, Data.ToolInfo.DecompilerSettings).DecompileToString();
         }
-        if (!texts[name].Contains(find)) { Console.WriteLine($"overlay support: {name} edit not applied: {find.Trim().Substring(0, Math.Min(40, find.Trim().Length))}"); continue; }
+        if (!texts[name].Contains(find)) { failures.Add($"overlay support: {name} edit not applied: {find.Trim().Substring(0, Math.Min(40, find.Trim().Length))}"); continue; }
         texts[name] = texts[name].Replace(find, replace);
         n++;
     }
@@ -238,7 +240,7 @@ Console.WriteLine("Steam lobby/user functions now resolve to libPFO.so built-ins
         }
         string t = texts[name];
         int count = t == null ? 0 : (t.Length - t.Replace(find, "").Length) / Math.Max(1, find.Length);
-        if (count != 1) { Console.WriteLine($"lobby menu: {name} edit not applied ({count} matches): {find.Substring(0, Math.Min(40, find.Length))}"); continue; }
+        if (count != 1) { failures.Add($"lobby menu: {name} edit not applied ({count} matches): {find.Substring(0, Math.Min(40, find.Length))}"); continue; }
         texts[name] = t.Replace(find, replace);
         n++;
     }
@@ -290,6 +292,15 @@ Console.WriteLine("Steam lobby/user functions now resolve to libPFO.so built-ins
 }
 
 
+// the functions scripts/pfo_snapshot.gml asks to have declared (its "// uses:" lines), and libPFO's
+string[] SnapshotFunctions(string source)
+{
+    return source.Split('\n').Where(l => l.StartsWith("// uses:"))
+        .SelectMany(l => l.Substring(8).Split(new[] { ' ', ',', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries))
+        .Concat(new[] { "pfo_runner_mark", "pfo_runner_rehide", "pfo_runner_settle" }).Distinct().ToArray();
+}
+
+
 // ---- save-state snapshots: the game-side code ----
 // scripts/pfo_snapshot.gml (path in PFO_SNAPSHOT_GML) becomes the global script pfo_snapshot;
 // libPFO calls its functions by name (android/savestate.inc).
@@ -299,30 +310,10 @@ Console.WriteLine("Steam lobby/user functions now resolve to libPFO.so built-ins
     else
     {
         // GameMaker functions the script uses that the game itself never calls: the compiler only
-        // knows the ones the game uses, and would take the rest for variables
-        var builtins = new[] {
-            "array_length", "array_push", "string_char_at", "object_get_name", "buffer_seek", "string_length", "instance_change", "instance_activate_object", "ds_map_exists", "ds_map_delete", "asset_get_index", "instance_number", "array_sort", "audio_stop_all", "buffer_create", "buffer_delete",
-            "buffer_md5", "buffer_tell", "buffer_write", "camera_get_view_height", "camera_get_view_width", "camera_get_view_x",
-            "camera_get_view_y", "camera_set_view_pos", "camera_set_view_size", "camera_get_view_target", "camera_get_view_border_x", "camera_get_view_border_y", "camera_get_view_speed_x", "camera_get_view_speed_y", "camera_get_view_angle", "camera_set_view_target", "camera_set_view_border", "camera_set_view_speed", "camera_set_view_angle", "ds_exists", "ds_grid_create", "ds_grid_get",
-            "ds_grid_height", "ds_grid_resize", "ds_grid_set", "ds_grid_width", "ds_list_add", "ds_list_clear",
-            "ds_list_create", "ds_list_destroy", "ds_list_find_value", "ds_list_size", "ds_map_clear", "ds_map_create",
-            "ds_map_find_value", "ds_map_keys_to_array", "ds_map_set", "ds_priority_copy", "ds_priority_create", "ds_priority_size",
-            "ds_queue_copy", "ds_queue_create", "ds_queue_size", "ds_stack_copy", "ds_stack_create", "ds_stack_size",
-            "instance_activate_all", "instance_create_depth", "instance_create_layer", "instance_deactivate_object", "instance_destroy", "instance_exists",
-            "is_array", "is_bool", "is_int32", "is_int64", "is_method", "is_real",
-            "is_string", "is_struct", "layer_depth", "layer_exists", "layer_get_all", "layer_get_all_elements",
-            "layer_get_depth", "layer_get_element_type", "layer_get_hspeed", "layer_get_id", "layer_get_name", "layer_get_visible",
-            "layer_get_vspeed", "layer_get_x", "layer_get_y", "layer_hspeed", "layer_set_visible", "layer_vspeed",
-            "layer_x", "layer_y", "method", "method_get_index", "method_get_self", "real",
-            "room_get_name", "room_goto", "show_debug_message", "static_get", "static_set", "string",
-            "string_copy", "string_delete", "string_pos", "struct_remove", "tilemap_get", "tilemap_get_height",
-            "tilemap_get_width", "tilemap_set", "typeof", "variable_global_exists", "variable_global_get", "variable_global_set",
-            "variable_instance_get", "variable_instance_get_names", "variable_instance_set", "variable_struct_exists", "variable_struct_get", "variable_struct_get_names",
-            "variable_struct_set",
-            "pfo_runner_mark", "pfo_runner_rehide", "pfo_runner_settle",   // libPFO (savestate.inc)
-            "sprite_exists", "sprite_duplicate", "sprite_collision_mask", "sprite_delete", "array_concat",
-            "string_replace_all",
-        };
+        // knows the ones the game uses, and would take the rest for variables. The script names
+        // them on its "// uses:" lines; the three pfo_runner_ functions are libPFO's (savestate.inc).
+        var builtins = SnapshotFunctions(File.ReadAllText(path));
+        if (builtins.Length < 100) failures.Add("snapshots: " + Path.GetFileName(path) + " has no \"// uses:\" lines");
         int added = 0;
         foreach (var fn in builtins)
             if (Data.Functions.ByName(fn) == null) { Data.Functions.Add(new UndertaleFunction { Name = Data.Strings.MakeString(fn) }); added++; }
@@ -385,3 +376,6 @@ if (Environment.GetEnvironmentVariable("PFO_RNG_TRACE") == "1")
     sgroup.Import();
     Console.WriteLine("runtime sprites: " + routed + " scripts route through the snapshot wrappers");
 }
+
+foreach (var f in failures) Console.WriteLine("FAILED " + f);
+if (failures.Count > 0) throw new ScriptException($"android patch: {failures.Count} edit(s) could not be applied (see the FAILED lines)");

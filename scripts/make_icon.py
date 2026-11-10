@@ -1,16 +1,18 @@
 """Draw the app icon (original pixel art) and export every Android size GameMaker asks for.
 
 Usage: py -3 scripts/make_icon.py [--preview]
-Writes gm/runner/icons/: legacy icons (ldpi..xxxhdpi), adaptive foreground/background layers,
-and build/icon_preview.png (a big preview with the round and squircle masks Android uses).
+Writes android/gm-project/icons/: legacy icons (ldpi..xxxhdpi) and adaptive foreground/background
+layers. With --preview it also writes work/icon_preview.png (a big preview with the round and
+squircle masks Android uses). Both paths are taken from where this script is, not from the
+current folder.
 """
-import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "gm/runner/icons"
+OUT = ROOT / "android/gm-project/icons"
+PREVIEW = ROOT / "work/icon_preview.png"   # work/ is not in git
 
 G = 32  # design grid (pixels)
 
@@ -115,7 +117,7 @@ def up(im, size):
     return im.resize((size, size), Image.NEAREST)
 
 
-def main():
+def main(preview=False):
     OUT.mkdir(parents=True, exist_ok=True)
     icon = snap(legacy_icon())
     sizes = {"ldpi": 36, "mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
@@ -129,6 +131,9 @@ def main():
         for layer, tag in ((bg, "bg"), (fg, "fg")):
             big = up(layer, 48 * -(-px // 48))
             big.resize((px, px), Image.LANCZOS if px % 48 else Image.NEAREST).save(OUT / f"adaptive_{tag}_{name}.png")
+    print("icons written to", OUT)
+    if not preview:
+        return
 
     # preview: legacy icon, adaptive in a circle mask and in a squircle mask, on a launcher-ish backdrop
     pv = Image.new("RGB", (1500, 560), (34, 36, 48))
@@ -146,9 +151,13 @@ def main():
         crop = combo.crop(box).resize((384, 384), Image.NEAREST)
         m = mask.crop(box).resize((384, 384), Image.LANCZOS)
         pv.paste(crop, (560 + i * 460, 88), m)
-    pv.save(ROOT / "build/icon_preview.png")
-    print("icons written to", OUT)
+    PREVIEW.parent.mkdir(parents=True, exist_ok=True)
+    pv.save(PREVIEW)
+    print("preview written to", PREVIEW)
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    ap = argparse.ArgumentParser(description="Draw the app icon and write every Android size into android/gm-project/icons/.")
+    ap.add_argument("--preview", action="store_true", help="also write work/icon_preview.png")
+    main(ap.parse_args().preview)

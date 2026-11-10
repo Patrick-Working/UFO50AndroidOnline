@@ -546,13 +546,21 @@ public class PFO_Android {
         float[] handlePos(Control c) { return new float[] { cx(c) + halfW(c), cy(c) + halfH(c) }; }
 
         // ---- input while playing ----
+        // a box or screen that takes every touch is up
+        boolean blocked() { return panelOpen || naming || inviting || statesOpen || restoring() || voteShown() || rejoinShown() || confirmShown(); }
+        // this touch landed on such a box (the tap may have closed it): the game's controls under it
+        // stay untouched until every finger is up
+        boolean boxGesture = false;
+
         @Override public boolean onTouchEvent(MotionEvent e) {
             if (editing) { onEditTouch(e); return true; }
             int action = e.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) boxGesture = false;   // a new touch
             if (statesOpen && stateGesture && action == MotionEvent.ACTION_MOVE) { stateMove(e.getY(0)); return true; }
             if (statesOpen && stateGesture && action == MotionEvent.ACTION_UP) { stateGesture = false; stateTap(e.getX(0), e.getY(0)); return true; }
             if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
                 int i = e.getActionIndex();
+                if (blocked()) boxGesture = true;
                 if (restoring()) return true;
                 if (confirmShown()) { confirmTap(e.getX(i), e.getY(i)); return true; }
                 if (voteShown()) { voteTap(e.getX(i), e.getY(i)); return true; }
@@ -590,7 +598,7 @@ public class PFO_Android {
                     return true;
                 }
             }
-            if (panelOpen || naming || inviting || statesOpen || restoring() || voteShown() || rejoinShown() || confirmShown()) return true;
+            if (blocked() || boxGesture) return true;
             updatePressed(e, action);
             return true;
         }
@@ -1565,11 +1573,17 @@ public class PFO_Android {
         }
 
         int shownPlayer() { return onlineSeat >= 0 ? onlineSeat : player; }
+        // that player's colour (an online seat can be P5-P8)
+        int shownColor() { return SEAT_COLOR[Math.max(0, Math.min(7, shownPlayer()))]; }
 
         final Runnable seatPoll = new Runnable() { @Override public void run() {
             int seat = -1;
             try { seat = nativeOnlineSeat(); } catch (Throwable t) { }
-            if (seat != onlineSeat) {
+            // (not while a load replays the match: the seats it passes through on the way are old
+            // news; what has changed by its end is told then)
+            boolean replaying = false;
+            try { replaying = (nativeStateStatus() & 4) != 0; } catch (Throwable t) { }
+            if (seat != onlineSeat && !replaying) {
                 boolean wasOnline = onlineSeat != -1;
                 onlineSeat = seat;
                 if (seat != -1 && !wasOnline) {         // joined an online game
@@ -1601,6 +1615,11 @@ public class PFO_Android {
             pollVote();
             pollWaiting();
             pollRejoin();
+            // a box or the loading screen that came up by itself takes the touches from here on, so a
+            // finger lifting is never seen: let go of what was held
+            if (blocked() && !keysDown.isEmpty()) { releaseAll(); invalidate(); }
+            // a question came up while moving the controls around (a vote runs out): back to the game
+            if (editing && (voteShown() || rejoinShown())) { stopEditing(); invalidate(); }
             if (statesOpen) pollEstimates();
             keepCleanFrame();
             watchPill();
@@ -1763,9 +1782,17 @@ public class PFO_Android {
             return -1;
         }
 
+        // leave the layout editor and keep the changes (DONE, or a question that needs an answer)
+        void stopEditing() {
+            editing = false; selected = null;
+            dragPointer = -1; pinchStartDist = 0;
+            boxGesture = true;   // a finger still down doesn't press the control under it
+            save();
+        }
+
         void toolbar(int t) {
             switch (t) {
-                case TOOLBAR_DONE: editing = false; selected = null; save(); break;
+                case TOOLBAR_DONE: stopEditing(); break;
                 case TOOLBAR_RESET: reset(); selected = null; break;
                 case TOOLBAR_SMALLER: if (selected != null) selected.size = clamp(selected.size / 1.1f, 0.05f, 0.8f); break;
                 case TOOLBAR_BIGGER: if (selected != null) selected.size = clamp(selected.size * 1.1f, 0.05f, 0.8f); break;
@@ -1833,7 +1860,7 @@ public class PFO_Android {
                     v.op(h, android.graphics.Path.Op.UNION);
                     setFill(0xFF000000, 0.75f * g);
                     cv.drawPath(v, fill);
-                    setFill(PLAYER_COLOR[shownPlayer()], 0.85f * g);
+                    setFill(shownColor(), 0.85f * g);
                     if (c.down[0]) { tmp.set(x - arm, y - r, x + arm, y - arm); cv.drawRoundRect(tmp, corner, corner, fill); }
                     if (c.down[1]) { tmp.set(x - arm, y + arm, x + arm, y + r); cv.drawRoundRect(tmp, corner, corner, fill); }
                     if (c.down[2]) { tmp.set(x - r, y - arm, x - arm, y + arm); cv.drawRoundRect(tmp, corner, corner, fill); }
@@ -1850,7 +1877,7 @@ public class PFO_Android {
                     break;
                 }
                 case Control.ROUND: {
-                    setFill(c.pressed ? PLAYER_COLOR[shownPlayer()] : 0xFF000000, 0.8f * g);
+                    setFill(c.pressed ? shownColor() : 0xFF000000, 0.8f * g);
                     cv.drawCircle(x, y, r, fill);
                     setLine(0xFFFFFFFF, 0.7f * g);
                     cv.drawCircle(x, y, r, line);
@@ -1866,7 +1893,7 @@ public class PFO_Android {
                     String lit = null;
                     long now = android.os.SystemClock.uptimeMillis();
                     if (same != null) for (Pad p : pads) if (p.player == shownPlayer() && p.litUntil > now) lit = "PAD " + p.number;
-                    chipRect.set(drawSeatChip(cv, x - hw, y, halfH(c), PLAYER_COLOR[shownPlayer()], !ghost, ICON_TOUCH, 0, same, onlineSeat == -2 ? "--" : "P" + (shownPlayer() + 1), null, lit, false));
+                    chipRect.set(drawSeatChip(cv, x - hw, y, halfH(c), shownColor(), !ghost, ICON_TOUCH, 0, same, onlineSeat == -2 ? "--" : "P" + (shownPlayer() + 1), null, lit, false));
                     if (onlineSeat != -1 && !soloSession()) {   // small padlock: locked to the online seat
                         float lx = x + hw * 0.95f, ly = y - h * 0.62f, lw = h * 0.42f;
                         setFill(0xFF000000, 0.95f * g);
@@ -1879,7 +1906,7 @@ public class PFO_Android {
                 }
                 case Control.PILL: {
                     float hw = halfW(c), hh = halfH(c);
-                    setFill(c.pressed ? PLAYER_COLOR[shownPlayer()] : 0xFF000000, 0.8f * g);
+                    setFill(c.pressed ? shownColor() : 0xFF000000, 0.8f * g);
                     tmp.set(x - hw, y - hh, x + hw, y + hh); cv.drawRoundRect(tmp, hh, hh, fill);
                     setLine(0xFFFFFFFF, 0.7f * g);
                     cv.drawRoundRect(tmp, hh, hh, line);
@@ -1976,6 +2003,7 @@ public class PFO_Android {
         float listScroll = 0, rowH = 1, dragStartY, dragStartScroll;
         boolean dragging = false, stateGesture = false;   // stateGesture: this touch started on the open menu
         long deleteArmedUntil = 0;
+        boolean saveAsked = false;   // SAVE NOW was tapped and its result hasn't come yet
 
         // "auto save when I pause": opening the game's pause menu in solo play saves into one auto
         // slot (id 0, replaced each time). Not right after a load, which can land on a paused game.
@@ -2008,6 +2036,7 @@ public class PFO_Android {
         static final int VOTE_SECONDS = 15, PROPOSAL_SECONDS = 20;
         int[] vote = new int[11];
         int lastVoteSeq = -1;
+        int votedSlot = -1;   // the save of the vote that's running (our slot for it), -1 none or not known
         final RectF voteYes = new RectF(), voteNo = new RectF();
 
         // ---- rejoining: the app was closed (or crashed) in a match that's still waiting for us ----
@@ -2037,6 +2066,7 @@ public class PFO_Android {
         void rejoinTap(float x, float y) {
             if (rejoinYes.contains(x, y)) {
                 try { nativeStateRequest(20, 0); } catch (Throwable t) { }
+                pendingSlot = -1; pendingWhat = 3;   // no save behind it: the loading screen just says LOADING
                 rejoinOffer = "";
                 performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
             } else if (rejoinNo.contains(x, y)) {
@@ -2113,7 +2143,7 @@ public class PFO_Android {
         boolean voteShown() { return vote[0] != 0 && vote[6] == 0 && onlineSeat >= 0; }
 
         void pollVote() {
-            if ((netStatus & 64) == 0 || soloSession()) { if (vote[0] != 0) { vote = new int[11]; invalidate(); } return; }
+            if ((netStatus & 64) == 0 || soloSession()) { votedSlot = -1; if (vote[0] != 0) { vote = new int[11]; invalidate(); } return; }
             int[] v;
             try { v = nativeVote(); } catch (Throwable t) { return; }
             boolean changed = !java.util.Arrays.equals(v, vote);
@@ -2125,8 +2155,18 @@ public class PFO_Android {
                 if (v[7] == 2) showBanner(who + " SAID NO - NOT LOADED", 2500, ATTN);
                 else if (v[7] == 3) showBanner(who + " CAN'T LOAD THAT SAVE", 2500, ATTN);
                 else if (v[7] == 4) showBanner("LOAD CANCELLED", 2000);
+                else if (v[7] == 1) {
+                    // everyone accepted: that save loads now, on every device, so the loading screen
+                    // shows it (ours was noted when we asked: it stays if the vote's slot isn't known)
+                    int s = votedSlot >= 0 ? votedSlot : v[5];
+                    if (s >= 0 || v[8] != onlineSeat) pendingSlot = s;
+                    pendingWhat = 3;
+                    if (s >= 0 && !saveInfo.containsKey(s)) { org.json.JSONObject o = readInfo(s); if (o != null) saveInfo.put(s, o); }
+                }
+                votedSlot = -1;
             }
             if (v[0] != 0) {
+                votedSlot = v[5];
                 boolean mine = v[2] == onlineSeat;
                 // no answer in time: ours is withdrawn, theirs is declined
                 if (mine && v[10] >= PROPOSAL_SECONDS) { try { nativeVoteAnswer(false); } catch (Throwable t) { } }
@@ -2137,8 +2177,9 @@ public class PFO_Android {
         }
 
         void voteTap(float x, float y) {
-            if (voteYes.contains(x, y)) { try { nativeVoteAnswer(true); } catch (Throwable t) { } performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); }
-            else if (voteNo.contains(x, y)) { try { nativeVoteAnswer(false); } catch (Throwable t) { } performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); }
+            // answered (vote[6]) right away, not at the next poll: the box goes and a second tap can't change the answer
+            if (voteYes.contains(x, y)) { try { nativeVoteAnswer(true); } catch (Throwable t) { } vote[6] = 1; performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); }
+            else if (voteNo.contains(x, y)) { try { nativeVoteAnswer(false); } catch (Throwable t) { } vote[6] = 1; performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); }
             invalidate();
         }
 
@@ -2328,7 +2369,7 @@ public class PFO_Android {
             java.util.Collections.sort(saves, new java.util.Comparator<Integer>() {
                 @Override public int compare(Integer a, Integer b) { return Long.compare(saveInfo.get(b).optLong("savedAt", 0), saveInfo.get(a).optLong("savedAt", 0)); }
             });
-            if (!saves.contains(selectedSave)) selectedSave = saves.isEmpty() ? -1 : saves.get(0);
+            if (!saves.contains(selectedSave)) { selectedSave = saves.isEmpty() ? -1 : saves.get(0); deleteArmedUntil = 0; }
         }
 
         Bitmap thumbOf(int id) {
@@ -2464,6 +2505,8 @@ public class PFO_Android {
             if (lastResultSeq < 0) { lastResultSeq = seq; return; }
             if (seq == lastResultSeq) return;
             lastResultSeq = seq;
+            boolean asked = saveAsked;
+            saveAsked = false;
             int id = pendingSlot;
             if (result == 1) {
                 // online saves (ours or another player's) go wherever libPFO put them
@@ -2476,7 +2519,11 @@ public class PFO_Android {
                 if (!fresh.exists() && (!saveFile(id, ".png").exists() || id == AUTO_SLOT)) thumbNow(id);
                 if (fresh.exists()) { saveFile(id, ".png").delete(); fresh.renameTo(saveFile(id, ".png")); }
                 saveInfo.remove(id); saveThumb.remove(id);
-                selectedSave = id;
+                // the new save becomes the picked one, but with the list open only when it was asked
+                // for here (not another player's save, not an auto save): LOAD and DELETE keep
+                // meaning the save that was picked. DELETE doesn't stay armed for a save that's new.
+                if (asked || !statesOpen) selectedSave = id;
+                if (id == selectedSave) deleteArmedUntil = 0;
                 refreshSaves();
                 notePill(pendingAuto ? "AUTO SAVED" : "SAVED", 2000);
                 pendingAuto = false;
@@ -2494,6 +2541,7 @@ public class PFO_Android {
                     showBanner("THAT SAVE IS FOR " + n + (n == 1 ? " PLAYER" : " PLAYERS"), 2200);
                 }
                 else if (result == -1) showBanner(pendingWhat == 2 ? "START SOLO PLAY TO SAVE" : "NOT DURING AN ONLINE GAME", 2000);
+                if (pendingWhat == 4) pendingWhat = 0;   // the rewind is over: a later load isn't one
             }
         }
 
@@ -2555,6 +2603,7 @@ public class PFO_Android {
                     if (!canSaveState()) { showBanner(onlineNow ? "ONLY PLAYERS WITH A SEAT CAN SAVE" : soloSession() ? "CAN'T SAVE RIGHT NOW" : "START SOLO PLAY TO SAVE", 1800); break; }
                     statesOpen = false;
                     pendingAuto = false;
+                    saveAsked = true;
                     if (onlineNow) {
                         // online every device saves on the same frame (libPFO sends a command and picks the
                         // slot); the picture is taken when the save is done

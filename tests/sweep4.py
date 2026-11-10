@@ -3,6 +3,8 @@
 # another game), load 1 (snapshot, 120-frame check), mash, save 2, replay-only load of save 2.
 # Every step checks where it is (the game's internal id); a run that isn't where it should be is
 # retried from a fresh app (up to 3 tries) instead of being reported as a result.
+# A game is good when its line says "snapshot ok ..." and "replay through it ok ...". The last line
+# counts the games that are not; the exit code is 1 when there is one, else 0.
 # Usage: sweep4.py <games, e.g. 1,2,3> <out.txt> [library|other|same]
 import os, sys, time, subprocess, re, random; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import nav
 P = '5555'; D = '/sdcard/Android/data/com.unofficial.ufo50/files'; ENV = {**os.environ, 'MSYS_NO_PATHCONV': '1'}
@@ -125,6 +127,7 @@ def run_once(n):
     return f'snapshot {snap} | replay through it {rep}' + ('  | ' + ' / '.join(warns[:1]) if warns else ''), None
 
 subprocess.run([nav.ADB, '-s', '127.0.0.1:' + P, 'shell', f'rm -f {D}/snapdebug {D}/snapdiffat {D}/testpad'], env=ENV)
+not_good = []
 for n in games:
     why = []
     for attempt in range(3):
@@ -133,3 +136,6 @@ for n in games:
         why.append(problem)
     tag = f'game {n:2d} (internal {ID[n]}, loaded from {MODE})'
     say(f'{tag}: {res}' + (f'  [retried: {"; ".join(why)}]' if why and res else '') if res else f'{tag}: HARNESS could not run it: {"; ".join(why)}')
+    if not (res and res.startswith('snapshot ok ') and '| replay through it ok ' in res): not_good.append(n)
+say(f'{len(games) - len(not_good)} of {len(games)} games good' + (', not good: ' + ','.join(str(n) for n in not_good) if not_good else ''))
+sys.exit(1 if not_good else 0)

@@ -1,6 +1,37 @@
-// Save-state snapshots (UFO 50 Android). Added to the game by android_patch.csx; called from
-// libPFO (android/savestate.inc) through pfo_snapshot(command, id): native code finds scripts by
-// their asset name, which is this function's name.
+// Save-state snapshots (UFO 50 Android and Windows). Added to the game by android_patch.csx and
+// windows_patch.csx; called from libPFO / PFO.dll (android/savestate.inc) through
+// pfo_snapshot(command, id): native code finds scripts by their asset name, which is this
+// function's name.
+//
+// The "// uses:" lines name the GameMaker functions this script calls. The patches declare them
+// before compiling it: the compiler only knows the functions the game itself calls, and would take
+// any other for a variable. A function used here for the first time goes on one of those lines.
+// (pfo_runner_mark, pfo_runner_rehide and pfo_runner_settle are libPFO's: the patches add those.)
+// uses: array_length array_push string_char_at object_get_name buffer_seek string_length
+// uses: instance_change instance_activate_object ds_map_exists ds_map_delete asset_get_index
+// uses: instance_number array_sort audio_stop_all buffer_create buffer_delete buffer_md5
+// uses: buffer_tell buffer_write camera_get_view_height camera_get_view_width camera_get_view_x
+// uses: camera_get_view_y camera_set_view_pos camera_set_view_size camera_get_view_target
+// uses: camera_get_view_border_x camera_get_view_border_y camera_get_view_speed_x
+// uses: camera_get_view_speed_y camera_get_view_angle camera_set_view_target camera_set_view_border
+// uses: camera_set_view_speed camera_set_view_angle ds_exists ds_grid_create ds_grid_get
+// uses: ds_grid_height ds_grid_resize ds_grid_set ds_grid_width ds_list_add ds_list_clear
+// uses: ds_list_create ds_list_destroy ds_list_find_value ds_list_size ds_map_clear ds_map_create
+// uses: ds_map_find_value ds_map_keys_to_array ds_map_set ds_priority_copy ds_priority_create
+// uses: ds_priority_size ds_queue_copy ds_queue_create ds_queue_size ds_stack_copy ds_stack_create
+// uses: ds_stack_size instance_activate_all instance_create_depth instance_create_layer
+// uses: instance_deactivate_object instance_destroy instance_exists is_array is_bool is_int32
+// uses: is_int64 is_method is_real is_string is_struct layer_depth layer_exists layer_get_all
+// uses: layer_get_all_elements layer_get_depth layer_get_element_type layer_get_hspeed layer_get_id
+// uses: layer_get_name layer_get_visible layer_get_vspeed layer_get_x layer_get_y layer_hspeed
+// uses: layer_set_visible layer_vspeed layer_x layer_y method method_get_index method_get_self real
+// uses: room_get_name room_goto show_debug_message static_get static_set string string_copy
+// uses: string_delete string_pos struct_remove tilemap_get tilemap_get_height tilemap_get_width
+// uses: tilemap_set typeof variable_global_exists variable_global_get variable_global_set
+// uses: variable_instance_get variable_instance_get_names variable_instance_set
+// uses: variable_struct_exists variable_struct_get variable_struct_get_names variable_struct_set
+// uses: sprite_exists sprite_duplicate sprite_collision_mask sprite_delete array_concat
+// uses: string_replace_all
 //
 // A snapshot is the game's state at one moment, kept in memory: every global (except the game's
 // functions), every instance (active or deactivated) with its built-in and own variables, the data
@@ -40,6 +71,9 @@ function pfo_snapshot(_cmd, _arg)
             return pfo_snap_diff(_base, pfo_snap_items());
         case "settle":
             return 0;
+        case "room":   // testing: which room this is, and where the library's menus are (the test commands' "where")
+            if (instance_exists(oLibrary)) return room_get_name(room) + ":" + string(oLibrary.state) + "." + string(oLibrary.substate);
+            return room_get_name(room);
         case "count":   // development: instance_count vs instances visible
             var _v = 0; with (all) _v++;
             var _sh = instance_number(oPfoSnapShell);
@@ -64,6 +98,12 @@ function pfo_snapshot(_cmd, _arg)
             return _t ? 1 : 0;
         case "drop":
             if (variable_struct_exists(global.pfo_snaps, string(_arg))) struct_remove(global.pfo_snaps, string(_arg));
+            return 0;
+        case "standin":   // an instance with no events for libPFO to put after oController (SnapArrangePass); a restore drops it
+            with (oPfoSnapShell) return real(id);
+            return real(instance_create_depth(0, 0, depth, oPfoSnapShell));
+        case "standout":  // ...and when no restore came
+            with (oPfoSnapShell) instance_destroy(id, false);
             return 0;
         case "probe":
             pfo_snap_probe();

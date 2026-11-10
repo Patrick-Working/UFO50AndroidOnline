@@ -7,7 +7,7 @@ The code is in three places:
 
 | file | what |
 |---|---|
-| `pfo/android/savestate.inc` | the native side: saving, loading, snapshots, rewind, online commands, rejoining |
+| `pfo/android/savestate.inc` | the native side: saving, loading, snapshots, rewind, online commands, rejoining (the Windows version compiles the same file; its runner's side of the snapshots is in `pfo/win/`) |
 | `scripts/pfo_snapshot.gml` | the game side: copying and restoring the game's own state (added to the game by `scripts/android_patch.csx`) |
 | `android/gm-project/extensions/PFO/AndroidSource/Java/PFO_Android.java` | the overlay: the save list, vote, rejoin and confirm boxes, banners |
 
@@ -38,7 +38,8 @@ Next to it, `slot<N>.json` holds what the save list shows (game, players, time i
 **1. Replay (always works).** Start the session over and play the recorded inputs at high speed
 (drawing switched off, the game speed raised) until the saved frame, then carry on live. The
 replay's own checksums are compared along the way, and the final one with the save's. Speed on
-BlueStacks: about 550-1,100 frames a second, so a few seconds per minute of play.
+BlueStacks: about 400 to over 1,000 frames a second depending on the game, so a few seconds per
+minute of play.
 
 **2. Snapshot (about a second).** When a save is made, the game's whole state is also copied in
 memory: every global variable, every instance with its built-in and own variables, the data
@@ -104,9 +105,11 @@ two seconds into a game that has just started (at most one every ten seconds; fo
 **Estimates**: replay speed differs a lot between games: the library replays at well over 1,000
 frames a second, Velgress's later floors at about 430 on BlueStacks. So the session notes which game
 every stretch of frames was in, and every replay measures this device's speed in each game it passes
-through (`files/replay_speed.txt` keeps them between runs; a slower measurement counts at once, a
-faster one gradually). A rewind's estimate adds up its stretches at their games' speeds; a save's
-details file keeps its mix of games (`"mix": "0:400,40:3000"`) for its load estimate. Estimates lean
+through (`files/replay_speed.txt` keeps them between runs). A game's first measurement is kept as
+it is. After that each new one is mixed with the kept speed: a slower measurement counts for 70%, a
+faster one for 20%, so the kept speed drops fast and rises slowly. A measurement only counts if it
+covers at least 300 frames and 100 ms. A rewind's estimate adds up its stretches at their games'
+speeds; a save's details file keeps its mix of games (`"mix": "0:400,40:3000"`) for its load estimate. Estimates lean
 10% long, since a load that finishes early is fine and one that runs long is a surprise. Anything
 estimated at 5 seconds or more asks first, and the loading screen shows the time left, worked out
 from how fast the replay is actually going.
@@ -126,6 +129,7 @@ its parameter:
 | DECLINE | 243 | the save number |
 | CANNOT (this phone lacks the save) | 244 | the save number |
 | PROPOSE LOAD (another match's save) | 245 | the offer's tag |
+| NO SNAPSHOTS on this device (a Windows game whose snapshots are off) | 246 | 1 |
 
 PFO 50's own commands use 1-30. Commands are recorded in the replay like any input, so a replay
 does exactly what the live match did.
@@ -148,6 +152,33 @@ first; each phone keeps it as a save of its own; when everyone accepts, every ph
 match from it: replays it to its frame and reconnects. Only saves made with the same number of
 players qualify.
 
+The devices don't start that restart at the same moment: each gets to the frame of the last ACCEPT
+in its own time, and one may never get there (the others' last inputs were still on their way when
+the connection closed, or it has no player in the game and was waiting for someone who has gone
+ahead). So a match counts its **timelines**. The first device to start counts one more, and closes
+its game connections saying so: the new number and the offer's tag travel in the close. A device
+that hears this starts the load at once, wherever its game is. That is safe because another device
+starting is proof that everyone accepted, and because the load needs nothing from the old timeline:
+everyone replays the save from its beginning. The number is also in the hello of every game
+connection, and a device on another timeline is refused (and told, or learns from the hello, which
+one is ahead), so the inputs and checksums of two timelines never meet. An app that restarted and is
+rejoining doesn't know the number; it takes the one of the first player it reaches.
+
+**A load that changes room.** When the save is in another room than the game is now (a library
+save loaded from inside a game), the game goes to that room first and runs a step or two there
+before its state is put back. What it does in those steps is thrown away, so nothing of it is sent:
+the library, made anew, would otherwise send its "settings" file a second time, which PFO 50's
+file records refuse with a failed assertion (`g_SnapBetweenRooms` in `dllmain.cpp`).
+
+**A match without snapshots.** The Windows version's snapshots are made for one exact `ufo50.exe`;
+with any other, or with `PFO_NO_SNAPSHOTS=1` set, it can't capture or put back a snapshot (see
+[WINDOWS.md](WINDOWS.md)). Such a player says so once at the start of a match, with command 246.
+From then on, on every device in that match, an online save is a file only, and every load is done
+the second way: the proposer offers the save like one from another match, and everyone restarts the
+match from it. v0.3.1 and earlier don't know command 246, which is why a lobby only takes players
+with its own version of the build (a number at the end of the lobby hello and of its answer,
+`c_BuildWire` in `fakesteam_impl.inc`).
+
 ## Drops and rejoining
 
 **A drop**: when a player's connection goes, PFO 50 used to end the match as soon as it ran out of
@@ -156,14 +187,20 @@ redials the lower one every 2 seconds (the lower one still accepts). The transpo
 numbers counting across reconnections, and a reconnection rolls acknowledgements back to the other
 side's last input, so whatever was lost is sent again. Play resumes where it stopped.
 
+A player with **no player in the current game** (the third player in a 2-player game, the second in
+a 1-player game) sends no inputs the game needs, so nothing ever ran out when they dropped: the
+match went on and left them behind for good. They are waited for the same way now, from the moment
+their connection goes. If they aren't back after the 90 seconds the match carries on without them
+(a match needs them only if nobody else is left).
+
 While frozen, the game thread is inside PFO's input wait (it can't return early: the game would run
 the same frame twice). The overlay runs on Android's UI thread and never waits on the game
 thread's network lock; it reads published copies of what it shows.
 
 **A rejoin** (the app was closed or crashed): while in a match, each phone keeps
 `files/rejoin.txt`: the players' ids and addresses, its own player number, its own id, and the relay
-room and mailbox key if the match goes through the relay. A relaunched app finds it (if it's under
-about 100 seconds old) and offers REJOIN YOUR MATCH?. Rejoining:
+room and mailbox key if the match goes through the relay. A relaunched app finds it and, if it is
+no more than 100 seconds old, offers REJOIN YOUR MATCH?. (The others wait 90 seconds.) Rejoining:
 
 1. takes back its old id, so the others recognise it;
 2. asks a player still in the match for the match so far: their replay up to the frame they're
@@ -192,6 +229,15 @@ and reads nothing of the game's.
 - Snapshots are in memory: after the app restarts, loads replay (slower for long sessions).
 - Rewind is single player only.
 - Online loads need everyone with a seat to accept; players without a seat can't save or vote.
+- The Windows version's snapshots work with the `ufo50.exe` of UFO 50 1.9.5 only. With another
+  one its loads and rewinds replay, and a match with that player in it restarts from the save on
+  every load (slower as the match gets longer). Such a game that is only watching can't say so
+  (no seat, no commands).
+- A load that restarts the match starts wherever each device's game is. A device that was a few
+  frames behind doesn't play those frames, so an online save made in them can be missing from its
+  list.
+- Players are told apart by the id they announce; a game connection or a timeline number isn't
+  authenticated beyond that. Play with people you trust, as with any peer-to-peer game.
 - The runner offsets are for GameMaker runtime 2024.14.1.253, which the build pins.
-- Tested on BlueStacks (Android 9, x86_64). See [TESTING.md](TESTING.md) for what was and wasn't
-  tested.
+- Tested on BlueStacks (Android 9, x86_64) and Windows 10. See [TESTING.md](TESTING.md) for what
+  was and wasn't tested.

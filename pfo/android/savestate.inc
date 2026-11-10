@@ -10,7 +10,7 @@
 // Single player plays as a PFO session of one (StartSolo), which records like an online one.
 //
 // Files: Android/data/<pkg>/files/savestates/slot<N>.pfostate.
-// Testing: /sdcard/Android/data/<pkg>/files/ss_cmd holding "solo", "save <n>" or "load <n>".
+// Testing: /sdcard/Android/data/<pkg>/files/ss_cmd holding a command (ReadTestCommand lists them).
 #include <atomic>
 #include <ctime>
 #include <vector>
@@ -22,6 +22,14 @@
 
 namespace pfo_android
 {
+    // Snapshots (instant loads, online in-match loads, rewind keyframes) read and write the
+    // runner's own memory, at places found by symbol in libyoyo.so. The Windows runner has no
+    // symbols: there the places are known for one ufo50.exe only (win/runner_bridge_win.inc), and
+    // with any other every load is a replay.
+#if defined(__ANDROID__)
+    constexpr bool NativeSnapshots() { return true; }
+#endif
+
     constexpr uint32 c_StateMagic = 0x53534650u;     // PFSS
     constexpr uint32 c_StateVersion = 1;
     constexpr double c_RestoreSpeed = 100.0;         // speed multiplier while replaying (runner caps it)
@@ -144,7 +152,7 @@ namespace pfo_android
         g_GameFpsPub = g_GameFps;
     }
 
-    // a measurement: slower ones count at once (an estimate that's too short is the one that
+    // a measurement: slower ones count for more (an estimate that's too short is the one that
     // surprises), faster ones only gradually
     double Blend(double old, double now) { return now < old ? 0.3 * old + 0.7 * now : 0.8 * old + 0.2 * now; }
 
@@ -338,6 +346,19 @@ namespace pfo_android
         return found;
     }
     int g_MpSaveCount = 0;
+    // A device without snapshots (the Windows build) can't leave a capture's traces in its game,
+    // so in a match with one nobody captures: it says so with this command as soon as it has a
+    // seat. Being in the input stream, every device and every replay of the match meets it on the
+    // same frame. Online saves are then files only, and a load restarts the match from the file.
+    constexpr int c_CmdNoSnap = 246;
+    bool g_MatchNoSnap = false;
+    bool g_TestNoSnap = false;               // test command "nosnap": ask for it as a device without snapshots would
+    int g_MpCaptures = 0;                    // the captures this match's timeline has had so far
+    // A match restarted from a save ends its replay on that save's own SAVE command, which is then
+    // met live: it goes back into the file the match was restarted from, not into another copy.
+    int g_ReseedSlot = -1;
+    uint32 g_ReseedFrame = 0;
+    bool g_SaveQuiet = false;                // that save: no "saved" for the overlay (it shows "loaded")
     int g_MpSavePending = 0;                 // a SAVE arrived this frame: save next step (as a solo save would)
     bool g_MpSavePendingAuto = false;        // ... an auto save (into our AUTO slot, replaced each time)
     constexpr int c_AutoSaveParam = 255;     // SAVE's parameter for "auto save on pause"
@@ -404,13 +425,20 @@ namespace pfo_android
     // ---- what a slot shows: the game, its picture, who was playing ----
     // the session frame the current game was started on ("how long into the game")
     uint32 g_GameStartFrame = 0;
+    // the frame the game running at this frame started on (the spans follow loads and rewinds)
+    uint32 GameStartFor(uint32 frame)
+    {
+        uint32 start = g_GameStartFrame;
+        for (auto& sp : g_GameSpans) if (sp.first <= frame) start = sp.first;
+        return start;
+    }
     int g_TrackedGameID = -1;
     int g_FnGlobalGet = -1;
     bool GlobalGet(const char* name, RValue& out, CInstance* self)
     {
         if (g_FnGlobalGet < 0) Code_Function_Find("variable_global_get", &g_FnGlobalGet);
         if (g_FnGlobalGet < 0) return false;
-        RValue arg; YYCreateString(&arg, name);
+        RValue arg = {}; YYCreateString(&arg, name);   // (zeroed first: see Snap)
         out = {};
         Script_Perform(g_FnGlobalGet, self, self, 1, &out, &arg);
         return true;
@@ -454,7 +482,9 @@ namespace pfo_android
         uint32 rng[16] = {}, rndIndex = 0, rndSeed = 0;
         bool haveRng = RngPointers();
         if (haveRng) { memcpy(rng, g_RngState, sizeof(rng)); rndIndex = *g_RngIndex; rndSeed = *g_RngSeed; }
-        RValue args[2]; YYCreateString(&args[0], cmd); init_real(args[1], id);
+        // (zeroed first: the Windows runner's YYCreateString frees what the value held before, going
+        // by its kind, so one straight off the stack can send it freeing whatever was lying there)
+        RValue args[2] = {}; YYCreateString(&args[0], cmd); init_real(args[1], id);
         RValue result = {};
         Script_Perform(fn, self, self, 2, &result, args);
         bool restoring = !strcmp(cmd, "restore");   // a restore sets the generator itself (natively, after)
@@ -518,10 +548,11 @@ namespace pfo_android
         }
         players += "]";
         std::string json = "{\"version\":1,\"slot\":" + std::to_string(slot) + ",\"savedAt\":" + std::to_string(h.savedAt)
-            + ",\"frame\":" + std::to_string(h.frame) + ",\"mix\":\"" + GameMix(h.frame) + "\",\"gameFrames\":" + std::to_string(icon > 0 ? h.frame - g_GameStartFrame : 0)
+            + ",\"frame\":" + std::to_string(h.frame) + ",\"mix\":\"" + GameMix(h.frame) + "\",\"gameFrames\":" + std::to_string(icon > 0 ? h.frame - std::min(h.frame, GameStartFor(h.frame)) : 0)
             + ",\"game\":" + std::to_string(game) + ",\"icon\":" + std::to_string(icon) + ",\"title\":" + JsonStr(title.c_str())
             + ",\"online\":" + (clients > 1 ? "true" : "false")
             + ",\"numPlayers\":" + std::to_string(numPlayers) + ",\"clients\":" + std::to_string(clients)
+            + ",\"caps\":" + std::to_string(mpIndex > 0 ? g_MpCaptures : 0)   // (a solo save's are in its file: the touch frames)
             + ",\"players\":" + players + (mpIndex > 0 ? ",\"match\":\"" + MatchId() + "\",\"mp\":" + std::to_string(mpIndex) : std::string()) + "}";
         std::string path = StatePath(slot);
         path = path.substr(0, path.size() - 9) + ".json";   // slot<N>.pfostate -> slot<N>.json
@@ -566,13 +597,14 @@ namespace pfo_android
         __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "save slot %d: frame %u, %u bytes, checksum %08x: %s",
             slot, h.frame, h.replaySize, h.checksum, ok ? "ok" : "FAILED");
         if (ok) WriteSlotInfo(slot, h, self, mpIndex);
-        if (ok) SnapCapture(slot, self, mpIndex > 0);
+        if (ok && !(mpIndex > 0 && g_MatchNoSnap)) { SnapCapture(slot, self, mpIndex > 0); if (mpIndex > 0) g_MpCaptures++; }
         if (ok) g_LastSavedSlot = slot;
-        SetResult(ok ? 1 : -1);
+        if (!(ok && g_SaveQuiet)) SetResult(ok ? 1 : -1);
         return ok;
     }
 
     bool SnapLoadBegin(int id, CInstance* self);
+    extern std::atomic<int> g_OfferRefused;
     void RejoinAfterReplay(CInstance* self);
     void RewindFromStart(CInstance* self);
     bool RejoinReplayOk(bool match);   // false: a rejoin whose replay didn't check out (it's given up)
@@ -586,9 +618,14 @@ namespace pfo_android
         g_ForceReplay = false;   // instant, if this run of the app has its snapshot
         FILE* f = fopen(StatePath(slot).c_str(), "rb");
         if (!f) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: no such save", slot); SetResult(-2); return false; }
+        fseek(f, 0, SEEK_END);
+        long fileSize = ftell(f);
+        fseek(f, 0, SEEK_SET);
         StateHeader h;
+        // (the replay can't be longer than the file that holds it)
         bool ok = fread(&h, sizeof(h), 1, f) == 1 && h.magic == c_StateMagic && h.version == c_StateVersion
-            && h.replayVersion == c_ReplayVersion && h.replaySize > 0;
+            && h.replayVersion == c_ReplayVersion && h.replaySize >= 10
+            && fileSize > 0 && static_cast<uint64>(h.replaySize) + sizeof(h) <= static_cast<uint64>(fileSize);
         std::vector<uint8> data;
         if (ok) { data.resize(h.replaySize); ok = fread(data.data(), 1, h.replaySize, f) == h.replaySize; }
         std::vector<uint32> touches;
@@ -600,6 +637,15 @@ namespace pfo_android
         }
         fclose(f);
         if (!ok) { SetResult(-2); __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: not a usable state", slot); return false; }
+        // A save of a match with others holds every player's inputs: alone, the replay would end
+        // waiting for players who aren't there. (In a match, LOAD offers it to the others instead.)
+        if (data[8] > 1)
+        {
+            __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: refused, it's a save of a match with %d players", slot, data[8]);
+            g_OfferRefused = data[8];
+            SetResult(-5);
+            return false;
+        }
 
         LogBytes("load bytes", data.data(), data.size());
         g_Restore.data = std::move(data);
@@ -647,14 +693,14 @@ namespace pfo_android
             {
                 int buffer = CreateBuffer(fd.m_Size, eBuffer_Format_Fixed, 1);
                 BufferWriteContent(buffer, 0, fd.m_Data, fd.m_Size, false, false);
-                RValue args[2]; init_buffer(args[0], buffer); YYCreateString(&args[1], fd.m_Filename);
+                RValue args[2] = {}; init_buffer(args[0], buffer); YYCreateString(&args[1], fd.m_Filename);
                 RValue result = {};
                 Script_Perform(g_gml_buffer_save, self, self, 2, &result, args);
                 Script_Perform(g_gml_buffer_delete, self, self, 1, &result, &args[0]);
             }
             else if (fd.m_Status == EFileStatus::VirtualDoesNotExist)
             {
-                RValue arg; YYCreateString(&arg, fd.m_Filename);
+                RValue arg = {}; YYCreateString(&arg, fd.m_Filename);
                 RValue result = {};
                 Script_Perform(g_gml_file_delete, self, self, 1, &result, &arg);
             }
@@ -715,6 +761,7 @@ namespace pfo_android
         std::vector<uint8> replay;            // the session's replay up to frame+120
         int offsetAtFrame = 0;
         uint32 lastWrittenAtFrame = 0;
+        std::vector<std::pair<uint32, int>> spans;   // which game each stretch up to frame was in
     };
     std::map<int, NativeSnap> g_Snaps;
     // development: files/snapdebug makes a snapshot remember the whole game state one frame after
@@ -889,17 +936,17 @@ namespace pfo_android
             for (size_t k = 0; k + 1 < st.active.size(); k++) if (st.active[k].id == selfId) return st.active[k + 1].id;
             return -1;
         }
-        bool ArrangeSuccessor(const State& st, void* self)
+        void* FindActive(int id)
         {
-            if (!Pointers()) return false;
-            int want = SuccessorId(st, At<int>(self, InstId));
-            if (want < 0) return false;
-            void* room = *g_RunRoom;
-            void* inst = nullptr;
             int n = 0;
-            for (void* i = At<void*>(room, RoomActive); i && n < 100000; i = At<void*>(i, InstNext), n++) if (At<int>(i, InstId) == want) { inst = i; break; }
-            if (!inst) return false;
-            if (At<void*>(self, InstNext) == inst) return true;
+            for (void* i = At<void*>(*g_RunRoom, RoomActive); i && n < 100000; i = At<void*>(i, InstNext), n++) if (At<int>(i, InstId) == id) return i;
+            return nullptr;
+        }
+        // an instance of the room's list, moved to straight after self
+        void PutAfter(void* self, void* inst)
+        {
+            if (inst == self || At<void*>(self, InstNext) == inst) return;
+            void* room = *g_RunRoom;
             // out of its place...
             void* prev = At<void*>(inst, InstNext + 8);
             void* next = At<void*>(inst, InstNext);
@@ -911,7 +958,37 @@ namespace pfo_android
             Ref<void*>(inst, InstNext) = after;
             Ref<void*>(self, InstNext) = inst;
             if (after) Ref<void*>(after, InstNext + 8) = inst; else Ref<void*>(room, RoomActive + 8) = inst;
+        }
+        bool ArrangeSuccessor(const State& st, void* self)
+        {
+            if (!Pointers()) return false;
+            int want = SuccessorId(st, At<int>(self, InstId));
+            void* inst = want < 0 ? nullptr : FindActive(want);
+            if (!inst) return false;
+            PutAfter(self, inst);
             return true;
+        }
+        // The snapshot's successor isn't always there to line up: the restore makes the instances
+        // that aren't in the room yet, and makes afresh the ones that can't be reused. Then the
+        // pass would carry on from whatever came after oController, animating instances the live
+        // game didn't and missing ones it did. So a stand-in goes after oController instead (an
+        // instance with no events, which the restore drops: SnapArrangePass), and after the
+        // restore the dropped instance the pass carries on from is put before the restored
+        // successor: the pass goes through it (nothing happens there) and on as the live one did.
+        bool ArrangeStandIn(void* self, int id)
+        {
+            void* inst = Pointers() ? FindActive(id) : nullptr;
+            if (!inst) return false;
+            PutAfter(self, inst);
+            return true;
+        }
+        bool LeadOn(void* self, void* from)
+        {
+            if (!from || !(At<uint32>(from, InstFlags) & 1)) return false;   // (one that's still in the game would be animated itself)
+            int n = 0;
+            for (void* i = At<void*>(*g_RunRoom, RoomActive); i && n < 100000; i = At<void*>(i, InstNext), n++)
+                if (i == from) { PutAfter(self, from); return true; }
+            return false;
         }
 
         // after the GML restore: the snapshot's instances (some made afresh: newId maps their old ids)
@@ -1038,12 +1115,21 @@ namespace pfo_android
         return v;
     }
 
+    // forget a snapshot: ours, the runner's side of it, and the game's (pfo_snapshot.gml)
+    void SnapErase(int id, CInstance* self)
+    {
+        g_Snaps.erase(id);
+        g_SnapRunner.erase(id);
+        Snap("drop", id, self);
+    }
+
     constexpr size_t c_MpSnapKeep = 24;      // online saves kept for loading in this match
     constexpr size_t c_KeyframeKeep = 4;     // rewind keyframes
     bool g_CaptureKeyframe = false;
 
     void SnapCapture(int id, CInstance* self, bool mp)
     {
+        if (!NativeSnapshots()) return;
         auto& s = g_Session;
         int64 t0 = fakesteam::NowMs();
         gmi::State runner = gmi::Capture();
@@ -1077,6 +1163,7 @@ namespace pfo_android
         n.offsetAtFrame = s.m_ReplayWriter.m_Offset;
         n.lastWrittenAtFrame = s.m_ReplayLastFrameWritten;
         n.touches = g_TouchFrames;
+        n.spans = g_GameSpans;
         n.mp = mp;
         n.keyframe = !mp && g_CaptureKeyframe;
         n.ready = mp;   // an online save is loaded forward: nothing to collect
@@ -1094,11 +1181,11 @@ namespace pfo_android
                     int k = it->second.mp ? 1 : it->second.keyframe ? 2 : 0;
                     if (k != kind) continue;
                     count++;
+                    if (g_SnapLoad.phase != 0 && it->first == g_SnapLoad.id) continue;   // being loaded: it stays
                     if (oldest == g_Snaps.end() || it->second.takenMs < oldest->second.takenMs) oldest = it;
                 }
                 if (count <= keep || oldest == g_Snaps.end()) break;
-                Snap("drop", oldest->first, self);
-                g_Snaps.erase(oldest);
+                SnapErase(oldest->first, self);
             }
         }
         __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "snapshot %d: taken at frame %u in %lld ms", id, g_Session.m_Frame, static_cast<long long>(fakesteam::NowMs() - t0));
@@ -1116,7 +1203,14 @@ namespace pfo_android
                 || s.m_Frame > n.frame + n.checksums.size() + 1)
             {
                 // the session ended or jumped (a load): this one can't be checked any more
-                if (s.m_Frame != n.frame + n.checksums.size()) { it = g_Snaps.erase(it); continue; }
+                if (s.m_Frame != n.frame + n.checksums.size())
+                {
+                    int id = it->first;
+                    it = g_Snaps.erase(it);
+                    g_SnapRunner.erase(id);
+                    Snap("drop", id, self);
+                    continue;
+                }
                 ++it; continue;
             }
             if (s.m_Frame == n.frame + n.checksums.size() + 1)
@@ -1165,7 +1259,13 @@ namespace pfo_android
             }
             if (f.ours)
             {
-                if (f.onDisk) { if (FILE* o = fopen(f.name.c_str(), "wb")) { fwrite(f.disk.data(), 1, f.disk.size(), o); fclose(o); } }
+                if (f.onDisk)
+                {
+                    FILE* o = fopen(f.name.c_str(), "wb");
+                    bool wrote = o && fwrite(f.disk.data(), 1, f.disk.size(), o) == f.disk.size();
+                    if (o && fclose(o) != 0) wrote = false;
+                    if (!wrote) __android_log_print(ANDROID_LOG_ERROR, "PFOSTATE", "snapshot %d: couldn't write %s back", n.id, f.name.c_str());
+                }
                 else remove(f.name.c_str());
             }
         }
@@ -1199,6 +1299,7 @@ namespace pfo_android
         }
         g_ReplayChecksumsChecked = 0;
         g_ReplayFirstMismatchFrame = 0;
+        g_GameSpans = n.spans;
         g_TouchFrames = n.touches;
         g_ReplayTouch = final ? std::vector<uint32>() : n.touchesAfter;
         if (g_SnapLoad.rewind)
@@ -1215,8 +1316,10 @@ namespace pfo_android
 
     bool SnapLoadBegin(int id, CInstance* self)
     {
+        if (!NativeSnapshots()) return false;
         auto it = g_Snaps.find(id);
-        if (it == g_Snaps.end() || !it->second.ready) return false;
+        // (an online save's snapshot has no replay of its own: it only loads forward, in its match)
+        if (it == g_Snaps.end() || !it->second.ready || it->second.mp) return false;
         g_SnapLoad = { 1, id, fakesteam::NowMs() };
         g_Restore.active = true;          // the overlay shows the loading screen, input is blocked
         g_Restore.slot = id;
@@ -1228,15 +1331,35 @@ namespace pfo_android
         return true;
     }
 
+    // Before a restore at the next step: line up the runner's animation pass (gmi::ArrangeSuccessor),
+    // with a stand-in when the snapshot's successor isn't in the room (gmi::ArrangeStandIn).
+    bool g_SnapStandIn = false;
+    void SnapArrangePass(CInstance* self)
+    {
+        if (!gmi::Pointers()) return;
+        if (gmi::ArrangeSuccessor(g_SnapRunner[g_SnapLoad.id], self)) return;
+        int id = atoi(Snap("standin", 0, self).c_str());
+        g_SnapStandIn = id > 0;
+        if (id <= 0 || !gmi::ArrangeStandIn(self, id))
+            __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: can't line up the animation pass", g_SnapLoad.id);
+    }
+    // (a restore drops the stand-in; a load that ends without one must)
+    void SnapDropStandIn(CInstance* self)
+    {
+        if (!g_SnapStandIn) return;
+        g_SnapStandIn = false;
+        Snap("standout", 0, self);
+    }
+
     void SnapLoadFail(const char* why, CInstance* self)
     {
         int id = g_SnapLoad.id;
+        SnapDropStandIn(self);
         if (g_SnapLoad.rewind)
         {
             __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "rewind: snapshot %d didn't work (%s), replaying from the start", id, why);
             g_SnapLoad.phase = 0; g_SnapLoad.rewind = false;
-            g_Snaps.erase(id);
-            Snap("drop", id, self);
+            SnapErase(id, self);
             RewindFromStart(self);
             return;
         }
@@ -1254,10 +1377,18 @@ namespace pfo_android
         }
         __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: snapshot didn't check out (%s), replaying instead", id, why);
         g_SnapLoad.phase = 0;
-        g_Snaps.erase(id);
-        Snap("drop", id, self);
+        // the session was reading the snapshot's replay: nothing may point into it once it's gone
+        reset(g_Session.m_ReplayReader, nullptr, 0);
+        SnapErase(id, self);
         g_Restore.active = false;
-        Load(id, self);   // the replay path (it starts the session over)
+        if (Load(id, self)) return;   // the replay path (it starts the session over)
+        // No file to replay either (it was deleted meanwhile): the game is part way into a state
+        // that didn't check out and the session has no recording. End the session cleanly.
+        __android_log_print(ANDROID_LOG_ERROR, "PFOSTATE", "load slot %d: no save file to replay, ending the session", id);
+        SetFastForward(false, self);
+        SetDraw(true, self);
+        g_Session.Disconnect();
+        SetResult(-3);
     }
 
     // before pfo_update while loading a snapshot: put the game state back (phase 1 and 3)
@@ -1266,21 +1397,23 @@ namespace pfo_android
         g_SnapSkipUpdate = false;
         if (g_SnapLoad.phase != 1 && g_SnapLoad.phase != 3) return;
         auto it = g_Snaps.find(g_SnapLoad.id);
-        if (it == g_Snaps.end()) { SnapLoadFail("gone", self); return; }
+        if (it == g_Snaps.end()) { g_SnapBetweenRooms = false; SnapLoadFail("gone", self); return; }
         // Just arrived in the snapshot's room: a room change lines the persistent instances up anew,
         // so line up the runner's animation pass again (gmi::ArrangeSuccessor) and restore next step.
         static bool arrived = false;
         if (arrived)
         {
             arrived = false;
-            if (!gmi::ArrangeSuccessor(g_SnapRunner[g_SnapLoad.id], self))
-                __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: can't line up the animation pass", g_SnapLoad.id);
+            g_SnapStandIn = false;   // (the last room's went with the room)
+            SnapArrangePass(self);
             g_SnapSkipUpdate = true;
             return;
         }
         void* nextBefore = gmi::Pointers() ? gmi::At<void*>(self, gmi::InstNext) : nullptr;   // where the runner's animation pass carries on
         std::string r = Snap("restore", g_SnapLoad.id, self);
-        if (r == "1") { g_SnapSkipUpdate = true; arrived = true; return; }   // changing room first: try again once there
+        // changing room first: try again once there (what the game does on the way isn't sent: g_SnapBetweenRooms)
+        if (r == "1") { g_SnapSkipUpdate = true; arrived = true; g_SnapBetweenRooms = g_SnapLoad.forward; return; }
+        g_SnapBetweenRooms = false;
         if (r != "0") { SnapLoadFail(("restore refused: " + r).c_str(), self); return; }
         {
             // the runner's side: off bits, lists and their order, creation times
@@ -1300,7 +1433,8 @@ namespace pfo_android
             auto& st = g_SnapRunner[g_SnapLoad.id];
             std::string how = gmi::Apply(st, newId);
             gmi::ResetCollisionTree();
-            if (gmi::Pointers() && gmi::At<void*>(self, gmi::InstNext) != nextBefore)
+            g_SnapStandIn = false;   // (dropped by the restore)
+            if (gmi::Pointers() && gmi::At<void*>(self, gmi::InstNext) != nextBefore && !gmi::LeadOn(self, nextBefore))
                 __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: the animation pass carries on from instance %d, the snapshot has %d there",
                     g_SnapLoad.id, nextBefore ? gmi::At<int>(nextBefore, gmi::InstId) : -1, gmi::SuccessorId(st, gmi::At<int>(self, gmi::InstId)));
             // destroyed instances count in instance_count until the step ends, and PFO's checksum this
@@ -1399,6 +1533,7 @@ namespace pfo_android
         else if (!strcmp(cmd, "where")) g_StateRequest = 14;                                  // which game, without touching it
         else if (!strcmp(cmd, "sleep")) g_StateRequest = 15;                                  // a 550 ms hitch, nothing else
         else if (!strcmp(cmd, "netdrop")) { fakesteam::g_DropUntilMs = fakesteam::NowMs() + 1000LL * slot; __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "network dropped for %d s", slot); }
+        else if (!strcmp(cmd, "nosnap")) { g_TestNoSnap = true; __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "test: asking for a match without snapshots"); }
         else if (!strcmp(cmd, "rejoin")) g_StateRequest = 20;                                 // rejoin the last match
         else if (!strcmp(cmd, "rewind")) { g_StateRequestSlot = slot; g_StateRequest = 30; }   // rewind <seconds>
         else if (!strcmp(cmd, "accept")) g_StateRequest = 17;                                 // online: answer the load vote
@@ -1463,9 +1598,13 @@ namespace pfo_android
         bool live = s.m_ReplayReader.m_Buffer == nullptr && s.m_ReplayWriter.m_Buffer != nullptr;
         if (live)
         {
-            int slot = autoSave ? c_AutoSlot : NextSlotId();
+            bool again = !autoSave && g_ReseedSlot > 0 && s.m_Frame == g_ReseedFrame;
+            int slot = autoSave ? c_AutoSlot : again ? g_ReseedSlot : NextSlotId();
+            g_ReseedSlot = -1;
             if (autoSave) for (auto it = g_MpFileSlot.begin(); it != g_MpFileSlot.end();) it = it->second == c_AutoSlot ? g_MpFileSlot.erase(it) : std::next(it);
+            g_SaveQuiet = again;
             bool ok = SaveCore(slot, self, index);
+            g_SaveQuiet = false;
             if (ok) { g_MpSlots[index] = slot; g_MpFileSlot[index] = slot; }
             if (ok && SnapDebug()) Snap("keep", slot, self);   // development: the online load diffs against this
             __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "online save %d: slot %d at frame %u: %s", index, slot, s.m_Frame, ok ? "ok" : "FAILED");
@@ -1473,7 +1612,7 @@ namespace pfo_android
         else
         {
             int id = c_MpReplaySnapBase + index;
-            SnapCapture(id, self, true);
+            if (!g_MatchNoSnap) { SnapCapture(id, self, true); g_MpCaptures++; }
             g_MpSlots[index] = id;
             int file = FindMatchSaveFile(MatchId(), index);   // a rejoiner's own file for it, from before
             if (file >= 0) g_MpFileSlot[index] = file;
@@ -1531,6 +1670,7 @@ namespace pfo_android
         }
         bool nested = g_Restore.active;
         g_SnapLoad = { 1, id, fakesteam::NowMs(), true, nested };
+        g_SnapBetweenRooms = false;
         if (!nested)
         {
             g_Restore.active = true;
@@ -1556,6 +1696,12 @@ namespace pfo_android
     void OnCommand(int player, int cmd, int param, CInstance* self)
     {
         __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "online: P%d command %d (%d) at frame %u", player + 1, cmd, param, g_Session.m_Frame);
+        if (cmd == c_CmdNoSnap)
+        {
+            if (!g_MatchNoSnap) __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "online: a player's device has no snapshots: saves in this match are files only (%d captures before)", g_MpCaptures);
+            g_MatchNoSnap = true;
+            return;
+        }
         if (cmd == c_CmdSave)
         {
             if (param == c_AutoSaveParam)
@@ -1638,6 +1784,32 @@ namespace pfo_android
         return at == std::string::npos ? dflt : atoi(j.c_str() + at + k.size());
     }
 
+    // The captures in a save's timeline before the save. Devices with snapshots repeat them when
+    // they replay it; one without can't, and its game may then come out different.
+    int SaveCaptures(const std::vector<uint8>& state, const std::string& json)
+    {
+        uint32 tmagic = 0, tcount = 0;
+        if (state.size() >= sizeof(StateHeader))
+        {
+            StateHeader h; memcpy(&h, state.data(), sizeof(h));
+            uint64 at = sizeof(h) + static_cast<uint64>(h.replaySize);
+            if (at + 8 <= state.size()) { memcpy(&tmagic, state.data() + at, 4); memcpy(&tcount, state.data() + at + 4, 4); }
+        }
+        if (tmagic != c_TouchMagic || tcount > 1000000) tcount = 0;
+        int caps = JsonInt(json, "caps", -1);
+        if (caps < 0) caps = JsonInt(json, "mp", 0) > 1 ? 1 : 0;   // written before "caps" was: its number in its match tells
+        return caps + static_cast<int>(tcount);
+    }
+
+    bool CanReplayOffer(int tag)
+    {
+        if (NativeSnapshots()) return true;
+        std::vector<uint8> state, png;
+        std::string json;
+        auto it = g_Offers.find(tag);
+        return it != g_Offers.end() && ReadSlotFiles(it->second, state, json, png) && SaveCaptures(state, json) == 0;
+    }
+
     void OfferOtherSave(int slot)
     {
         std::vector<uint8> state, png;
@@ -1645,6 +1817,12 @@ namespace pfo_android
         if (!ReadSlotFiles(slot, state, json, png)) { SetResult(-2); return; }
         int clients = JsonInt(json, "clients", 1);
         if (clients != g_Session.m_ClientCount) { g_OfferRefused = clients; SetResult(-5); return; }
+        if (!NativeSnapshots() && SaveCaptures(state, json) > 0)
+        {
+            __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "slot %d: its match had snapshot saves before it, which this device can't replay", slot);
+            SetResult(-7);
+            return;
+        }
         int tag = 1 + static_cast<int>(fakesteam::NowMs() % 254);
         g_Offers[tag] = slot;
         // tag, then each part with its length
@@ -1661,6 +1839,63 @@ namespace pfo_android
         __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "offered slot %d (%zu bytes) as %d", slot, b.size(), tag);
     }
 
+    // The state checksums a replay carries (one every c_ReplayWriteChecksumInterval frames), in order.
+    bool ReplaySums(const uint8* b, size_t size, std::vector<uint32>& sums)
+    {
+        size_t off = 10;   // the header: magic, version, client count, client index
+        if (size < off) return false;
+        while (off < size)
+        {
+            if (off + 2 > size) return false;
+            uint8 code = b[off + 1];
+            size_t other = code >> 4;
+            off += 2;
+            if (!(code & 1)) off += other;                                   // an input
+            else if (other) { if (off + 4 > size) return false; uint32 c; memcpy(&c, b + off, 4); sums.push_back(c); off += 4; }
+            else { if (off + 4 > size) return false; uint32 n; memcpy(&n, b + off, 4); off += 4; if (n > size - off) return false; off += n; }
+        }
+        return off == size;
+    }
+
+    // A save of ours with the same game state as this one: the same frame of the same match. The
+    // files of one online save aren't the same bytes on every device (each replay names its own
+    // device, and holds the session's first messages on the frames they reached it), so what is
+    // compared is what a load checks: the frame, its checksum, and every checksum on the way there.
+    // The automatic save's slot doesn't count: it gets replaced.
+    int FindSameSave(const std::vector<uint8>& state)
+    {
+        StateHeader h;
+        std::vector<uint32> sums;
+        if (state.size() < sizeof(h)) return -1;
+        memcpy(&h, state.data(), sizeof(h));
+        if (h.replaySize > state.size() - sizeof(h) || !ReplaySums(state.data() + sizeof(h), h.replaySize, sums)) return -1;
+        std::string dir = "/sdcard/Android/data/" PFO_PACKAGE "/files/savestates";
+        int found = -1;
+        if (DIR* d = opendir(dir.c_str()))
+        {
+            while (dirent* e = readdir(d))
+            {
+                int id = 0; char rest[32] = {};
+                if (sscanf(e->d_name, "slot%d.%31s", &id, rest) != 2 || strcmp(rest, "pfostate") || id == c_AutoSlot) continue;
+                bool exists = false;
+                auto v = ReadWhole((dir + "/" + e->d_name).c_str(), exists);
+                StateHeader o;
+                std::vector<uint32> osums;
+                if (v.size() != state.size()) continue;   // (the same inputs and touch frames: the same length)
+                memcpy(&o, v.data(), sizeof(o));
+                if (o.magic != h.magic || o.version != h.version || o.replayVersion != h.replayVersion || o.frame != h.frame
+                    || o.lastFrameWritten != h.lastFrameWritten || o.checksum != h.checksum || o.replaySize != h.replaySize) continue;
+                if (memcmp(v.data() + sizeof(o), state.data() + sizeof(h), 9)) continue;   // the replay's own magic, version and client count
+                if (!ReplaySums(v.data() + sizeof(o), o.replaySize, osums) || osums != sums) continue;
+                if (memcmp(v.data() + sizeof(o) + o.replaySize, state.data() + sizeof(h) + h.replaySize, state.size() - sizeof(h) - h.replaySize)) continue;   // the touch frames
+                if (access((dir + "/slot" + std::to_string(id) + ".json").c_str(), F_OK) != 0) continue;
+                if (found < 0 || id < found) found = id;
+            }
+            closedir(d);
+        }
+        return found;
+    }
+
     // a save offered by another player: keep it as one of ours
     void TakeOffer(const std::vector<uint8>& b)
     {
@@ -1670,6 +1905,13 @@ namespace pfo_android
         int tag = b[0];
         std::vector<uint8> json, png, state;
         if (!get(json) || !get(png) || !get(state)) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "offer %d: damaged", tag); return; }
+        int same = FindSameSave(state);
+        if (same >= 0)
+        {
+            g_Offers[tag] = same;
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "offer %d: we have that save already, as slot %d", tag, same);
+            return;
+        }
         int slot = NextSlotId();
         std::string path = StatePath(slot), base = path.substr(0, path.size() - 9);
         std::string j(json.begin(), json.end());
@@ -1689,7 +1931,7 @@ namespace pfo_android
     {
         if (!g_Vote.active || !HaveSeat()) return;
         g_VoteAnswered = true;
-        bool can = g_Vote.other ? HaveOffer(g_Vote.index) : HaveSnapshotFor(g_Vote.index);
+        bool can = g_Vote.other ? HaveOffer(g_Vote.index) && CanReplayOffer(g_Vote.index) : HaveSnapshotFor(g_Vote.index);
         int cmd = accept ? (can ? c_CmdAccept : c_CmdCannot) : c_CmdDecline;
         g_PendingCmd = cmd | (g_Vote.index << 8);
     }
@@ -1703,7 +1945,17 @@ namespace pfo_android
         if (s.m_OnlineState != EOnlineState::Online || s.m_ClientCount <= 1)
         {
             scanned = 0; g_MpSaveCount = 0; g_MpSlots.clear(); g_MpFileSlot.clear(); memset(last, 0, sizeof(last));
+            g_MatchNoSnap = false; g_MpCaptures = 0; g_ReseedSlot = -1;
             g_Vote = Vote(); g_VoteAnswered = false;
+            // the match's snapshots only load forward in that match
+            for (auto it = g_Snaps.begin(); it != g_Snaps.end();)
+            {
+                if (!it->second.mp) { ++it; continue; }
+                int id = it->first;
+                it = g_Snaps.erase(it);
+                g_SnapRunner.erase(id);
+                Snap("drop", id, self);
+            }
             return;
         }
         if (s.m_Frame == scanned) return;
@@ -1826,8 +2078,13 @@ namespace pfo_android
     {
         __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "rejoin: %s", why);
         if (g_Rejoin.conn != k_HSteamNetConnection_Invalid) g_SteamNetworkingSockets->CloseConnection(g_Rejoin.conn, 0, "rejoin failed", false);
+        // From the replay on we're in a session of the match again, alone. It can't carry on: end it
+        // (anyone connected hears "session ended" and stops waiting for us).
+        bool inSession = g_Rejoin.phase >= 3 && (g_Session.m_OnlineState == EOnlineState::Online || g_Session.m_OnlineState == EOnlineState::GoingOnline);
         g_Rejoin = Rejoin();
         g_Restore.active = false;
+        g_Restore.rewind = false; g_Restore.fromFrame = 0;
+        if (inSession) g_Session.Disconnect();
         g_RejoinResult = -1;
         SetResult(-4);
     }
@@ -1839,6 +2096,8 @@ namespace pfo_android
         if (!ReadMatchFile(m)) { RejoinFail("no match to rejoin"); return; }
         fakesteam::Init();
         fakesteam::g_MyId = m.me;                      // the identity the others know us by
+        fakesteam::g_Timeline = fakesteam::c_TimelineUnknown; fakesteam::g_TimelineTag = 0;   // (we take the others')
+        fakesteam::g_TimelineNews = fakesteam::TimelineNews();
         fakesteam::g_Names[m.me] = fakesteam::g_MyName;
         bool relayed = !m.relayRoom.empty();
         if (relayed)
@@ -1871,8 +2130,15 @@ namespace pfo_android
     // the rejoiner, each step: ask, then take the match and play it
     void RejoinTick(CInstance* self)
     {
+        // telling the others we're back: if the session ended meanwhile (they'd stopped waiting,
+        // or left), so has the rejoin
+        if (g_Rejoin.phase == 4 && g_Session.m_OnlineState != EOnlineState::Online) { RejoinFail("the match ended before we were back in it"); return; }
         if (g_Rejoin.phase != 1) return;
-        if (fakesteam::NowMs() - g_Rejoin.startMs > 25000) { RejoinFail("no answer"); return; }
+        if (fakesteam::NowMs() - g_Rejoin.startMs > 25000)
+        {
+            RejoinFail(!g_Rejoin.helloSent ? "no answer (never connected)" : "no answer (connected, but the match wasn't sent)");
+            return;
+        }
         SteamNetConnectionRealTimeStatus_t st;
         if (!g_Rejoin.helloSent && g_SteamNetworkingSockets->GetConnectionRealTimeStatus(g_Rejoin.conn, &st, 0, nullptr) == k_EResultOK
             && st.m_eState == k_ESteamNetworkingConnectionState_Connected)
@@ -1884,12 +2150,13 @@ namespace pfo_android
         for (auto it = inbox.begin(); it != inbox.end(); ++it)
         {
             if (it->type != static_cast<uint8>(fakesteam::Msg::RejoinData)) continue;
+            if (it->from != g_Rejoin.m.ids[g_Rejoin.source]) continue;   // only from the player we asked
             std::vector<uint8> body = std::move(it->body);
             inbox.erase(it);
             fakesteam::In in(body.data(), body.size());
             int k = in.u8();
             uint32 frame = in.u32(), checksum = in.u32(), lastWritten = in.u32();
-            if (!in.ok || k != g_Rejoin.m.k || in.o >= body.size()) { RejoinFail("bad match data"); return; }
+            if (!in.ok || k != g_Rejoin.m.k || in.o >= body.size() || body.size() - in.o < 10 || body[in.o + 8] != g_Rejoin.m.n) { RejoinFail("bad match data"); return; }
             g_SteamNetworkingSockets->CloseConnection(g_Rejoin.conn, 0, "replaying", false);
             g_Rejoin.conn = k_HSteamNetConnection_Invalid;
             g_Rejoin.frame = frame;
@@ -1940,7 +2207,8 @@ namespace pfo_android
         auto& m = g_Rejoin.m;
         if (s.m_OnlineState != EOnlineState::Online || s.m_Frame != g_Rejoin.frame) { RejoinFail("the replay didn't land on the frame"); return; }
         for (int i = 0; i < m.n; i++) s.m_ClientData[i].m_SteamID = m.ids[i];
-        if (m.k < m.n - 1 && s.m_ListenSocket == k_HSteamListenSocket_Invalid) s.m_ListenSocket = g_SteamNetworkingSockets->CreateListenSocketP2P(0, 0, nullptr);
+        // (every client listens: one that restarts later may ask any of us for the match)
+        if (s.m_ListenSocket == k_HSteamListenSocket_Invalid) s.m_ListenSocket = g_SteamNetworkingSockets->CreateListenSocketP2P(0, 0, nullptr);
         for (int i = 0; i < m.n; i++)
         {
             if (i == m.k) continue;
@@ -1957,6 +2225,7 @@ namespace pfo_android
             // everyone did the same: the connections come back by themselves (the input wait redials)
             __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "load from another match: at frame %u in %lld ms, connecting", g_Rejoin.frame,
                 static_cast<long long>(fakesteam::NowMs() - g_Rejoin.startMs));
+            g_ReseedSlot = g_Restore.slot; g_ReseedFrame = g_Rejoin.frame;
             g_Rejoin = Rejoin();
             return;
         }
@@ -2027,15 +2296,33 @@ namespace pfo_android
         if (cd.m_LastInputFrame < last) cd.m_LastInputFrame = last;
     }
 
+    // a new match (not a rejoin, not a load): its first timeline
+    void MatchStarts()
+    {
+        fakesteam::g_Timeline = 0; fakesteam::g_TimelineTag = 0;
+        fakesteam::g_TimelineNews = fakesteam::TimelineNews();
+    }
+
     void RejoinServe(bool frozen)
     {
         auto& s = g_Session;
         if (s.m_OnlineState != EOnlineState::Online || s.m_ClientCount < 2) return;
         if (frozen) ShareLostInputs();
-        if (frozen)
         {
+            // The relay is only polled while a connection through it is up, or for a while after
+            // this: keep it polled while we wait for someone who's lost, and while a dial of ours
+            // is unanswered (after a load that restarts the match nobody is "lost", and the answer
+            // to the dial comes by the relay too: without this it waited out ENet's 30 seconds).
             bool lost = false;
-            for (int i = 0; i < s.m_ClientCount; i++) if (g_LostAtMs[i] != 0) lost = true;
+            for (int i = 0; i < s.m_ClientCount; i++)
+            {
+                if (i == s.m_ClientIndex) continue;
+                if (frozen && g_LostAtMs[i] != 0) lost = true;
+                HSteamNetConnection h = s.m_ClientData[i].m_ConnectSocket;
+                if (h == k_HSteamNetConnection_Invalid) continue;
+                fakesteam::Conn* c = fakesteam::ConnFor(h);
+                if (c && c->state == k_ESteamNetworkingConnectionState_Connecting) lost = true;
+            }
             if (lost)
             {
                 std::lock_guard<std::mutex> l(fakesteam::relay::m);
@@ -2070,6 +2357,9 @@ namespace pfo_android
             if (it->type == static_cast<uint8>(fakesteam::Msg::RejoinHello))
             {
                 if (!frozen) { ++it; continue; }   // answered once we're waiting for them (so R is where we stopped)
+                if (!(c >= 0 && c != s.m_ClientIndex && !it->body.empty() && it->body[0] == c && s.m_ReplayWriter.m_Buffer != nullptr))
+                    __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "rejoin: a request we can't answer (client %d, says %d, recording %d)", c,
+                        it->body.empty() ? -1 : it->body[0], s.m_ReplayWriter.m_Buffer != nullptr);
                 if (c >= 0 && c != s.m_ClientIndex && !it->body.empty() && it->body[0] == c && s.m_ReplayWriter.m_Buffer != nullptr)
                 {
                     uint32 r = s.m_Frame - 1;   // in the wait, m_Frame is the frame we can't run yet
@@ -2081,6 +2371,10 @@ namespace pfo_android
                     memcpy(b.data() + 1, &r, 4); memcpy(b.data() + 5, &sum, 4); memcpy(b.data() + 9, &lw, 4);
                     b.insert(b.end(), s.m_ReplayWriter.m_Buffer, s.m_ReplayWriter.m_Buffer + s.m_ReplayWriter.m_Offset);
                     bool ok = fakesteam::SendRejoin(it->from, fakesteam::Msg::RejoinData, b);
+                    // they replay all of it before they're back: wait that long for them (a slow
+                    // phone replays some 300 frames a second), on top of what they've been gone
+                    int64 nowMs = AndroidNowMs();
+                    g_GraceMs[c] = (g_LostAtMs[c] != 0 ? nowMs - g_LostAtMs[c] : 0) + static_cast<int64>(r) * 1000 / 300 + 30000;
                     __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: client %d asked for the match: sent %d bytes up to frame %u (%s)", c,
                         s.m_ReplayWriter.m_Offset, r, ok ? "ok" : "FAILED");
                 }
@@ -2088,12 +2382,12 @@ namespace pfo_android
             }
             else if (it->type == static_cast<uint8>(fakesteam::Msg::LostInputs))
             {
-                TakeLostInputs(it->body);
+                if (c >= 0 && c != s.m_ClientIndex) TakeLostInputs(it->body);   // from a player of this match
                 it = inbox.erase(it);
             }
             else if (it->type == static_cast<uint8>(fakesteam::Msg::LoadOffer))
             {
-                TakeOffer(it->body);
+                if (c >= 0 && c != s.m_ClientIndex) TakeOffer(it->body);
                 it = inbox.erase(it);
             }
             else if (it->type == static_cast<uint8>(fakesteam::Msg::RejoinReady))
@@ -2103,6 +2397,8 @@ namespace pfo_android
                     uint32 r; memcpy(&r, it->body.data() + 1, 4);
                     ResyncClient(s.m_ClientData[c], r, true);
                     g_LostAtMs[c] = 0;
+                    g_GraceMs[c] = 0;
+                    g_LeftOnPurpose[c] = false;
                     g_RejoinSeq++;
                     __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: client %d is back from frame %u (we're at %u)", c, r, s.m_Frame);
                 }
@@ -2120,7 +2416,8 @@ namespace pfo_android
         std::vector<uint8> file, png; std::string json;
         if (slot < 0 || !ReadSlotFiles(slot, file, json, png) || file.size() < sizeof(StateHeader)) { __android_log_print(ANDROID_LOG_ERROR, "PFOSTATE", "load from another match: no save %d", tag); SetResult(-3); return; }
         StateHeader h; memcpy(&h, file.data(), sizeof(h));
-        if (h.magic != c_StateMagic || h.replayVersion != c_ReplayVersion || sizeof(h) + h.replaySize > file.size()) { SetResult(-2); return; }
+        if (h.magic != c_StateMagic || h.replayVersion != c_ReplayVersion || h.replaySize < 10 || sizeof(h) + static_cast<uint64>(h.replaySize) > file.size()
+            || file[sizeof(h) + 8] != s.m_ClientCount) { SetResult(-2); return; }
         // who we are in this match, kept across the session restart
         MatchFile m;
         m.me = fakesteam::g_MyId; m.k = s.m_ClientIndex; m.n = s.m_ClientCount;
@@ -2137,6 +2434,7 @@ namespace pfo_android
         if (tmagic == c_TouchMagic && at + 8 + 4ull * tcount <= file.size()) { touches.resize(tcount); if (tcount) memcpy(touches.data(), file.data() + at + 8, 4ull * tcount); }
         // a new timeline: this match's online saves start over (on every device alike)
         g_MpSaveCount = 0; g_MpSlots.clear(); g_MpFileSlot.clear(); g_Vote = Vote();
+        g_MatchNoSnap = false; g_MpCaptures = 0;   // (the save's replay brings the command back, if it had it)
         g_Rejoin = Rejoin();
         g_Rejoin.phase = 3; g_Rejoin.m = m; g_Rejoin.frame = h.frame; g_Rejoin.reseed = true; g_Rejoin.startMs = fakesteam::NowMs();
         g_Restore.data.assign(file.begin() + sizeof(h), file.begin() + sizeof(h) + h.replaySize);
@@ -2147,9 +2445,49 @@ namespace pfo_android
         PreloadLibrary(self);
         g_ReplayChecksumsChecked = 0; g_ReplayFirstMismatchFrame = 0;
         g_ReplayTouch = touches; g_ReplayTouchNext = 0; g_TouchFrames = touches;
+        // Everyone does this on the same frame, but not at the same moment. Starting the session
+        // over would tell the others "session ended", which to a device still on its way to this
+        // frame means we left the match. Part saying what we're doing instead (fakesteam:
+        // timelines): a device that isn't there yet starts the load when it hears (TimelineTick).
+        fakesteam::g_Timeline = fakesteam::NextTimeline(fakesteam::g_Timeline);
+        fakesteam::g_TimelineTag = static_cast<uint8>(tag);
+        fakesteam::g_TimelineNews = fakesteam::TimelineNews();
+        for (int i = 0; i < s.m_ClientCount; i++)
+        {
+            auto& cd = s.m_ClientData[i];
+            if (i == s.m_ClientIndex || cd.m_ConnectSocket == k_HSteamNetConnection_Invalid) continue;
+            g_SteamNetworkingSockets->CloseConnection(cd.m_ConnectSocket, fakesteam::c_CloseNewTimeline, "Loading another match", false);
+            cd.m_ConnectSocket = k_HSteamNetConnection_Invalid;
+        }
         s.PlayReplay(g_Restore.data.data(), static_cast<int>(g_Restore.data.size()), m.k, self);
         SetFastForward(true, self);
         __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "load from another match (slot %d): replaying %u frames, then reconnecting", slot, h.frame);
+    }
+
+    // Another player's device has started a load that restarts the match and ours hasn't: it was a
+    // frame or two short of the frame when theirs closed the connection, it never got their last
+    // inputs, or it has no player in this game and was waiting for them. Their starting is proof
+    // that everyone accepted, and the load needs nothing from the old timeline: start it here too.
+    void TimelineTick()
+    {
+        auto& n = fakesteam::g_TimelineNews;
+        if (!n.has) return;
+        auto& s = g_Session;
+        if (n.timeline != fakesteam::NextTimeline(fakesteam::g_Timeline)) { n = fakesteam::TimelineNews(); return; }   // we're there already
+        if (s.m_OnlineState != EOnlineState::Online || s.m_ReplayReader.m_Buffer != nullptr || g_Rejoin.phase != 0 || g_Restore.active) return;
+        int c = -1;
+        for (int i = 0; i < s.m_ClientCount; i++) if (i != s.m_ClientIndex && s.m_ClientData[i].m_SteamID == n.from) c = i;
+        if (c < 0) { n = fakesteam::TimelineNews(); return; }   // not a player of this match
+        if (!HaveOffer(n.tag))
+        {
+            if (!n.said) __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load from another match: client %d has started it, but we don't have save %d", c, n.tag);
+            n.said = true;
+            return;
+        }
+        __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "load from another match: client %d has started it, starting here (we were at frame %u)", c, s.m_Frame);
+        if (g_Vote.active) EndVote(1, g_Vote.proposer);
+        if (!g_ReseedPending) g_ReseedPending = n.tag;
+        n = fakesteam::TimelineNews();
     }
 
     // ---- rewind (solo) ----
@@ -2191,6 +2529,19 @@ namespace pfo_android
             const NativeSnap& n = kv.second;
             if (!n.ready || n.mp || n.frame > t || n.offsetAtFrame > cut || n.replay.size() < static_cast<size_t>(n.offsetAtFrame)) continue;
             if (memcmp(n.replay.data(), w.m_Buffer, n.offsetAtFrame) != 0) continue;   // another timeline
+            // The same inputs so far isn't enough: this timeline may have an input the snapshot's
+            // didn't, before the snapshot's frame (the next chunk says), or other captures (each
+            // one touches the game, and replays repeat this timeline's).
+            if (n.offsetAtFrame < w.m_Offset && n.lastWrittenAtFrame + w.m_Buffer[n.offsetAtFrame] <= n.frame) continue;
+            size_t k = 0;
+            bool same = true;
+            for (uint32 f : g_TouchFrames)
+            {
+                if (f > n.frame) break;
+                if (k >= n.touches.size() || n.touches[k] != f) { same = false; break; }
+                k++;
+            }
+            if (!same || k != n.touches.size()) continue;
             if (!best || n.frame > best->frame) best = &n;
         }
         return best;
@@ -2270,6 +2621,8 @@ namespace pfo_android
     {
         auto& s = g_Session;
         if (!CanSave() || g_SnapLoad.phase != 0 || !g_LastAdvanceArg) return;
+        // "two seconds into a game" that couldn't be taken then isn't taken late, mid-play
+        if (g_KeyframeAt != 0 && (s.m_Frame > g_KeyframeAt + 60 || s.m_Frame + 120 < g_KeyframeAt)) g_KeyframeAt = 0;
         if (s.m_Frame < g_LastKeyframe + 600 && s.m_Frame >= g_LastKeyframe) return;
         RValue v;
         bool paused = GlobalGet("paused", v, self) && YYGetBool(&v, 0);
@@ -2293,11 +2646,12 @@ namespace pfo_android
         int64 now = fakesteam::NowMs();
         if (now - last < 700) return;
         last = now;
+        LoadGameFps();   // (a save's load estimate goes by this device's measured speeds from the start, not only once something replayed)
         const int secs[3] = { 15, 30, 60 };
         for (int i = 0; i < 3; i++) g_RewindEst[i] = InSoloSession() ? RewindEstimateMs(secs[i]) : -1;
         g_ReplayFpsPub = static_cast<int>(g_ReplayFps);
         std::vector<int> ready;
-        for (auto& kv : g_Snaps) if (kv.second.ready && !kv.second.keyframe && kv.first < 1000000) ready.push_back(kv.first);
+        for (auto& kv : g_Snaps) if (kv.second.ready && !kv.second.mp && !kv.second.keyframe && kv.first < 1000000) ready.push_back(kv.first);
         std::lock_guard<std::mutex> lock(g_PubMutex);
         g_PubReadySlots.swap(ready);
     }
@@ -2323,6 +2677,17 @@ namespace pfo_android
         }
     }
 
+    // a device without snapshots, live in a match with a seat: say so (again, until it's come round)
+    void AskNoSnap()
+    {
+        static int64 last = 0;
+        if (g_MatchNoSnap || !CanSaveOnline() || g_PendingCmd.load() != 0) return;
+        int64 now = fakesteam::NowMs();
+        if (now - last < 2000) return;
+        last = now;
+        g_PendingCmd = c_CmdNoSnap | (1 << 8);
+    }
+
     void StateBeforeUpdate(CInstance* self)
     {
         KeepAudioLogQuiet();
@@ -2332,9 +2697,11 @@ namespace pfo_android
         SnapLoadBefore(self);
         if (g_SnapLoad.phase != 0) return;
         RejoinTick(self);
+        if (!NativeSnapshots() || g_TestNoSnap) AskNoSnap();
         if (!g_Restore.active) KeyframeTick(self);
         if (g_MpSavePending) { int i = g_MpSavePending; bool a = g_MpSavePendingAuto; g_MpSavePending = 0; g_MpSavePendingAuto = false; MpSave(i, self, a); }
         if (int a = g_VoteAnswerRequest.exchange(0)) AnswerVote(a == 1);
+        TimelineTick();
         if (g_ReseedPending) { int t = g_ReseedPending; g_ReseedPending = 0; StartReseed(t, self); return; }
         ReadTestCommand();
         int req = g_StateRequest.exchange(0);
@@ -2342,7 +2709,7 @@ namespace pfo_android
         else if (req == 2 && InOnlineMatch())
         {
             // online: a SAVE command, so every device saves on the same frame (slot -2: an auto save)
-            if (!CanSaveOnline()) SetResult(-1);
+            if (!CanSaveOnline() || (!NativeSnapshots() && !g_MatchNoSnap)) SetResult(-1);
             else if (g_StateRequestSlot == -2) g_PendingCmd = c_CmdSave | (c_AutoSaveParam << 8);
             else { if (++g_CmdCounter == c_AutoSaveParam) g_CmdCounter = 1; g_PendingCmd = c_CmdSave | (g_CmdCounter << 8); }
         }
@@ -2357,7 +2724,7 @@ namespace pfo_android
             else OfferOtherSave(g_StateRequestSlot);
         }
         else if (req == 3) Load(g_StateRequestSlot, self);
-        else if (req == 13) { g_Snaps.erase(g_StateRequestSlot); Load(g_StateRequestSlot, self); }
+        else if (req == 13) { if (!g_Restore.active) SnapErase(g_StateRequestSlot, self); Load(g_StateRequestSlot, self); }
         else if (req == 16) { g_ForceReplay = true; Load(g_StateRequestSlot, self); }
         else if (req == 17 || req == 18) AnswerVote(req == 17);
         else if (req == 20) StartRejoin(self);
@@ -2367,7 +2734,7 @@ namespace pfo_android
         else if (req == 14)
         {
             RValue v; int game = GlobalGet("currGameID", v, self) ? static_cast<int>(YYGetReal(&v, 0)) : -1;
-            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "where: game %d, frame %u, clients %d", game, g_Session.m_Frame, g_Session.m_OnlineState == EOnlineState::Online ? g_Session.m_ClientCount : 0);
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "where: game %d, frame %u, clients %d, room %s", game, g_Session.m_Frame, g_Session.m_OnlineState == EOnlineState::Online ? g_Session.m_ClientCount : 0, Snap("room", 0, self).c_str());
         }
         else if (req == 10) SnapTest("capture", self);
         else if (req == 11 || (req == 0 && g_SnapTest == 1)) SnapTest("restore", self);
@@ -2376,7 +2743,7 @@ namespace pfo_android
         {
             int fn = Script_Find_Id("pfo_snapshot");
             __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "probe: script %d", fn);
-            if (fn >= 0) { RValue result = {}; RValue args[2]; YYCreateString(&args[0], "probe"); init_real(args[1], 0); Script_Perform(fn, self, self, 2, &result, args); }
+            if (fn >= 0) { RValue result = {}; RValue args[2] = {}; YYCreateString(&args[0], "probe"); init_real(args[1], 0); Script_Perform(fn, self, self, 2, &result, args); }
         }
     }
 
@@ -2495,7 +2862,7 @@ namespace pfo_android
                 if (id != g_TrackedGameID)
                 {
                     g_TrackedGameID = id; g_GameStartFrame = g_Session.m_Frame;
-                    if (id > 0 && InSoloSession() && g_Session.m_ReplayReader.m_Buffer == nullptr) g_KeyframeAt = g_Session.m_Frame + 120;
+                    g_KeyframeAt = id > 0 && InSoloSession() && g_Session.m_ReplayReader.m_Buffer == nullptr ? g_Session.m_Frame + 120 : 0;
                 }
             }
         }
@@ -2513,8 +2880,7 @@ namespace pfo_android
             SetDraw(!g_LastAdvanceArg, self);
             SnapLoadAfter(self);
             // a restore next step (gmi::ArrangeSuccessor)
-            if ((g_SnapLoad.phase == 1 || g_SnapLoad.phase == 3) && !gmi::ArrangeSuccessor(g_SnapRunner[g_SnapLoad.id], self))
-                __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: can't line up the animation pass", g_SnapLoad.id);
+            if (g_SnapLoad.phase == 1 || g_SnapLoad.phase == 3) SnapArrangePass(self);
             return;
         }
         if (!g_Restore.active) { SnapCollect(self); return; }
@@ -2537,6 +2903,9 @@ namespace pfo_android
             __android_log_print(ANDROID_LOG_ERROR, "PFOSTATE", "load slot %d: the replay ended the session at frame %u (state %d)", g_Restore.slot, g_Session.m_Frame, static_cast<int>(g_Session.m_OnlineState));
             SetFastForward(false, self);
             g_Restore.active = false;
+            g_Restore.rewind = false; g_Restore.fromFrame = 0;
+            g_Restore.data.clear();
+            if (g_Rejoin.phase != 0) { g_Rejoin = Rejoin(); g_RejoinResult = -1; }
             SetResult(-3);
             return;
         }
@@ -2555,7 +2924,7 @@ namespace pfo_android
         {
             v |= 4;
             uint32 pct;
-            if (g_SnapLoad.phase != 0)
+            if (g_SnapLoad.phase != 0 && !g_Restore.rewind)
                 pct = g_SnapLoad.phase == 1 ? 10 : g_SnapLoad.phase == 3 ? 95
                     : 15 + std::min<uint32>(80, (g_Session.m_Frame - std::min(g_Session.m_Frame, g_Restore.header.frame)) * 80 / c_SnapVerifyFrames);
             else
@@ -2587,6 +2956,43 @@ static void pfo_android_screen(RValue& r, CInstance*, CInstance*, int argc, RVal
     pfo_android::DuringDraw();
 }
 
+// ---- what the overlay (PFO_Android.java) asks and tells; the Windows menu (win/ui_win.inc) reads the same state
+namespace pfo_android
+{
+    // a match this app was in and didn't see end (it was closed or crashed): "<seconds ago>|<our seat index>|<names>"
+    // while it's recent enough to rejoin, else ""
+    std::string RejoinOffer()
+    {
+        std::string v;
+        MatchFile m;
+        if (g_Session.m_OnlineState == EOnlineState::Offline && g_Rejoin.phase == 0 && ReadMatchFile(m))
+        {
+            int64 ago = static_cast<int64>(time(nullptr)) - m.t;
+            if (ago >= 0 && ago <= c_RejoinOfferSeconds) v = std::to_string(ago) + "|" + std::to_string(m.k) + "|" + m.names;
+        }
+        return v;
+    }
+
+    // how long replaying a save with this mix of games ("game:frames,...") takes on this device, in ms
+    int MixEstimateMs(const char* mix)
+    {
+        double ms = 0, fallback;
+        std::lock_guard<std::mutex> lock(g_SpeedMutex);
+        fallback = std::max(50.0, static_cast<double>(g_ReplayFpsPub.load()));
+        for (const char* p = mix; *p; )
+        {
+            int game = 0; unsigned frames = 0, used = 0;
+            if (sscanf(p, "%d:%u%n", &game, &frames, &used) < 2 || used == 0) break;
+            auto it = g_GameFpsPub.find(game);
+            ms += frames * 1000.0 / (it != g_GameFpsPub.end() ? std::max(50.0, it->second) : fallback);
+            p += used;
+            if (*p == ',') p++;
+        }
+        return static_cast<int>(ms * c_EstimateHeadroom);
+    }
+}
+
+#if defined(__ANDROID__)
 extern "C" JNIEXPORT jintArray JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeScreenRect(JNIEnv* env, jclass)
 {
     jint v[6];
@@ -2655,15 +3061,7 @@ extern "C" JNIEXPORT jintArray JNICALL Java_com_unofficial_ufo50_PFO_1Android_na
 // while it's recent enough to rejoin, else ""; and how the last rejoin went (1 back, -1 couldn't)
 extern "C" JNIEXPORT jstring JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeRejoinOffer(JNIEnv* env, jclass)
 {
-    using namespace pfo_android;
-    std::string v;
-    MatchFile m;
-    if (g_Session.m_OnlineState == EOnlineState::Offline && g_Rejoin.phase == 0 && ReadMatchFile(m))
-    {
-        int64 ago = static_cast<int64>(time(nullptr)) - m.t;
-        if (ago >= 0 && ago <= c_RejoinOfferSeconds) v = std::to_string(ago) + "|" + std::to_string(m.k) + "|" + m.names;
-    }
-    return env->NewStringUTF(v.c_str());
+    return env->NewStringUTF(pfo_android::RejoinOffer().c_str());
 }
 
 // a save that can't be loaded in this match: the number of players it was made with (0: none)
@@ -2690,25 +3088,11 @@ extern "C" JNIEXPORT jintArray JNICALL Java_com_unofficial_ufo50_PFO_1Android_na
 // how long replaying a save with this mix of games ("game:frames,...") takes on this device, in ms
 extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeMixEstimate(JNIEnv* env, jclass, jstring jmix)
 {
-    using namespace pfo_android;
     const char* mix = jmix ? env->GetStringUTFChars(jmix, nullptr) : nullptr;
     if (!mix) return -1;
-    double ms = 0, fallback;
-    {
-        std::lock_guard<std::mutex> lock(g_SpeedMutex);
-        fallback = std::max(50.0, static_cast<double>(g_ReplayFpsPub.load()));
-        for (const char* p = mix; *p; )
-        {
-            int game = 0; unsigned frames = 0, used = 0;
-            if (sscanf(p, "%d:%u%n", &game, &frames, &used) < 2 || used == 0) break;
-            auto it = g_GameFpsPub.find(game);
-            ms += frames * 1000.0 / (it != g_GameFpsPub.end() ? std::max(50.0, it->second) : fallback);
-            p += used;
-            if (*p == ',') p++;
-        }
-    }
+    int ms = pfo_android::MixEstimateMs(mix);
     env->ReleaseStringUTFChars(jmix, mix);
-    return static_cast<jint>(ms * c_EstimateHeadroom);
+    return ms;
 }
 
 // does this slot load from its snapshot (about a second) rather than by replaying?
@@ -2728,3 +3112,4 @@ extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeS
 {
     return pfo_android::StateStatus();
 }
+#endif

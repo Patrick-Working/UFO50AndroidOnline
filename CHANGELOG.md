@@ -1,5 +1,109 @@
 # Changelog
 
+## v0.4.0 (2026-11-10)
+
+### A Windows version
+- **`build.bat -Windows`** (or `bash build.sh --windows`) makes a second game folder,
+  `work\windows\UFO 50 Online`: your modded copy of UFO 50 with this fork's online play, save
+  states and rewind in place of PFO 50's Steam networking. It plays with the phones: the same
+  lobbies (oldkid.net rooms, your own network, the relay), invite codes and online saves.
+- **It never talks to Steam** and never touches the Steam game's saves: the folder has no Steam
+  library in it, and it keeps its own saves in `%LOCALAPPDATA%\ufo50_online`. It can't join PFO 50
+  lobbies on Steam.
+- **A menu for keyboard and controller** in place of the touch overlay: **F1**, or both sticks
+  pressed in, opens it (arrows / D-pad, Enter or Z / A, Esc or X / B). It has the seat and
+  connection, the invite code, SAVE, the list of saves with each one's picture, details and
+  loading time, START SOLO PLAY and REWIND, auto save, player name and UPnP. A load another player
+  asks for shows in a box with the save's picture and a countdown (**F2** accepts, **F3**
+  declines); a loading screen covers the game while a save loads; a match you dropped out of is
+  offered again (F2 rejoins, F3 forgets it). The controller side reads XInput controllers.
+- **Snapshots on Windows**: saves load in about a second, rewind starts from the nearest snapshot,
+  and an accepted load in a match puts the save back on every device within a few frames, as on
+  the phones. The snapshots are made for the `ufo50.exe` of UFO 50 1.9.5 and are checked against
+  it at the start; with any other they turn themselves off and loads replay the session (about 4
+  seconds per minute played on the test PC).
+- **A match with a player whose device has no snapshots has none on anyone's device.** That game
+  says so when the match starts (a new command, 246). From then on an online save is a file only,
+  and an accepted load restarts the match from the save on every device, the way a save from
+  another match loads. v0.3.1 and earlier don't know the command, so everyone needs v0.4.0.
+- The netcode (`PFO.dll`) is compiled with llvm-mingw, which the full build downloads. The quick
+  build takes it from a **Windows kit** in `kit/`, like the runner kit. Details:
+  [docs/WINDOWS.md](docs/WINDOWS.md).
+
+### Online
+- **A dropped player who has no player in the current game is waited for too** (a third player
+  watching a 2-player game, the second player in a 1-player game). Before, the match ran on without
+  them, and they could never catch up or rejoin. Now everyone waits up to 90 seconds and they can
+  reconnect or REJOIN. If they don't come back, the match carries on without them (or ends if
+  nobody else is left).
+- **Reconnecting after a load that restarts the match no longer stalls over the relay.** The device
+  that dialled wasn't listening on the relay for the answer, so the connection took about 35
+  seconds (three dials) instead of one or two. This affected loading a save from another match
+  between two devices connected by relay in v0.3 and v0.3.1.
+- **A load that restarts the match starts on every device as soon as one device starts it.** Each
+  device used to start it only when its own game reached the load's frame. A device that was a
+  frame or two short when the others closed their connections, and never got their last inputs,
+  could be left behind, and then connect to a device already in the restarted match (possible in
+  v0.3 and v0.3.1 when loading a save from another match on a poor connection). Now the device that
+  starts says so as it closes the connection, the others start at once, and a device still in the
+  old match is refused a game connection until it has loaded too.
+- **Loading a library save from inside a game no longer stops the host with an error.** The load
+  goes to the library first, and the library, made anew, sent its settings to the others a second
+  time before the save was put back; PFO 50 refuses that with a failed assertion (an error box on
+  Windows). Nothing is sent in those steps now. Found on Windows; the code is shared with Android.
+- **Two versions of the build can't share a lobby any more.** A host refuses a joiner of another
+  version, and a joiner leaves a host of another version, so v0.3.1 (or earlier) and v0.4.0 can't
+  play together: a match between them would go out of step at the first load with a player without
+  snapshots in it. The game shows its usual failed-join message; the log says "another version of the
+  build". Lobbies on your own network are only listed for the same version; lobbies of another
+  version on oldkid.net are still listed but can't be joined.
+- A player who leaves on purpose (their session ended) isn't waited for.
+- A dial that gets no answer in 8 seconds is dropped and made again, instead of waiting out the
+  transport's 30 seconds.
+- A lobby member that connects again with the same id (its app restarted) replaces its old
+  connection. It is refused while the original is still talking from another address.
+- Lobby lists and addresses are only accepted from the room server's own address.
+- Match data sent outside the game's input (a dropped player's inputs, a rejoin's catch-up) is only
+  accepted from a player this device has a game connection with.
+- The others wait longer for a player whose device is replaying a long match to rejoin.
+- Any player still in the match answers a rejoining player, not only the host.
+- A dropped player's last inputs are only shared among players who are connected.
+
+### Save states
+- An online save picked outside a match is refused with a message instead of loading as a solo
+  session.
+- A rewind checks the snapshot it starts from before using it; a load that fails cleans up after
+  itself.
+- Time in the game, keyframe timing and the progress percentage are right after a rewind.
+- A save file with the wrong size is refused.
+
+### Overlay
+- A tap that closes a box (a vote, the save list) no longer presses the game control under it, and
+  controls that were held are let go when a box or the loading screen comes up by itself.
+- A vote that arrives while you're moving the controls around closes the layout editor (keeping the
+  changes) so you can answer.
+- A vote takes your answer at once: a second tap can't change it.
+- With the save list open, another player's save or an auto save no longer changes which save LOAD
+  and DELETE mean, and DELETE doesn't stay armed for a save that just arrived.
+- The loading screen of an accepted load shows the save that is loading.
+- An online seat from P5 to P8 has its own colour (the overlay only knew four, and drawing a
+  fifth seat's controls failed).
+- The seat banner doesn't flash through old seats while a load replays the match.
+- Swiping the app away from the recent apps removes the "UFO 50 - online" notification.
+
+### Build, scripts and documentation
+- The game patch stops the build when one of its edits can't be applied, instead of printing a line
+  and going on.
+- `scripts/make_icon.py` writes into `android/gm-project/icons/` wherever it is run from; the
+  preview is opt-in (`--preview`).
+- Test scripts: `mp_regress.py` and `mp_test.py` compare frame numbers between the two phones, check
+  that the drop really happened, and look for desync and crash lines in the whole log. New:
+  `mp_nosnap.py` (a match without snapshots between two phones), and the Windows tests in
+  `tests/win/` (two PCs' worth of games on one PC, PC with emulator, and two versions refusing each
+  other), which never run in your own user folders.
+- Documentation corrected where it didn't match the code (replay speeds, the rejoin window, log
+  lines, which scripts need Pillow), and a new [docs/WINDOWS.md](docs/WINDOWS.md).
+
 ## v0.3.1 (2026-11-09)
 
 - **Load and rewind estimates are per game.** Replay speed differs a lot between games (the

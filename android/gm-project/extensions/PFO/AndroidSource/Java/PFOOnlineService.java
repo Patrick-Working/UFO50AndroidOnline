@@ -60,6 +60,15 @@ public class PFOOnlineService extends Service {
         return START_NOT_STICKY;
     }
 
+    // the app was swiped away from the recent apps: nothing left to keep running, so the
+    // notification goes too
+    @Override public void onTaskRemoved(Intent rootIntent) {
+        running = false;
+        try { stopForeground(true); } catch (Throwable t) { }
+        stopSelf();
+        super.onTaskRemoved(rootIntent);
+    }
+
     @Override public void onDestroy() { running = false; super.onDestroy(); }
 
     @Override public IBinder onBind(Intent intent) { return null; }

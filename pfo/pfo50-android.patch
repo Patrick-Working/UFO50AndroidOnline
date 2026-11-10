@@ -1,70 +1,96 @@
 diff --git a/PFO/dllmain.cpp b/PFO/dllmain.cpp
-index 7abb85d..5b7f453 100644
+index 7abb85d..335d86c 100644
 --- a/PFO/dllmain.cpp
 +++ b/PFO/dllmain.cpp
-@@ -5,7 +5,11 @@
+@@ -5,7 +5,14 @@
  #include "Extension_Interface.h"
  #include "Ref.h"
  #include "YYRValue.h"
 +#if defined(__ANDROID__)
 +#define YYEXPORT extern "C" __attribute__((visibility("default")))
++#elif defined(PFO_WINDOWS_OURS)
++// the runner looks these up by their MSVC names: win/runner_bridge_win.inc exports them
++#define YYEXPORT extern "C"
 +#else
  #define YYEXPORT __declspec(dllexport)
 +#endif
  
  // informational warnings
  //#pragma warning(error: 4820) // check struct padding
-@@ -15,6 +19,13 @@
+@@ -15,6 +22,13 @@
  
  YYRunnerInterface* g_pYYRunnerInterface;
  
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +#include <atomic>
 +#include <chrono>
 +// savestate.inc (included at the end): online save/load commands added to our input
-+namespace pfo_android { unsigned int InjectCommand(unsigned int input); void RejoinServe(bool frozen); }
++namespace pfo_android { unsigned int InjectCommand(unsigned int input); void RejoinServe(bool frozen); void MatchStarts(); }
 +#endif
 +
  namespace
  {
      enum class ELogLevel
-@@ -134,6 +145,10 @@ namespace
+@@ -134,6 +148,10 @@ namespace
          int length = vsprintf_s(g_TempBuffer, format, args);
          va_end(args);
  
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +        __android_log_write(ANDROID_LOG_INFO, "PFOLOG", g_TempBuffer);   // the log file is in the app's private folder
 +#endif
 +
          HANDLE logFile = CreateFileA(g_LogFileName, FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA | FILE_APPEND_DATA | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
          if (logFile != INVALID_HANDLE_VALUE)
          {
-@@ -236,6 +251,24 @@ namespace
+@@ -236,6 +254,47 @@ namespace
      constexpr uint32 c_ReplayMagic = 0x524f4650u; // PFOR
      constexpr uint32 c_ReplayVersion = VERSION_TO_NUMBER(MOD_VERSION);
      uint8* g_ReplayBuffer;
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +    int g_ReplayChecksumsChecked = 0;      // save states (android/savestate.inc)
 +    int g_ChecksumInstanceFix = 0;
++    // An online snapshot load that has to change room first: the game runs a step or two in the
++    // new room before its state is put back (the library, made anew, starts its online set-up and
++    // would send the "settings" file a second time). What it does there is thrown away, so nothing
++    // of it may reach the other devices or the file records (savestate.inc sets this).
++    bool g_SnapBetweenRooms = false;
 +    uint32 g_ReplayFirstMismatchFrame = 0;
 +
 +    // A player whose connection drops doesn't end the match at once: everyone waits (frozen, the
 +    // overlay says who for) up to c_RejoinGraceMs for them to come back. The client with the
 +    // higher index dials again every c_RedialMs; the lower one still accepts it. PFO resends the
 +    // inputs the other side never acknowledged, so play carries on where it stopped.
-+    constexpr int64 c_RejoinGraceMs = 90000, c_RedialMs = 2000;
++    // A dial that got no answer in c_DialGiveUpMs is dropped and made again. A player who left on
++    // purpose (their session ended) isn't waited for.
++    // A client with no player in the current game (we need no inputs from it) is waited for all
++    // the same: if we ran on, the inputs it missed would roll off our input buffer and it could
++    // never catch up, and a player whose app restarted is only answered from a frozen match. One
++    // that doesn't come back in time is gone for good (g_Gone): the others carry on without it
++    // and it can't connect again.
++    constexpr int64 c_RejoinGraceMs = 90000, c_RedialMs = 2000, c_DialGiveUpMs = 8000;
 +    int64 g_LostAtMs[8] = {};                       // when a client's connection dropped (0: fine)
 +    int64 g_RedialAtMs[8] = {};
++    bool g_LeftOnPurpose[8] = {};                   // their session ended: no waiting
++    bool g_Gone[8] = {};                            // had no player, didn't come back: the match went on without them
++    int64 g_GraceMs[8] = {};                        // a longer wait for a client replaying a long match (savestate.inc)
 +    std::atomic<uint32> g_WaitMask{0};              // seats we're frozen waiting for (the overlay)
 +    std::atomic<int> g_WaitSecondsLeft{0};
 +    std::atomic<int> g_RejoinSeq{0};                // counts reconnections (the overlay says so)
 +    int64 g_StallSinceMs = 0;                       // when we started waiting for someone's input
 +    int64 AndroidNowMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
++    // a session starts or ends: nobody is lost
++    void ResetDropState()
++    {
++        for (int i = 0; i < 8; i++) { g_LostAtMs[i] = 0; g_RedialAtMs[i] = 0; g_LeftOnPurpose[i] = false; g_GraceMs[i] = 0; g_Gone[i] = false; }
++        g_StallSinceMs = 0;
++        g_WaitMask = 0;
++        g_WaitSecondsLeft = -1;
++    }
 +#endif
      uint8* g_ReplayBuffer2;
      bool g_AlwaysSaveReplays = c_LogLevel <= ELogLevel::Debug;
  
-@@ -934,6 +967,10 @@ namespace
+@@ -934,6 +993,10 @@ namespace
          }
      }
  
@@ -75,7 +101,7 @@ index 7abb85d..5b7f453 100644
      void* AllocateRingBuffer(size_t bufferSize)
      {
          SYSTEM_INFO sysInfo;
-@@ -965,6 +1002,8 @@ namespace
+@@ -965,6 +1028,8 @@ namespace
          return VirtualAlloc(nullptr, bufferSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
      }
  
@@ -84,11 +110,11 @@ index 7abb85d..5b7f453 100644
      struct Session
      {
          uint64 m_ChecksumRingBufferHead = c_ChecksumRingBufferSize;
-@@ -1162,6 +1201,17 @@ namespace
+@@ -1162,6 +1227,17 @@ namespace
                          int dataSize = BufferTELL(ibuffer);
                          assert(static_cast<size_t>(dataSize) <= static_cast<size_t>(g_GMLChecksumBufferMaxSize));
                          uint8* data = BufferGet(ibuffer);
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +                        // a save-state snapshot was just restored: instances it removed still count
 +                        // in instance_count (4th value written, offset 16) until the step ends
 +                        if (g_ChecksumInstanceFix != 0 && dataSize >= 20)
@@ -102,30 +128,66 @@ index 7abb85d..5b7f453 100644
  
                          memcpy(g_ChecksumRingBuffer + (checksumRingBufferHead & (c_ChecksumRingBufferSize - 1)), data, static_cast<size_t>(dataSize));
                          checksumBuffer.m_GMLBufferSize = dataSize;
-@@ -1244,6 +1294,9 @@ namespace
+@@ -1244,6 +1320,9 @@ namespace
                              Script_Perform(g_gml_Script_getInputCallback, instance, instance, 1, &result, &arg);
                              assert(KIND_RValue(&result) == VALUE_INT64);
                              input = bitwise_cast<InputFlags_t>(result.v64);
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +                            input = pfo_android::InjectCommand(input);   // online save/load commands (savestate.inc)
 +#endif
                          }
  
                          // if we have more inputs than we need, only keep the input if it's different than the previous
-@@ -1656,23 +1709,62 @@ namespace
+@@ -1656,23 +1735,116 @@ namespace
                          ReplayReadFrame(instance, false);
                      }
  
-+                    #if defined(__ANDROID__)
++                    #if defined(PFO_OURS)
 +                    uint32 waitMask = 0; int waitLeft = 0; bool waitCountdown = false;
 +                    #endif
                      for (int clientIndex = 0; clientIndex < m_ClientCount; clientIndex++)
                      {
                          auto& clientData = m_ClientData[clientIndex];
++#if defined(PFO_OURS)
++                        // a lost client we need no input from (it has no player in this game): wait
++                        // for it like for any other, or carry on without it once its time is up
++                        bool lostIdle = false;
++                        if (clientIndex != m_ClientIndex && m_OnlineState == EOnlineState::Online && m_ReplayReader.m_Buffer == nullptr
++                            && clientData.m_PlayerData.m_PlayerIndex < 0 && clientData.m_PlayerData.m_TailInputFrame >= m_Frame && !g_Gone[clientIndex]
++                            && (clientData.m_ConnectSocket == k_HSteamNetConnection_Invalid || g_LostAtMs[clientIndex] != 0))
++                        {
++                            int64 now = AndroidNowMs();
++                            if (g_LostAtMs[clientIndex] == 0) g_LostAtMs[clientIndex] = now;
++                            int64 grace = g_LeftOnPurpose[clientIndex] ? 0 : std::max(c_RejoinGraceMs, g_GraceMs[clientIndex]);
++                            if (now - g_LostAtMs[clientIndex] < grace)
++                            {
++                                lostIdle = true;
++                            }
++                            else
++                            {
++                                g_Gone[clientIndex] = true;
++                                if (clientData.m_ConnectSocket != k_HSteamNetConnection_Invalid)
++                                {
++                                    g_SteamNetworkingSockets->CloseConnection(clientData.m_ConnectSocket, 0, "No answer", false);
++                                    clientData.m_ConnectSocket = k_HSteamNetConnection_Invalid;
++                                }
++                                bool anyoneLeft = false;
++                                for (int i = 0; i < m_ClientCount; i++)
++                                {
++                                    if (i != m_ClientIndex && !g_Gone[i] && (m_ClientData[i].m_ConnectSocket != k_HSteamNetConnection_Invalid || !g_LeftOnPurpose[i])) anyoneLeft = true;
++                                }
++                                __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "client %d (no player in this game) didn't come back: %s", clientIndex,
++                                    anyoneLeft ? "carrying on without them" : "nobody else is left, the match ends");
++                                if (!anyoneLeft) m_OnlineState = EOnlineState::GoingOffline;
++                            }
++                        }
++                        if (clientData.m_PlayerData.m_TailInputFrame < m_Frame || lostIdle)
++#else
                          if (clientData.m_PlayerData.m_TailInputFrame < m_Frame)
++#endif
                          {
                              canMoveToNextFrame = false;
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +                            // stuck on someone for a while (their connection may not be known dead yet): say so
 +                            {
 +                                int64 now = AndroidNowMs();
@@ -135,20 +197,37 @@ index 7abb85d..5b7f453 100644
 +#endif
  
                              // disconnect if a disconnected client is preventing us from moving to the next frame
++#if defined(PFO_OURS)
++                            // lost: no connection, or one we're dialling that hasn't answered yet
++                            if (clientData.m_ConnectSocket == k_HSteamNetConnection_Invalid || g_LostAtMs[clientIndex] != 0)
++#else
                              if (clientData.m_ConnectSocket == k_HSteamNetConnection_Invalid)
++#endif
                              {
++#if defined(PFO_OURS)
++                                assert(lostIdle || clientData.m_PlayerData.m_PlayerIndex >= 0);
++#else
                                  assert(clientData.m_PlayerData.m_PlayerIndex >= 0);
-+#if defined(__ANDROID__)
++#endif
++#if defined(PFO_OURS)
 +                                int64 now = AndroidNowMs();
 +                                if (g_LostAtMs[clientIndex] == 0) g_LostAtMs[clientIndex] = now;
-+                                if (now - g_LostAtMs[clientIndex] < c_RejoinGraceMs)
++                                int64 grace = g_LeftOnPurpose[clientIndex] ? 0 : std::max(c_RejoinGraceMs, g_GraceMs[clientIndex]);
++                                if (now - g_LostAtMs[clientIndex] < grace)
 +                                {
-+                                    waitMask |= 1u << clientData.m_PlayerData.m_PlayerIndex;
-+                                    int left = static_cast<int>((c_RejoinGraceMs - (now - g_LostAtMs[clientIndex]) + 999) / 1000);
++                                    waitMask |= 1u << (clientData.m_PlayerData.m_PlayerIndex >= 0 ? clientData.m_PlayerData.m_PlayerIndex : clientIndex);
++                                    int left = static_cast<int>((grace - (now - g_LostAtMs[clientIndex]) + 999) / 1000);
 +                                    waitCountdown = true;
 +                                    if (left > waitLeft) waitLeft = left;
 +                                    // we dial clients before us; the ones after us dial us
-+                                    if (clientIndex < m_ClientIndex && now - g_RedialAtMs[clientIndex] >= c_RedialMs)
++                                    if (clientIndex < m_ClientIndex && clientData.m_ConnectSocket != k_HSteamNetConnection_Invalid
++                                        && now - g_RedialAtMs[clientIndex] >= c_DialGiveUpMs)
++                                    {
++                                        g_SteamNetworkingSockets->CloseConnection(clientData.m_ConnectSocket, 0, "No answer", false);
++                                        clientData.m_ConnectSocket = k_HSteamNetConnection_Invalid;
++                                    }
++                                    if (clientIndex < m_ClientIndex && clientData.m_ConnectSocket == k_HSteamNetConnection_Invalid
++                                        && now - g_RedialAtMs[clientIndex] >= c_RedialMs)
 +                                    {
 +                                        g_RedialAtMs[clientIndex] = now;
 +                                        SteamNetworkingIdentity identity;
@@ -159,6 +238,7 @@ index 7abb85d..5b7f453 100644
 +                                    }
 +                                    continue;
 +                                }
++                                if (lostIdle) continue;   // (its time ran out between the two checks: the next pass lets it go)
 +#endif
                                  LogDebug("Ran out of input from disconnected client %d (player %d): Disconnecting\n", clientIndex, clientData.m_PlayerData.m_PlayerIndex);
                                  m_OnlineState = EOnlineState::GoingOffline;
@@ -166,7 +246,7 @@ index 7abb85d..5b7f453 100644
                          }
                      }
  
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +                    pfo_android::RejoinServe(!canMoveToNextFrame);   // a returning player (savestate.inc)
 +                    g_WaitMask = canMoveToNextFrame ? 0u : waitMask;
 +                    g_WaitSecondsLeft = waitCountdown ? waitLeft : -1;   // -1: no countdown (not known to be gone)
@@ -175,11 +255,21 @@ index 7abb85d..5b7f453 100644
                      if (canMoveToNextFrame)
                      {
                          break;
-@@ -2089,6 +2181,14 @@ namespace
+@@ -2051,6 +2223,9 @@ namespace
+             }
+ 
+             reset(*this);
++#if defined(PFO_OURS)
++            ResetDropState();
++#endif
+ 
+             UpdateGameSpeed(instance);
+         }
+@@ -2089,6 +2264,14 @@ namespace
  
          void CheckChecksum(ChecksumBuffer& a, int aClientIndex, CInstance* instance)
          {
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +            // a session of one (save-state play) has nobody to desync with; comparing a frame's
 +            // checksum with a second calculation of the same frame only finds false alarms
 +            if (m_ClientCount <= 1)
@@ -190,51 +280,91 @@ index 7abb85d..5b7f453 100644
              for (int bClientIndex = 0; bClientIndex < m_ClientCount; bClientIndex++)
              {
                  auto& clientData = m_ClientData[bClientIndex];
-@@ -2205,6 +2305,9 @@ namespace
+@@ -2205,6 +2388,18 @@ namespace
                      if (clientData.m_ConnectSocket == hConn)
                      {
                          clientData.m_ConnectSocket = k_HSteamNetConnection_Invalid;
-+#if defined(__ANDROID__)
-+                        if (m_OnlineState == EOnlineState::Online && g_LostAtMs[clientIndex] == 0) g_LostAtMs[clientIndex] = AndroidNowMs();
++#if defined(PFO_OURS)
++                        if (m_OnlineState == EOnlineState::Online)
++                        {
++                            if (g_LostAtMs[clientIndex] == 0) g_LostAtMs[clientIndex] = AndroidNowMs();
++                            // "Session ended" (Close below): they left, they didn't drop
++                            if (info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer && info.m_eEndReason == k_ESteamNetConnectionEnd_App_Generic + 1)
++                            {
++                                g_LeftOnPurpose[clientIndex] = true;
++                                LogDebug("Client %d left the match\n", clientIndex);
++                            }
++                        }
 +#endif
  
                          {
                              auto map = CreateDsMap(0, 0);
-@@ -2240,7 +2343,12 @@ namespace
+@@ -2240,7 +2435,21 @@ namespace
                          }
                      }
  
-+#if defined(__ANDROID__)
-+                    // with the others gone, wait for them like for one (the input wait below decides)
-+                    if (connectedCount == 0 && m_ClientCount <= 1)
++#if defined(PFO_OURS)
++                    // The others left on purpose: it's over. A dropped player is waited for (the
++                    // input wait decides how long).
++                    bool waitingForSomeone = false;
++                    for (int clientIndex = 0; clientIndex < m_ClientCount; clientIndex++)
++                    {
++                        if (clientIndex != m_ClientIndex && m_ClientData[clientIndex].m_ConnectSocket == k_HSteamNetConnection_Invalid && !g_LeftOnPurpose[clientIndex])
++                        {
++                            waitingForSomeone = true;
++                        }
++                    }
++                    if (connectedCount == 0 && !waitingForSomeone)
 +#else
                      if (connectedCount == 0)
 +#endif
                      {
                          LogDebug("No more clients connected: Disconnecting\n");
                          m_OnlineState = EOnlineState::GoingOffline;
-@@ -2297,6 +2405,16 @@ namespace
+@@ -2257,9 +2466,19 @@ namespace
+                     bool found = false;
+ 
+                     // accept connections from clients after us
++#if defined(PFO_OURS)
++                    // and, in a match, from clients before us: one that restarted asks any of us
++                    // for the match so far (savestate.inc)
++                    for (int clientIndex = m_OnlineState == EOnlineState::Online ? 0 : m_ClientIndex + 1; clientIndex < m_ClientCount; clientIndex++)
++#else
+                     for (int clientIndex = m_ClientIndex + 1; clientIndex < m_ClientCount; clientIndex++)
++#endif
+                     {
+                         auto& clientData = m_ClientData[clientIndex];
++#if defined(PFO_OURS)
++                        if (clientIndex == m_ClientIndex) continue;
++                        if (g_Gone[clientIndex]) continue;   // the match went on without them: they can't catch up any more
++#endif
+                         if (info.m_identityRemote.GetSteamID64() == clientData.m_SteamID)
+                         {
+                             if (clientData.m_ConnectSocket != k_HSteamNetConnection_Invalid)
+@@ -2297,6 +2516,18 @@ namespace
  
              if (info.m_eState == k_ESteamNetworkingConnectionState_Connected)
              {
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +                if (m_OnlineState == EOnlineState::Online)
 +                    for (int clientIndex = 0; clientIndex < m_ClientCount; clientIndex++)
 +                        if (m_ClientData[clientIndex].m_ConnectSocket == hConn && g_LostAtMs[clientIndex] != 0)
 +                        {
 +                            LogDebug("Client %d is back after %lld ms\n", clientIndex, static_cast<long long>(AndroidNowMs() - g_LostAtMs[clientIndex]));
 +                            g_LostAtMs[clientIndex] = 0;
++                            g_LeftOnPurpose[clientIndex] = false;
++                            g_GraceMs[clientIndex] = 0;
 +                            g_RejoinSeq++;
 +                        }
 +#endif
                  if (m_OnlineState == EOnlineState::Offline && m_ClientCount > 0)
                  {
                      bool allClientsConnected = true;
-@@ -2333,6 +2451,19 @@ namespace
+@@ -2333,6 +2564,19 @@ namespace
              constexpr uint16 laneWeights[] = { 1, 1 }; // higher number means more relative bandwidth
              g_SteamNetworkingSockets->ConfigureConnectionLanes(hConn, countof(lanePriorities), lanePriorities, laneWeights);
              clientData.m_ConnectSocket = hConn;
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +            // A connection made again mid-match (a reconnect, or a player whose app restarted): their
 +            // message numbers may start over, and they may have missed our inputs since they stopped.
 +            // Send again from where their own inputs stopped (anything they already have is ignored).
@@ -250,12 +380,26 @@ index 7abb85d..5b7f453 100644
          }
  
          bool SetClients(CSteamID (&steamIDs)[countof(m_ClientData)], int clientCount)
-@@ -2753,6 +2884,19 @@ namespace
+@@ -2370,7 +2614,13 @@ namespace
+                 }
+ 
+                 // create a listen socket for connecting to all clients after us
++#if defined(PFO_OURS)
++                // (the last client listens too: a client that restarted may ask it for the match)
++                ResetDropState();
++                pfo_android::MatchStarts();
++#else
+                 if (m_ClientIndex < m_ClientCount - 1)
++#endif
+                 {
+                     assert(m_ListenSocket == k_HSteamListenSocket_Invalid);
+ 
+@@ -2753,6 +3003,19 @@ namespace
                      }
                  }
              }
 +
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +            // A session of one (save-state play) sends to nobody, but its replay still needs the
 +            // message (the seed, the shared save files): record it anyway.
 +            if (messageSize == 0 && m_OnlineState == EOnlineState::Online && m_ReplayWriter.m_Buffer != nullptr)
@@ -270,11 +414,20 @@ index 7abb85d..5b7f453 100644
          }
  
          void ReceiveReliableMessage(const void* data, int size, int clientIndex, CInstance* instance)
-@@ -2886,6 +3030,13 @@ namespace
+@@ -2783,7 +3046,7 @@ namespace
+                     BufferWriteContent(bufferIndex, 0, reliableMessage.m_File.m_Data, reliableMessage.m_File.m_Size);
+ 
+                     RValue tmpBuffer = {};
+-                    RValue arg[3];
++                    RValue arg[3] = {};   // (zeroed: the Windows runner's YYCreateString frees what the value held)
+                     init_buffer(arg[0], bufferIndex);
+                     init_bool(arg[1], false);
+                     YYCreateString(&arg[2], fileData->m_Filename);
+@@ -2886,6 +3149,13 @@ namespace
          {
              while (m_ReplayLastFrameRead <= m_Frame)
              {
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +                // a save state's replay stops mid-session: past its end, inputs just stay as they were
 +                if (!firstTime && m_ReplayReader.m_Offset >= m_ReplayReader.m_Size)
 +                {
@@ -284,11 +437,11 @@ index 7abb85d..5b7f453 100644
                  if (!firstTime)
                  {
                      uint8 code;
-@@ -2914,6 +3065,14 @@ namespace
+@@ -2914,6 +3184,14 @@ namespace
                          auto& checksumBuffer = clientData.m_ChecksumData[m_Frame & (countof(clientData.m_ChecksumData) - 1)];
                          assert(checksumBuffer.m_Frame == m_Frame);
  
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +                        // save states: every checksum the replay carries is one more check that it's on track
 +                        g_ReplayChecksumsChecked++;
 +                        if (checksumBuffer.m_Checksum != checksum && g_ReplayFirstMismatchFrame == 0)
@@ -299,23 +452,49 @@ index 7abb85d..5b7f453 100644
                          if (m_LastSentChecksumFrame == 0 && checksumBuffer.m_Checksum != checksum)
                          {
                              breakpoint();
-@@ -3103,6 +3262,9 @@ namespace
+@@ -2995,6 +3273,7 @@ namespace
+ 
+         void BufferSendReliableMessage(CInstance* instance, const char* filename, int bufferIndex)
+         {
++            if (g_SnapBetweenRooms) return;
+             ReliableMessage reliableMessage;
+             bool exists = bufferIndex != -1;
+             reliableMessage.m_Type = exists ? EReliableMessageType::File : EReliableMessageType::FileDoesNotExist;
+@@ -3006,7 +3285,7 @@ namespace
+             if (exists)
+             {
+                 RValue tmpBuffer = {};
+-                RValue tmpArg[3];
++                RValue tmpArg[3] = {};
+                 init_buffer(tmpArg[0], bufferIndex);
+                 init_bool(tmpArg[1], true);
+                 YYCreateString(&tmpArg[2], filename);
+@@ -3035,7 +3314,7 @@ namespace
+ 
+         void BufferSend(RValue& result, CInstance* instance, const char* filename, int bufferIndex)
+         {
+-            if (m_ReplayReader.m_Buffer == nullptr)
++            if (m_ReplayReader.m_Buffer == nullptr && !g_SnapBetweenRooms)
+             {
+                 auto fileData = FindFileData(filename, m_ClientIndex);
+                 assert(fileData->m_Status == EFileStatus::None);
+@@ -3103,6 +3382,9 @@ namespace
                      } [[fallthrough]];
                      case EFileStatus::VirtualUnknown:
                      {
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +                        if (m_ReplayReader.m_Buffer != nullptr) LogInfo("replay: file %s (client %d) not known yet\n", filename, clientIndex);
 +#endif
                          init_int64(result, -1);
                      } break;
                      case EFileStatus::VirtualDoesNotExist:
-@@ -3471,7 +3633,18 @@ YYEXPORT void pfo_player_get_input(RValue& result, CInstance* selfinst, CInstanc
+@@ -3471,7 +3753,18 @@ YYEXPORT void pfo_player_get_input(RValue& result, CInstance* selfinst, CInstanc
      assert(argc == 1);
  
      int playerIndex = YYGetInt32(arg, 0);
 -    init_int64(result, g_Session.PlayerGetInput(selfinst, playerIndex));
 +    int64 input = g_Session.PlayerGetInput(selfinst, playerIndex);
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
 +    // Deterministic input trace: log each player's input whenever it changes, with the frame.
 +    // Both devices must print identical lines; compare with scripts/compare_inputs.py.
 +    static int64 s_lastInput[c_PlayerLimit] = {};
@@ -329,31 +508,54 @@ index 7abb85d..5b7f453 100644
  }
  
  YYEXPORT void pfo_is_online(RValue& result, CInstance* selfinst, CInstance* otherinst, int argc, RValue* arg)
-@@ -4021,3 +4194,8 @@ YYEXPORT void pfo_is_playing_replay(RValue& result, CInstance* selfinst, CInstan
+@@ -4021,3 +4314,15 @@ YYEXPORT void pfo_is_playing_replay(RValue& result, CInstance* selfinst, CInstan
  
      init_bool(result, g_Session.m_ReplayReader.m_Buffer != nullptr);
  }
 +
-+#if defined(__ANDROID__)
++#if defined(PFO_OURS)
++#if defined(PFO_WINDOWS_OURS)
++#include "win/file_macros.h"
++#endif
 +#include "android/fakesteam_impl.inc"
++#if defined(PFO_WINDOWS_OURS)
++#include "win/runner_bridge_win.inc"
++#else
 +#include "android/runner_bridge.inc"
 +#endif
++#endif
 diff --git a/PFO/pch.h b/PFO/pch.h
-index f1c280c..f203ad3 100644
+index f1c280c..f84fd93 100644
 --- a/PFO/pch.h
 +++ b/PFO/pch.h
-@@ -8,6 +8,10 @@
+@@ -8,6 +8,26 @@
  #define PCH_H
  
  // add headers that you want to pre-compile here
++// PFO_OURS: the builds with our own netcode in place of Steam's (android/fakesteam_impl.inc):
++// Android, and Windows when PFO_WINDOWS_OURS is defined (scripts/build_pfo_windows.sh).
++#if defined(__ANDROID__) || defined(PFO_WINDOWS_OURS)
++#define PFO_OURS 1
++#endif
 +#if defined(__ANDROID__)
 +#include "android/compat.h"
++#include "android/steam/steam_api.h"
++#elif defined(PFO_WINDOWS_OURS)
++#include <stddef.h>
++#include <intrin.h>
++#include <new>
++#include <type_traits>
++#include "framework.h"
++#include <winsock2.h>
++#include <ws2tcpip.h>
++#include <iphlpapi.h>
++#include "win/compat_win.h"
 +#include "android/steam/steam_api.h"
 +#else
  #include <stddef.h>
  #include <intrin.h>
  #include <new>
-@@ -18,5 +22,6 @@
+@@ -18,5 +38,6 @@
  #pragma warning(disable: 4365) // signed/unsigned mismatch
  #include "steam/steam_api.h"
  #pragma warning(pop)

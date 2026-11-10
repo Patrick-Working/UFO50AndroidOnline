@@ -1,8 +1,11 @@
 """Screen-aware navigation for testing online play on two BlueStacks instances.
 
-Usage: py -3 scripts/nav.py session [host_port] [join_port]
-Waits for each screen by checking a few pixels before pressing keys, so it doesn't
-depend on how long intros and fades take. Needs tools/rendezvous_server.py running.
+Usage: py -3 tests/nav.py session [host_port] [join_port]
+Starts the app on both, hosts a public lobby on the first, joins it from the second and
+readies both. Waits for each screen by comparing parts of a screenshot with reference
+pictures before pressing keys, so it doesn't depend on how long intros and fades take.
+Screenshots it saves go to tests/out/. Exits with an error message when a screen never shows.
+sweep4.py imports this file for its adb, key and screenshot helpers.
 """
 import io
 import subprocess
@@ -15,6 +18,14 @@ from PIL import Image
 
 ADB = os.environ.get("ADB") or str(Path.home() / "AppData/Local/Android/Sdk/platform-tools/adb.exe")   # or set ADB
 PKG = "com.unofficial.ufo50"
+OUT = Path(__file__).resolve().parent / "out"   # screenshots this script saves (tests/out, not in git)
+
+
+def save(im, name, folder=None):
+    folder = Path(folder) if folder else OUT
+    folder.mkdir(parents=True, exist_ok=True)
+    im.save(folder / name)
+    return folder / name
 
 
 def adb(port, *args, capture=False):
@@ -37,7 +48,7 @@ def white(p): return p[0] > 220 and p[1] > 220 and p[2] > 220
 def yellow(p): return p[0] > 200 and p[1] > 200 and p[2] < 120
 
 
-# Screens are recognised by comparing a region with a reference crop (scripts/nav_refs).
+# Screens are recognised by comparing a region with a reference crop (tests/nav_refs).
 from PIL import ImageChops, ImageStat
 REFS = {}
 BOXES = {
@@ -45,11 +56,12 @@ BOXES = {
     'profiles': (240, 40, 1200, 160), 'boot': (360, 915, 740, 1040), 'online_sel': (1480, 560, 1650, 760), 'title': (700, 780, 1220, 930),
 }
 
-# The reference crops were taken with the game filling the 1920x1080 screen (5x). At a smaller
-# Video Settings scale (NAV_SCALE=4) the same picture is centred and 4/5 the size, so map each
-# box into it and blow the crop back up before comparing.
-SCALE = float(os.environ.get("NAV_SCALE", "5"))
-SHOTS = os.environ.get("NAV_SHOTS")   # folder to save showcase screenshots of each step
+# The boxes above and the reference crops are for the game filling the 1920x1080 screen (5x).
+# The tests run at Video Settings scale 4x (see docs/TESTING.md), the default here: the same
+# picture is centred and 4/5 the size, so map each box into it and blow the crop back up before
+# comparing. Set NAV_SCALE=5 if the game fills the screen.
+SCALE = float(os.environ.get("NAV_SCALE", "4"))
+SHOTS = os.environ.get("NAV_SHOTS")   # folder to save showcase screenshots of each step (made if missing)
 
 
 def game_box(box):
@@ -96,8 +108,8 @@ def wait_for(port, test, what, timeout=60, nudge=None, nudge_every=12):
             key(port, nudge)
             next_nudge = time.time() + nudge_every
         time.sleep(0.7)
-    shot(port).save(f"build/nav_fail_{port}.png")
-    raise SystemExit(f"[{port}] timed out waiting for {what} (see build/nav_fail_{port}.png)")
+    where = save(shot(port), f"nav_fail_{port}.png")
+    raise SystemExit(f"[{port}] timed out waiting for {what} (see {where})")
 
 
 def to_lobby_list(port):
@@ -113,8 +125,8 @@ def to_lobby_list(port):
         if is_profiles(im):
             break
         if time.time() > end:
-            im.save(f"build/nav_fail_{port}.png")
-            raise SystemExit(f"[{port}] never reached the profile screen")
+            where = save(im, f"nav_fail_{port}.png")
+            raise SystemExit(f"[{port}] never reached the profile screen (see {where})")
         if is_boot(im) or is_title(im):
             key(port, "Z")
             time.sleep(2.5)
@@ -155,21 +167,21 @@ def session(host, join):
             pass
     wait_for(host, in_lobby, "host lobby", 5)
     print("host lobby created", flush=True)
-    if SHOTS: shot(host).save(f"{SHOTS}/11_online_host_lobby.png")
+    if SHOTS: save(shot(host), "11_online_host_lobby.png", SHOTS)
     wait_for(join, has_lobby_entry, "lobby in joiner's list", 40)
-    if SHOTS: time.sleep(5); shot(join).save(f"{SHOTS}/12_online_lobby_browser.png")
+    if SHOTS: time.sleep(5); save(shot(join), "12_online_lobby_browser.png", SHOTS)
     key(join, "DPAD_LEFT")
     key(join, "Z")
     wait_for(join, in_lobby, "joined lobby", 20)
     print("joined", flush=True)
     time.sleep(2)
-    if SHOTS: shot(join).save(f"{SHOTS}/13_online_joined_lobby_p2.png"); shot(host).save(f"{SHOTS}/13_online_joined_lobby_p1.png")
+    if SHOTS: save(shot(join), "13_online_joined_lobby_p2.png", SHOTS); save(shot(host), "13_online_joined_lobby_p1.png", SHOTS)
     key(join, "Z")   # READY
     key(host, "Z")   # READY -> session starts
     time.sleep(10)
-    shot(host).save("build/s_h.png")
-    shot(join).save("build/s_j.png")
-    print("session started (check build/s_h.png, build/s_j.png)", flush=True)
+    a = save(shot(host), "s_h.png")
+    b = save(shot(join), "s_j.png")
+    print(f"session started (check {a} and {b})", flush=True)
 
 
 if __name__ == "__main__":

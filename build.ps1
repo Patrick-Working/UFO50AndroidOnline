@@ -5,7 +5,11 @@
 #   -Install         also install the APK on a phone connected with USB debugging (needs adb)
 #   -Runner <apk>    use this runner instead of the published runner kit (the full build passes its own)
 #   -GamePath <dir>  your UFO 50 folder, if it isn't found by itself
-param([switch]$Install, [string]$Runner = "", [string]$GamePath = "", [string]$ModdedDir = "")
+#   -Windows         make the Windows version instead of the APK: a game folder (work\windows\UFO 50 Online)
+#                    with the same online play, save states and rewind, which plays with the phones.
+#                    It never talks to Steam and keeps its saves apart from the Steam game's.
+#   -WinDll <dll>    with -Windows: use this PFO.dll instead of the published one (the full build passes its own)
+param([switch]$Install, [string]$Runner = "", [string]$GamePath = "", [string]$ModdedDir = "", [switch]$Windows, [string]$WinDll = "")
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"   # Invoke-WebRequest is far faster without the progress bar
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -24,7 +28,9 @@ $Pins = @{
     Mmm          = @("https://gamebanana.com/dl/1836289", "9e4f97abcbb2fd04b71ffdfed86feb53c7625590f946b1bc77aced3b38b4ab99", "multimadnessmod-1.30.zip")
     # the runner kit: GameMaker's Android runner + the touch overlay + libPFO.so, no game data
     # (made by the full build: bash build.sh --kit)
-    Kit          = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.3.1/kit/ufo50-online-runner-v0.3.1.apk", "537b8b5003c6b2d5c2e2b34b28856dd5d254799aaf95acb4e602188823e7cd81", "ufo50-online-runner-v0.3.1.apk")
+    Kit          = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.4.0/kit/ufo50-online-runner-v0.4.0.apk", "a8d0906bb5fabbf89650902c4aa8407ce7f67f13a6df669a05e91063ccc1e4b2", "ufo50-online-runner-v0.4.0.apk")
+    # the Windows kit: our PFO.dll alone (made by the full build: bash build.sh --windows --kit)
+    WinKit       = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.4.0/kit/ufo50-online-windows-v0.4.0.dll", "759106f74eb5195c7f84e9aeb7231a7d3c485f53252efda703f23c98a065f602", "ufo50-online-windows-v0.4.0.dll")
 }
 
 function Say($t) { Write-Host ""; Write-Host "== $t" -ForegroundColor Cyan }
@@ -69,7 +75,10 @@ function Utmt([string[]]$CliArgs, [hashtable]$Env = @{}) {
 }
 
 $Version = (Get-Content (Join-Path $Root "VERSION") -ErrorAction SilentlyContinue | Select-Object -First 1)
-Write-Host "UFO 50 Android Online v$Version - quick build" -ForegroundColor Cyan
+Write-Host "UFO 50 Android Online v$Version - quick build$(if ($Windows) { ' of the Windows version' })" -ForegroundColor Cyan
+if ($Windows -and $Install) { Die "-Install is for the Android build (the Windows build is a folder: work\windows)" }
+if ($Windows -and $Runner) { Die "-Runner is for the Android build (with -Windows, a PFO.dll of your own goes in -WinDll)" }
+if ($WinDll -and -not $Windows) { Die "-WinDll goes with -Windows" }
 
 # ---- 1. the game ----------------------------------------------------------------------------
 Say "Finding UFO 50"
@@ -97,7 +106,13 @@ $loaderZip = Fetch $Pins.Loader
 $pfoZip = Fetch $Pins.Pfo
 $mmmZip = Fetch $Pins.Mmm
 $localKit = Join-Path $Root ("kit\" + $Pins.Kit[2])   # the repository zip carries the kit
-if ($Runner) { $kit = (Resolve-Path $Runner).Path; Ok "runner: $kit" }
+$localWinKit = Join-Path $Root ("kit\" + $Pins.WinKit[2])
+if ($Windows) {
+    if ($WinDll) { $winKit = (Resolve-Path $WinDll).Path; Ok "PFO.dll: $winKit" }
+    elseif ((Test-Path $localWinKit) -and ((Sha $localWinKit) -eq $Pins.WinKit[1])) { $winKit = $localWinKit; Ok "Windows kit v$Version" }
+    else { $winKit = Fetch $Pins.WinKit; Ok "Windows kit v$Version (downloaded)" }
+}
+elseif ($Runner) { $kit = (Resolve-Path $Runner).Path; Ok "runner: $kit" }
 elseif ((Test-Path $localKit) -and ((Sha $localKit) -eq $Pins.Kit[1])) { $kit = $localKit; Ok "runner kit v$Version" }
 else { $kit = Fetch $Pins.Kit; Ok "runner kit v$Version (downloaded)" }
 Ok "UndertaleModTool 0.9.2.0, UFO 50 Mod Loader 2.3.0, PFO 50 0.10.0, MultiMadnessMod 1.30"
@@ -133,6 +148,35 @@ if (-not (Test-Path (Join-Path $modded "PFO.dll"))) {
 }
 Ok "modded copy: $modded"
 
+# ---- 4w. the Windows version: the modded copy with our PFO.dll and a patched data.win --------
+if ($Windows) {
+    Say "Putting the Windows version together (a minute or two)"
+    $steamFiles = @("Steamworks_x64.dll", "steam_api64.dll", "steam_api.dll", "steam_appid.txt")
+    $win = Join-Path $Work "windows\UFO 50 Online"
+    if (Get-Process -Name ufo50 -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($win, [StringComparison]::OrdinalIgnoreCase) }) { Die "the Windows version is running: close it first" }
+    if (Test-Path $win) { Remove-Item -Recurse -Force $win }
+    New-Item -ItemType Directory -Force $win | Out-Null
+    # everything but the two files we replace and Steam's: the build has no Steam library, so it
+    # can't reach Steam, your Steam saves or the Steam version's lobbies
+    Get-ChildItem -LiteralPath $modded -Force | Where-Object { $steamFiles -notcontains $_.Name -and $_.Name -ne "data.win" -and $_.Name -ne "PFO.dll" } |
+        ForEach-Object { Copy-Item -Recurse -LiteralPath $_.FullName -Destination $win }
+    Copy-Item -LiteralPath $winKit -Destination (Join-Path $win "PFO.dll")
+    $out = Utmt @("load", (Join-Path $modded "data.win"), "-s", (Join-Path $Root "scripts\windows_patch.csx"), "-o", (Join-Path $win "data.win"), "-f") @{ PFO_SNAPSHOT_GML = (Join-Path $Root "scripts\pfo_snapshot.gml") }
+    $out | Where-Object { $_ -match "^(extension|save folder|lobby menu|screen|snapshots|runtime sprites|FAILED)" } | ForEach-Object { Write-Host "   $_" }
+    $patched = ($out -match "^windows patch: OK") -and ($out -match "^save folder: game name ufo50 -> ufo50_online") -and (Test-Path (Join-Path $win "data.win"))
+    $steamLeft = $steamFiles | Where-Object { Test-Path (Join-Path $win $_) }
+    if (-not $patched -or $steamLeft) {
+        Remove-Item -Force (Join-Path $win "data.win") -ErrorAction SilentlyContinue
+        Die "the Windows version couldn't be put together (the game data patch didn't go in whole)"
+    }
+    Write-Host ""
+    Write-Host "Done: $win" -ForegroundColor Green
+    Write-Host "Start ufo50.exe in that folder (F1 opens the online menu). It contains your copy of the game: keep it to yourself."
+    Write-Host "Its saves are in %LOCALAPPDATA%\ufo50_online. To bring your Steam saves along, copy save*.ufo and"
+    Write-Host "account.ufo there from %LOCALAPPDATA%\ufo50 (copy, don't move: the Steam game keeps its own)."
+    exit 0
+}
+
 # ---- 4. game data: Android patches, and the overlay's font and icons from your copy ---------
 Say "Patching the game for Android (a few minutes)"
 $game = Join-Path $Work "game"
@@ -149,6 +193,7 @@ $apk = Join-Path $Work "ufo50-online.apk"
 $out = Utmt @("load", (Join-Path $game "data.win"), "-s", (Join-Path $Root "scripts\pack_apk.csx")) @{
     RUNNER_APK = $kit; GAME_DIR = $game; OUT_APK = $apk; KEY_FILE = (Join-Path $Work "keys\ufo50-online-key.pfx") }
 $out | Where-Object { $_ -match "^APK" } | ForEach-Object { Write-Host "   $_" }
+if (-not (Test-Path $apk) -or (Get-Item $apk).Length -lt 100MB) { Die "the APK wasn't made (see the lines above)" }
 Write-Host ""
 Write-Host "Done: $apk" -ForegroundColor Green
 Write-Host "It contains your copy of the game: keep it to yourself."
@@ -160,4 +205,5 @@ if ($Install) {
     if (-not $adb) { $adb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe" }
     if (-not (Test-Path $adb)) { Die "adb not found: copy the APK to the phone instead, or install Android platform-tools" }
     & $adb install -r $apk
+    if ($LASTEXITCODE -ne 0) { Die "adb couldn't install the APK (is the phone connected with USB debugging on? An app of the same name from another build must be uninstalled first)" }
 }

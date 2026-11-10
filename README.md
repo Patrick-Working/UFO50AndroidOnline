@@ -1,11 +1,14 @@
 # UFO 50 Android Online: PFO 50 + MultiMadnessMod
 
-**v0.3.1** · Build your own Android version of **UFO 50** from your own Steam copy. It includes
+**v0.4.0** · Build your own Android version of **UFO 50** from your own Steam copy. It includes
 online multiplayer from **PFO 50**, 4+ players in many games from **MultiMadnessMod**, touch
-controls made for the game, and **save states**, in single player and online.
+controls made for the game, and **save states**, in single player and online. Since v0.4.0 the same
+build also makes a **Windows version** that plays online with the phones.
 
 ![Velgress co-op online: the host's phone and the joiner's phone](docs/screenshots/online_coop.png)
-*The same co-op game on two phones, connected online (the LAN tag under each player chip).*
+*The same co-op game on two phones, connected online. The picture is from v0.2, which showed the
+connection (here LAN) as a tag under each player chip. Since v0.3 the session pill after the chips
+says how you're connected.*
 
 This repository contains no part of UFO 50. The build reads the game from your own Steam
 installation, downloads the mods and tools from their authors' pages, and makes an APK only you
@@ -18,8 +21,26 @@ UFO 50 runs on Android's GameMaker runner. The fork rebuilds the runner for UFO 
 the mods, the touch overlay and online play.
 
 **Quick start:** install UFO 50 from Steam, download this repository
-([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.3.1.zip)), unzip
+([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.4.0.zip)), unzip
 it, and double-click **`build.bat`**. See [Quick build](#quick-build).
+
+## What's new in v0.4.0
+
+- **A Windows version.** `build.bat -Windows` makes a second game folder beside your Steam
+  installation: UFO 50 with this build's online play, save states and rewind, for a PC. It joins the
+  same lobbies as the phones (your network, oldkid.net rooms, the relay) with the same invite codes
+  and online saves. It never talks to Steam and keeps its own saves, so your Steam game and its
+  saves are left alone. See [Windows version](#windows-version).
+- **Everyone in a lobby needs the same version.** v0.4.0 and earlier versions can't join each
+  other's lobbies any more (a match between them would go out of step), so update every device.
+- **Online fixes.** A dropped player who has no player in the current game (a third player watching
+  a 2-player game) is waited for like anyone else, instead of being left behind for good.
+  Reconnecting after loading a save from another match no longer stalls for half a minute over the
+  relay. A load that restarts the match starts on every device as soon as one device starts it, so
+  none is left in the old match.
+- **Overlay fixes.** A tap that closes a box no longer presses the control under it; a vote takes
+  your first answer; seats P5 to P8 have colours.
+- Many smaller fixes from a review of the whole code: see [CHANGELOG.md](CHANGELOG.md).
 
 ## What's new in v0.3.1
 
@@ -64,8 +85,8 @@ The full list is in [CHANGELOG.md](CHANGELOG.md). How save states, rewind and re
 
 | | |
 |---|---|
-| ![Lobby browser with a lobby found](docs/screenshots/lobby_browser.png) | ![In the lobby, both players listed, LAN tag](docs/screenshots/lobby_joined.png) |
-| **Online lobby list**: lobbies on your network and on the internet, plus HOST PUBLIC / HOST PRIVATE / JOIN BY CODE | **In the lobby**: both players, and how you're connected (here LAN) |
+| ![Lobby browser with a lobby found](docs/screenshots/lobby_browser.png) | ![In the lobby, both players listed](docs/screenshots/lobby_joined.png) |
+| **Online lobby list**: lobbies on your network and on the internet, plus HOST PUBLIC / HOST PRIVATE / JOIN BY CODE | **In the lobby**: both players are listed |
 | ![Players panel](docs/screenshots/players_panel.png) | ![Layout editor](docs/screenshots/layout_editor.png) |
 | **Players panel**: touch and each gamepad to P1-P4, your name, join code, UPnP, hot seat | **Layout editor**: move, resize and hide controls, opacity, 4-way / 8-way d-pad |
 | ![Save states](docs/screenshots/save_states.png) | ![Loading a save online](docs/screenshots/online_load_vote.png) |
@@ -75,12 +96,16 @@ The full list is in [CHANGELOG.md](CHANGELOG.md). How save states, rewind and re
 | ![Waiting for a dropped player](docs/screenshots/waiting_for_player.png) | ![Rejoining a match](docs/screenshots/rejoin.png) |
 | **A dropped player**: everyone waits, with a countdown, until they're back | **Rejoining**: reopen the app and tap REJOIN to catch up with the match |
 
+The first four pictures (lobby list, lobby, players panel, layout editor) are from v0.2. The overlay
+has changed since: the connection (LAN, DIRECT or RELAY) is no longer a tag under the player chip,
+it shows in the session pill after the chips. See *Overlay* in [CHANGELOG.md](CHANGELOG.md).
+
 ## Features
 
 **Online multiplayer (PFO 50)**
-- Play UFO 50's multiplayer games with people on other phones running this build, in PFO 50's own
-  lobby. Players on the same network are found automatically, and anyone else connects over the
-  internet.
+- Play UFO 50's multiplayer games with people on other phones running this build (or PCs running
+  its [Windows version](#windows-version)), in PFO 50's own lobby. Players on the same network are
+  found automatically, and anyone else connects over the internet.
 - The lobby menu has **HOST PUBLIC**, **HOST PRIVATE** and **JOIN BY CODE**. A private lobby gets a
   6-character code.
   - In the lobby, **SHARE CODE** opens a box with SHARE (Android's share sheet), COPY and CLOSE.
@@ -148,12 +173,18 @@ The full list is in [CHANGELOG.md](CHANGELOG.md). How save states, rewind and re
   the match carries on from there. A decline, or no answer, cancels it for everyone.
 - Saves from an earlier match load too, if it had the same number of players: your phone sends the
   save to the others first, and everyone restarts the match from it.
+- In a match with a player whose device has no snapshots (a Windows game with another `ufo50.exe`
+  than the build was made for) every load works that way: everyone replays the match from the save
+  and connects again. It takes a few seconds per minute of the save's match instead of about one
+  second.
 - Players watching without a seat can't save or vote.
 
 **Drops and rejoining**
 - When a player's connection drops, the match freezes for everyone with an orange banner:
   **WAITING FOR P2 - 1:26**. The phones keep trying to reconnect, and when they do, play carries on
   where it stopped (**P2 IS BACK**). After 90 seconds the match ends as before.
+- That goes for a player who has no player in the current game too (the third player in a 2-player
+  game). If they aren't back after 90 seconds, the match carries on without them.
 - If a player's app was closed or crashed, reopening it offers **REJOIN YOUR MATCH?**. REJOIN
   takes their old place: another player sends the match so far, their phone replays it in a couple
   of seconds and joins back in. It works over the relay too.
@@ -199,7 +230,7 @@ folder, so other games can use it too.
 You need **Windows 10 or 11** and **UFO 50 1.9.5 from Steam**. Nothing else to install.
 
 1. Download this repository
-   ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.3.1.zip)) and
+   ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.4.0.zip)) and
    unzip it anywhere.
 2. Double-click **`build.bat`**. It finds UFO 50 in your Steam library and checks the version, then
    downloads the tools and mods into `work\`, each checked against a fixed checksum.
@@ -224,7 +255,7 @@ Android only installs an update over an existing install when it's signed with t
 overlay's font and button icons from your copy of the game (`scripts/export_overlay_art.csx`).
 Then it packs the game into the **runner kit** and signs the result (`scripts/pack_apk.csx`).
 
-The runner kit (`kit/ufo50-online-runner-v0.3.1.apk`) is the part that's the same for everyone:
+The runner kit (`kit/ufo50-online-runner-v0.4.0.apk`) is the part that's the same for everyone:
 GameMaker's Android runner with the touch overlay, the online service and PFO 50's netcode, and no
 game data. The full build makes it from source.
 
@@ -243,8 +274,13 @@ does the quick build with it. It runs in Git Bash and needs:
 ```bash
 bash build.sh --check     # is everything found?
 bash build.sh             # build the runner from source, then the APK
-bash build.sh --kit       # build only the runner kit (work/kit/), the file the quick build uses
+bash build.sh --kit       # build only the runner kit, into work/kit/
 ```
+
+The quick build does not look in `work/kit/`. It uses the kit in `kit/`, and downloads that file
+from the version's tag if the one in `kit/` is missing or has another checksum. To make the quick
+build use a kit you built: copy it to `kit/` and put its SHA-256 (`build.sh --kit` prints it) in the
+`Kit` line of `build.ps1`.
 
 Paths it can't find go in `local.env` (copy `local.env.example`). The full build fetches the
 [PFO 50 source](https://github.com/Blaizer/PFO-50), [ENet](https://github.com/lsalzman/enet) and
@@ -252,12 +288,46 @@ okplay's netcode, all at pinned versions. It builds `libPFO.so` with the NDK and
 (`android/gm-project`) with GameMaker's Igor, using your GameMaker account the same way the IDE
 does when you export a game.
 
-`scripts/make_icon.py` redraws the app icon (Python 3 + Pillow); you only need it to change the
-icon.
+`scripts/make_icon.py` redraws the app icon into `android/gm-project/icons/` (Python 3 + Pillow;
+`--preview` also writes `work/icon_preview.png`). You only need it to change the icon.
+
+<a id="windows-version"></a>
+## Windows version
+
+```
+build.bat -Windows
+```
+
+makes `work\windows\UFO 50 Online`: your modded copy of the game with this build's netcode
+(`PFO.dll`) in place of PFO 50's Steam networking. Run the usual `build.bat` once first if you
+never have (it makes the modded copy). Start `ufo50.exe` in that folder.
+
+- It plays with the phones and with other PCs running it: HOST PUBLIC, HOST PRIVATE, JOIN BY CODE
+  and the lobby list work as on Android.
+- **It never talks to Steam**: there is no Steam library in the folder, Steam doesn't need to be
+  running, and it can't join PFO 50 lobbies on Steam. It keeps its own saves in
+  `%LOCALAPPDATA%\ufo50_online`; the Steam game's saves (`%LOCALAPPDATA%\ufo50`) are never read or
+  written.
+- **F1**, or **both sticks pressed in** on a controller, opens its menu: what the touch overlay
+  does on a phone, made for a keyboard and a controller (seat and connection, invite code, SAVE,
+  the list of saves with their pictures, START SOLO PLAY and REWIND, auto save, name, UPnP). A load
+  another player asks for shows in a box with the save's picture: **F2** accepts, **F3** declines.
+- **Saves load from snapshots as on the phones** (about a second; in a match, on every device
+  within a few frames). They are made for the `ufo50.exe` of UFO 50 1.9.5: with another one the
+  game turns them off, replays instead (about 4 seconds per minute played on the test PC), and a
+  match with that player in it restarts from the save on every load.
+- **Use the same version on every device.** A lobby only takes players with its own version of the
+  build.
+- The folder contains your copy of the game, like the APK: **keep it to yourself.**
+
+The quick build takes `PFO.dll` from the **Windows kit** (`kit/ufo50-online-windows-v0.4.0.dll`,
+no game data). `bash build.sh --windows` compiles it instead, with
+[llvm-mingw](https://github.com/mstorsjo/llvm-mingw), which it downloads; it needs none of the
+Android tools. Everything else is in [docs/WINDOWS.md](docs/WINDOWS.md).
 
 ## Versions
 
-This release (**v0.3.1**) is made for exactly these versions. The patches are written against them,
+This release (**v0.4.0**) is made for exactly these versions. The patches are written against them,
 and the build checks the checksums.
 
 | part | version | from |
@@ -271,6 +341,7 @@ and the build checks the checksums.
 | ENet | **1.3.18** + okplay's relay hooks | [lsalzman/enet](https://github.com/lsalzman/enet) |
 | okplay oknative | `d536388` | [Patrick-Working/okplay](https://github.com/Patrick-Working/okplay/tree/main/oknative) |
 | Android NDK / build-tools / platform | 27.2.12479018 / 35.0.0 / android-35 (full build only) | Google |
+| llvm-mingw | **20261104** (ucrt, x86_64; full Windows build only) | [mstorsjo/llvm-mingw](https://github.com/mstorsjo/llvm-mingw) |
 | App | package `com.unofficial.ufo50`, minimum Android 7.0 (API 24), target API 35 | |
 
 The okplay room server is `https://oldkid.net/aoe2net/okplay.php`. UFO 50 lobbies use their own
@@ -288,19 +359,24 @@ app id and wire number there, so they never mix with other okplay games.
 - **Hot seat**: tap the player chip and turn HOT SEAT on, then pass the phone around.
 - **Online**: choose *Online* from the main menu.
   - HOST PUBLIC to be listed, HOST PRIVATE to get a code, JOIN BY CODE to enter one.
-  - Everyone needs this same build, with the same game version and the same mods.
+  - Everyone needs the same version of this build (Android or Windows), with the same game version
+    and the same mods.
 - **Names**: players panel > NAME. Change it while you're not in a lobby.
 - **Save states**: the disk icon (top right). In single player, START SOLO PLAY first. Online,
   SAVE NOW saves for everyone and LOAD asks the others.
 - **Rewind**: the save list's REWIND buttons, in single player (after START SOLO PLAY).
 - **Someone dropped**: wait for them (the banner counts down). If your app closed, reopen it and
-  tap REJOIN within about a minute and a half.
+  tap REJOIN. The others wait 90 seconds for you. The app offers REJOIN for 100 seconds after it
+  was last running in the match.
 
 ## Troubleshooting
 
 - **The lobby list doesn't show my friend's game.** Give the search a few seconds; internet rooms
   can take a moment on mobile data. Check that you both have the same build. A private lobby only
   shows up with its code.
+- **The lobby shows, but joining it fails every time.** Check that both devices have the same
+  version of this build: since v0.4.0 a lobby refuses other versions (the log says "another
+  version of the build").
 - **"Timed out attempting to join lobby".** Try again once. If it keeps happening, the host can
   turn on UPnP on their router. The relay should still connect you, just more slowly.
 - **Disconnected after switching apps.** Allow the app's notification (Android 13 and later ask).
@@ -332,14 +408,14 @@ app id and wire number there, so they never mix with other okplay games.
 
 | path | what |
 |---|---|
-| `build.bat`, `build.ps1` | the quick build |
-| `build.sh` | the full build |
-| `kit/` | the runner kit the quick build uses (made by `build.sh --kit`; no game data) |
+| `build.bat`, `build.ps1` | the quick build (`-Windows` for the Windows version) |
+| `build.sh` | the full build (`--windows` for the Windows version) |
+| `kit/` | the runner kit and the Windows kit the quick build uses (made by `build.sh --kit` and `build.sh --windows --kit` in `work/kit/`, then copied here; no game data) |
 | `android/gm-project/` | the GameMaker runner project: the PFO extension with the touch overlay (`PFO_Android.java`), the online service, and the app icon (original art) |
-| `pfo/` | the Android port of PFO 50: a patch to its `dllmain.cpp`, plus the Android layer in `android/` (Steam lobbies and networking over ENet, the bridge to the GameMaker runner, the hot seat and pad builtins, and save states, online saves and rejoining in `savestate.inc`) |
-| `scripts/` | the game patch (with `pfo_snapshot.gml`, the game-side half of save states), the overlay art export, the APK packer and signer (UndertaleModTool scripts), and the native build |
-| `docs/` | [SAVE_STATES.md](docs/SAVE_STATES.md) (how save states, rewind, online saves and rejoining work), [TESTING.md](docs/TESTING.md) (how it was tested), and the screenshots on this page |
-| `tests/` | the scripts that test save states, rewind and online play on BlueStacks (see TESTING.md) |
+| `pfo/` | the port of PFO 50: a patch to its `dllmain.cpp`, plus the layer both versions share in `android/` (Steam lobbies and networking over ENet, the bridge to the GameMaker runner, the hot seat and pad builtins, and save states, online saves and rejoining in `savestate.inc`), and what only Windows needs in `win/` (its bridge to the Windows runner, the F1 menu, small stand-ins for the Android calls) |
+| `scripts/` | the game patches (`android_patch.csx` with `pfo_snapshot.gml`, the game-side half of save states; `windows_patch.csx`), the overlay art export, the APK packer and signer (UndertaleModTool scripts), and the native builds (`build_pfo_android.sh`, `build_pfo_windows.sh`) |
+| `docs/` | [SAVE_STATES.md](docs/SAVE_STATES.md) (how save states, rewind, online saves and rejoining work), [WINDOWS.md](docs/WINDOWS.md) (the Windows version), [TESTING.md](docs/TESTING.md) (how it was tested), and the screenshots on this page |
+| `tests/` | the scripts that test save states, rewind and online play on BlueStacks, and in `tests/win/` the Windows version, alone and against BlueStacks (see TESTING.md) |
 | `CHANGELOG.md` | what changed in each version |
 
 Nothing from the game is stored here: no game files, art or music. The only game code is the short
@@ -348,11 +424,16 @@ running.
 
 ## Tested on
 
-v0.3.1 was tested on **BlueStacks 5** (Android 9, x86_64), two instances side by side for online
-play: every game's save states (150 of 150 runs), every online scenario (save, load, declined load,
-drop, rejoin, loading an earlier match's save), and rewind. It hasn't been tested on a real phone,
-on arm64, or with three or more players online yet. If you try it on a phone, please open an issue
-with how it went. Details: [docs/TESTING.md](docs/TESTING.md).
+v0.4.0 was tested on **BlueStacks 5** (Android 9, x86_64), two instances side by side for online
+play, and on **Windows 10** for the Windows version: two copies of the game in one match, and one
+copy in a match with a BlueStacks instance, hosting each way. Every online scenario passed on the
+final sources (save, load, declined load, drop, rejoin, loading an earlier match's save, a match
+without snapshots, a join between two versions being refused), and so did rewind. On Windows every
+game's save states passed (50 of 50) and the menu was walked through by keyboard and by a stand-in
+for a controller. The Android sweep of every game's save states (150 of 150 runs) is from v0.3.1
+and wasn't repeated. It hasn't been tested on a real phone, on arm64, on a second PC, with a real
+controller on Windows, or with three or more players online yet. If you try it on a phone, please open an issue with how it went. Details:
+[docs/TESTING.md](docs/TESTING.md).
 
 ## Credits
 
@@ -371,6 +452,8 @@ with how it went. Details: [docs/TESTING.md](docs/TESTING.md).
 - **[okplay](https://github.com/Patrick-Working/okplay)** and the [oldkid.net](https://oldkid.net)
   room server: the lobby list, hole punching, UPnP and the relay.
 - **GameMaker** by YoYo Games: the Android runner.
+- **[llvm-mingw](https://github.com/mstorsjo/llvm-mingw)** by Martin Storsjö: compiles the Windows
+  version's `PFO.dll`.
 - Public STUN servers from Cloudflare and Google.
 
 ## Licence
