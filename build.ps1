@@ -116,12 +116,12 @@ $localKit = Join-Path $Root ("kit\" + $Pins.Kit[2])   # the repository zip carri
 $localWinKit = Join-Path $Root ("kit\" + $Pins.WinKit[2])
 if ($Windows) {
     if ($WinDll) { $winKit = (Resolve-Path $WinDll).Path; Ok "PFO.dll: $winKit" }
-    elseif ((Test-Path $localWinKit) -and ((Sha $localWinKit) -eq $Pins.WinKit[1])) { $winKit = $localWinKit; Ok "Windows kit v$Version" }
-    else { $winKit = Fetch $Pins.WinKit; Ok "Windows kit v$Version (downloaded)" }
+    elseif ((Test-Path $localWinKit) -and ((Sha $localWinKit) -eq $Pins.WinKit[1])) { $winKit = $localWinKit; Ok "Windows kit v0.4.0" }
+    else { $winKit = Fetch $Pins.WinKit; Ok "Windows kit v0.4.0 (downloaded)" }
 }
 elseif ($Runner) { $kit = (Resolve-Path $Runner).Path; Ok "runner: $kit" }
-elseif ((Test-Path $localKit) -and ((Sha $localKit) -eq $Pins.Kit[1])) { $kit = $localKit; Ok "runner kit v$Version" }
-else { $kit = Fetch $Pins.Kit; Ok "runner kit v$Version (downloaded)" }
+elseif ((Test-Path $localKit) -and ((Sha $localKit) -eq $Pins.Kit[1])) { $kit = $localKit; Ok "runner kit v0.4.0" }
+else { $kit = Fetch $Pins.Kit; Ok "runner kit v0.4.0 (downloaded)" }
 Ok "UndertaleModTool 0.9.2.0, UFO 50 Mod Loader 2.3.0, PFO 50 0.10.0, MultiMadnessMod 1.30"
 
 # ---- 3. mods: the UFO 50 Mod Loader makes a modded copy of the game -------------------------

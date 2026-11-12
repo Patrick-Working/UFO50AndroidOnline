@@ -1,6 +1,6 @@
 # UFO 50 Android Online: PFO 50 + MultiMadnessMod
 
-**v0.4.0** · Build your own Android version of **UFO 50** from your own Steam copy. It includes
+**v0.4.1** · Build your own Android version of **UFO 50** from your own Steam copy. It includes
 online multiplayer from **PFO 50**, 4+ players in many games from **MultiMadnessMod**, touch
 controls made for the game, and **save states**, in single player and online. Since v0.4.0 the same
 build also makes a **Windows version** that plays online with the phones.
@@ -27,7 +27,7 @@ the mods, the touch overlay and online play.
 > find, good or bad. What was tested and what wasn't: [docs/TESTING.md](docs/TESTING.md).
 
 **Quick start:** install UFO 50 from Steam, download this repository
-([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.4.0.zip)), unzip
+([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.4.1.zip)), unzip
 it, and double-click **`build-android.bat`** for the APK or **`build-windows.bat`** for the Windows
 version. See [Quick build](#quick-build).
 
@@ -246,7 +246,7 @@ folder, so other games can use it too.
 You need **Windows 10 or 11** and **UFO 50 1.9.5 from Steam**. Nothing else to install.
 
 1. Download this repository
-   ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.4.0.zip)) and
+   ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.4.1.zip)) and
    unzip it anywhere.
 2. Double-click **`build-android.bat`** (or `build.bat`, which is the same). It finds UFO 50 in your Steam library and checks the version, then
    downloads the tools and mods into `work\`, each checked against a fixed checksum.
@@ -342,7 +342,7 @@ Android tools. Everything else is in [docs/WINDOWS.md](docs/WINDOWS.md).
 
 ## Versions
 
-This release (**v0.4.0**) is made for exactly these versions. The patches are written against them,
+This release (**v0.4.1**) is made for exactly these versions. The patches are written against them,
 and the build checks the checksums.
 
 | part | version | from |

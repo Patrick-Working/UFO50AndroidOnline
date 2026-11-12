@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.4.1 (2026-11-11)
+
+A fix for the quick build. The game side is unchanged: the runner kit and the Windows kit are
+v0.4.0's, and v0.4.1 and v0.4.0 play together.
 
 - **The quick build no longer needs a click.** It runs the UFO 50 Mod Loader without a window to
   install the mods (the loader's window still opens if that fails, or with `-ManualLoader`).
