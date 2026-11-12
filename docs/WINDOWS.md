@@ -30,12 +30,10 @@ what happened; it holds network addresses, so look through it before you post it
 
 You need Windows 10 or 11 and UFO 50 1.9.5 from Steam.
 
-**Quick build** (nothing to install): double-click `build.bat` once the usual way if you never have
-(the first run opens the UFO 50 Mod Loader, see the README), then run
-
-```
-build.bat -Windows
-```
+**Quick build** (nothing to install): double-click `build-windows.bat` (or run
+`build.bat -Windows`). The first run installs the mods with the UFO 50 Mod Loader, without a window (if
+its window does open, click Install, wait until it says it's done, and only then close it; see the
+README).
 
 It makes `work\windows\UFO 50 Online`. Start `ufo50.exe` in it. The quick build takes the
 netcode from the **Windows kit** (`kit/ufo50-online-windows-v<version>.dll`: PFO 50 with this

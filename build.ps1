@@ -9,7 +9,11 @@
 #                    with the same online play, save states and rewind, which plays with the phones.
 #                    It never talks to Steam and keeps its saves apart from the Steam game's.
 #   -WinDll <dll>    with -Windows: use this PFO.dll instead of the published one (the full build passes its own)
-param([switch]$Install, [string]$Runner = "", [string]$GamePath = "", [string]$ModdedDir = "", [switch]$Windows, [string]$WinDll = "")
+#   -ManualLoader    open the UFO 50 Mod Loader's window and click Install yourself, instead of the
+#                    build running it without a window
+[CmdletBinding(PositionalBinding = $false)]
+param([switch]$Install, [string]$Runner = "", [string]$GamePath = "", [string]$ModdedDir = "", [switch]$Windows, [string]$WinDll = "", [switch]$ManualLoader,
+      [Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"   # Invoke-WebRequest is far faster without the progress bar
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -76,6 +80,9 @@ function Utmt([string[]]$CliArgs, [hashtable]$Env = @{}) {
 
 $Version = (Get-Content (Join-Path $Root "VERSION") -ErrorAction SilentlyContinue | Select-Object -First 1)
 Write-Host "UFO 50 Android Online v$Version - quick build$(if ($Windows) { ' of the Windows version' })" -ForegroundColor Cyan
+if ($Rest) { Die "didn't understand: $($Rest -join ' '). A folder name with spaces in it needs quotes around it, like -GamePath ""D:\My Games\UFO 50""" }
+# PowerShell reads [ and ] in a path as a pattern, and half of what this script does would miss its files
+foreach ($d in @($Root, $GamePath, $ModdedDir)) { if ($d -match '[\[\]]') { Die "the folder $d has [ or ] in its name, which this build can't work with. Move it to a folder without them and run this again." } }
 if ($Windows -and $Install) { Die "-Install is for the Android build (the Windows build is a folder: work\windows)" }
 if ($Windows -and $Runner) { Die "-Runner is for the Android build (with -Windows, a PFO.dll of your own goes in -WinDll)" }
 if ($WinDll -and -not $Windows) { Die "-WinDll goes with -Windows" }
@@ -120,8 +127,86 @@ Ok "UndertaleModTool 0.9.2.0, UFO 50 Mod Loader 2.3.0, PFO 50 0.10.0, MultiMadne
 # ---- 3. mods: the UFO 50 Mod Loader makes a modded copy of the game -------------------------
 $loader = Join-Path $Work "modloader"
 $modded = if ($ModdedDir) { $ModdedDir } else { Join-Path $loader "workspace\UFO 50 Modded Copy" }
-if (-not (Test-Path (Join-Path $modded "PFO.dll"))) {
+# The Mod Loader copies PFO.dll in before it patches data.win, so a copy whose Install was stopped
+# or failed has the DLL and the game's own data.win: the DLL alone doesn't say the mods are in.
+function ModdedOk {
+    $d = Join-Path $modded "data.win"
+    (Test-Path (Join-Path $modded "PFO.dll")) -and (Test-Path $d) -and ((Sha $d) -ne $Pins.GameSha)
+}
+
+# The Mod Loader can install with no window (--headless), but 2.3.0 stops with an error before it
+# starts: that mode never loads the loader's description of the game (Game.Load). A .NET startup
+# hook, compiled here from the few lines below with the compiler Windows carries, makes that one
+# call; the loader itself is run as downloaded. Returns $false if anything goes wrong, and the
+# window opens instead.
+$hookSource = @'
+using System;
+using System.Reflection;
+internal class StartupHook
+{
+    public static void Initialize()
+    {
+        if (Array.IndexOf(Environment.GetCommandLineArgs(), "--headless") < 0) return;
+        Assembly asm = Assembly.Load(new AssemblyName("UFO 50 Mod Loader"));
+        asm.GetType("UFO_50_Mod_Loader.Models.Game", true).GetMethod("Load", BindingFlags.Public | BindingFlags.Static).Invoke(null, null);
+    }
+}
+'@
+function LoaderHeadless {
+    $log = Join-Path $loader "headless.log"
+    try {
+        $ws = Join-Path $loader "workspace"
+        # the loader patches its own copy of the game's files (its window makes this on the first start)
+        $vanilla = Join-Path $ws "UFO 50 Vanilla Copy"
+        $vd = Join-Path $vanilla "data.win"
+        if (-not ((Test-Path $vd) -and ((Sha $vd) -eq $Pins.GameSha) -and (Test-Path (Join-Path $vanilla "ufo50.exe")))) {
+            $list = (Get-Content -Raw (Join-Path $loader "current\Games\UFO 50\hashes.json") | ConvertFrom-Json).($Pins.GameVersion)
+            if (-not $list) { throw "the Mod Loader has no file list for UFO 50 $($Pins.GameVersion)" }
+            if (Test-Path $vanilla) { Remove-Item -Recurse -Force $vanilla }
+            foreach ($n in $list.PSObject.Properties.Name) {
+                $src = Join-Path $GamePath $n
+                if (-not (Test-Path -LiteralPath $src)) { continue }
+                $dst = Join-Path $vanilla $n
+                New-Item -ItemType Directory -Force (Split-Path $dst) | Out-Null
+                Copy-Item -LiteralPath $src -Destination $dst
+            }
+            if ((Sha $vd) -ne $Pins.GameSha) { throw "copying the game's files failed" }
+        }
+        # OverwriteMode would make the loader write into the game's own folder: always off here
+        [ordered]@{ Version = "2.3.0"; GamePath = $GamePath; FirstTimeRun = $false; OverwriteMode = $false
+                    CopiedVanillaVersion = $Pins.GameVersion; EnabledMods = @("MultiMadnessMod", "PFO 50")
+                    CheckForUpdatesAutomatically = $false } |
+            ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $ws "settings.json")
+        $hook = Join-Path $loader "headless_hook.dll"
+        if (Test-Path $hook) { Remove-Item -Force $hook }   # made afresh each time: it takes a second
+        Add-Type -TypeDefinition $hookSource -OutputAssembly $hook -OutputType Library
+        $mods = Join-Path $loader "UFO 50 mods"
+        $cli = "--headless --mod ""$mods\MultiMadnessMod"" --mod ""$mods\PFO 50"" --ignore-warnings"
+        $env:DOTNET_STARTUP_HOOKS = $hook
+        try {
+            $p = Start-Process -FilePath (Join-Path $loader "current\UFO 50 Mod Loader.exe") -ArgumentList $cli `
+                -WorkingDirectory (Join-Path $loader "current") -WindowStyle Hidden -PassThru `
+                -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+            $null = $p.Handle   # without this, ExitCode is empty afterwards
+            if (-not $p.WaitForExit(20 * 60 * 1000)) { $p.Kill(); throw "the Mod Loader didn't finish in 20 minutes" }
+            $code = $p.ExitCode
+        }
+        finally { Remove-Item env:DOTNET_STARTUP_HOOKS }
+        if ($code -ne 0) { throw "the Mod Loader ended with code $code" }
+        if (-not (ModdedOk)) { throw "the Mod Loader said it was done, but the mods aren't in the copy" }
+        return $true
+    }
+    catch {
+        Write-Host "   installing without the window didn't work: $_" -ForegroundColor Yellow
+        foreach ($f in @($log, "$log.err")) { if (Test-Path $f) { Get-Content $f -Tail 5 | ForEach-Object { Write-Host "     $_" } } }
+        return $false
+    }
+}
+$notDone = "The mods aren't in the modded copy at $modded (its data.win is missing or still the game's own). In the Mod Loader, tick both mods, click Install, and close it only after it says it's done. Then run this again."
+if (-not (ModdedOk)) {
+    if ($ModdedDir) { Die $notDone }
     Say "Applying the mods with the UFO 50 Mod Loader"
+    if (Test-Path $modded) { Remove-Item -Recurse -Force $modded }   # a copy left half done by an earlier run
     if (-not (Test-Path (Join-Path $loader "current\UFO 50 Mod Loader.exe"))) { Unzip $loaderZip $loader }
     $mods = Join-Path $loader "UFO 50 mods"
     New-Item -ItemType Directory -Force $mods, (Join-Path $loader "workspace") | Out-Null
@@ -133,18 +218,22 @@ if (-not (Test-Path (Join-Path $modded "PFO.dll"))) {
     if (Test-Path "$mods\MultiMadnessMod") { Remove-Item -Recurse -Force "$mods\MultiMadnessMod" }
     Move-Item "$tmp\MultiMadnessMod" "$mods\MultiMadnessMod"
     Remove-Item -Recurse -Force $tmp
-    $settings = Join-Path $loader "workspace\settings.json"
-    if (-not (Test-Path $settings)) {
-        @{ GamePath = $GamePath; EnabledMods = @("MultiMadnessMod", "PFO 50"); CheckForUpdatesAutomatically = $false } |
-            ConvertTo-Json | Set-Content -Encoding UTF8 $settings
+    Write-Host "   installing PFO 50 and MultiMadnessMod into a copy of the game (a minute or two)"
+    if ($ManualLoader -or -not (LoaderHeadless)) {
+        if (Test-Path $modded) { Remove-Item -Recurse -Force $modded }
+        $settings = Join-Path $loader "workspace\settings.json"
+        if (-not (Test-Path $settings)) {
+            @{ GamePath = $GamePath; EnabledMods = @("MultiMadnessMod", "PFO 50"); CheckForUpdatesAutomatically = $false } |
+                ConvertTo-Json | Set-Content -Encoding UTF8 $settings
+        }
+        Write-Host ""
+        Write-Host "   The UFO 50 Mod Loader is opening. In it:" -ForegroundColor Yellow
+        Write-Host "     1. If it asks for the game folder, choose:  $GamePath"
+        Write-Host "     2. Make sure ""PFO 50"" and ""MultiMadnessMod"" are ticked."
+        Write-Host "     3. Click Install and wait until it says it's done. Then close the Mod Loader."
+        Start-Process -FilePath (Join-Path $loader "current\UFO 50 Mod Loader.exe") -WorkingDirectory (Join-Path $loader "current") -Wait
+        if (-not (ModdedOk)) { Die $notDone }
     }
-    Write-Host ""
-    Write-Host "   The UFO 50 Mod Loader is opening. In it:" -ForegroundColor Yellow
-    Write-Host "     1. If it asks for the game folder, choose:  $GamePath"
-    Write-Host "     2. Make sure ""PFO 50"" and ""MultiMadnessMod"" are ticked."
-    Write-Host "     3. Click Install and wait until it says it's done. Then close the Mod Loader."
-    Start-Process -FilePath (Join-Path $loader "current\UFO 50 Mod Loader.exe") -WorkingDirectory (Join-Path $loader "current") -Wait
-    if (-not (Test-Path (Join-Path $modded "PFO.dll"))) { Die "no modded copy at $modded (did Install finish with both mods ticked?)" }
 }
 Ok "modded copy: $modded"
 

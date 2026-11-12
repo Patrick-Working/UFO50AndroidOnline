@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **The quick build no longer needs a click.** It runs the UFO 50 Mod Loader without a window to
+  install the mods (the loader's window still opens if that fails, or with `-ManualLoader`).
+- A modded copy whose Install was stopped half way is noticed and made again, instead of failing
+  later with "PFO extension not found".
+- `build-android.bat` and `build-windows.bat`: one double-click each.
+- The build says so plainly when a folder name with spaces was given without quotes, and when its
+  own folder has `[` or `]` in its name (which it can't work in).
+
 ## v0.4.0 (2026-11-10)
 
 ### A Windows version

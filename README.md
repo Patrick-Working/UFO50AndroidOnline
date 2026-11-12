@@ -28,11 +28,12 @@ the mods, the touch overlay and online play.
 
 **Quick start:** install UFO 50 from Steam, download this repository
 ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.4.0.zip)), unzip
-it, and double-click **`build.bat`**. See [Quick build](#quick-build).
+it, and double-click **`build-android.bat`** for the APK or **`build-windows.bat`** for the Windows
+version. See [Quick build](#quick-build).
 
 ## What's new in v0.4.0
 
-- **A Windows version.** `build.bat -Windows` makes a second game folder beside your Steam
+- **A Windows version.** `build-windows.bat` makes a second game folder beside your Steam
   installation: UFO 50 with this build's online play, save states and rewind, for a PC. It joins the
   same lobbies as the phones (your network, oldkid.net rooms, the relay) with the same invite codes
   and online saves. It never talks to Steam and keeps its own saves, so your Steam game and its
@@ -247,12 +248,14 @@ You need **Windows 10 or 11** and **UFO 50 1.9.5 from Steam**. Nothing else to i
 1. Download this repository
    ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.4.0.zip)) and
    unzip it anywhere.
-2. Double-click **`build.bat`**. It finds UFO 50 in your Steam library and checks the version, then
+2. Double-click **`build-android.bat`** (or `build.bat`, which is the same). It finds UFO 50 in your Steam library and checks the version, then
    downloads the tools and mods into `work\`, each checked against a fixed checksum.
-3. **The first time**, the UFO 50 Mod Loader opens with both mods in place. Click **Install**, wait
-   until it's done, and close it. It makes a modded copy of the game and leaves your Steam
-   installation alone. (The Mod Loader's own headless mode doesn't work yet in 2.3.0, hence the
-   click.)
+3. **The first time**, the build runs the UFO 50 Mod Loader without a window to install both mods
+   (a minute or two). It makes a modded copy of the game and leaves your Steam installation alone.
+   If that doesn't work on your PC, the Mod Loader's window opens instead with both mods in place:
+   click **Install**, wait until it says it's done, and only then close it. (`-ManualLoader` goes
+   straight to the window. The Mod Loader's headless mode has a bug in 2.3.0; the build works
+   around it with a small startup hook it compiles on your PC, and runs the loader as downloaded.)
 4. A few minutes later you get **`work\ufo50-online.apk`**.
 
 Copy the APK to the phone and open it. You may need to allow your file manager to install apps.
@@ -309,13 +312,10 @@ does when you export a game.
 <a id="windows-version"></a>
 ## Windows version
 
-```
-build.bat -Windows
-```
-
-makes `work\windows\UFO 50 Online`: your modded copy of the game with this build's netcode
-(`PFO.dll`) in place of PFO 50's Steam networking. Run the usual `build.bat` once first if you
-never have (it makes the modded copy). Start `ufo50.exe` in that folder.
+Double-click **`build-windows.bat`** (or run `build.bat -Windows`). It makes
+`work\windows\UFO 50 Online`: your modded copy of the game with this build's netcode
+(`PFO.dll`) in place of PFO 50's Steam networking. The first run installs the mods with the UFO 50 Mod Loader, as in
+step 3 of the [quick build](#quick-build). Start `ufo50.exe` in that folder.
 
 - It plays with the phones and with other PCs running it: HOST PUBLIC, HOST PRIVATE, JOIN BY CODE
   and the lobby list work as on Android.
@@ -423,7 +423,7 @@ app id and wire number there, so they never mix with other okplay games.
 
 | path | what |
 |---|---|
-| `build.bat`, `build.ps1` | the quick build (`-Windows` for the Windows version) |
+| `build-android.bat`, `build-windows.bat`, `build.bat`, `build.ps1` | the quick build (`build.bat` is the Android one; `-Windows` makes the Windows version) |
 | `build.sh` | the full build (`--windows` for the Windows version) |
 | `kit/` | the runner kit and the Windows kit the quick build uses (made by `build.sh --kit` and `build.sh --windows --kit` in `work/kit/`, then copied here; no game data) |
 | `android/gm-project/` | the GameMaker runner project: the PFO extension with the touch overlay (`PFO_Android.java`), the online service, and the app icon (original art) |
