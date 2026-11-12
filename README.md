@@ -268,6 +268,17 @@ With the phone connected over USB and USB debugging on, `build.bat -Install` ins
 The APK is signed with a key made for you on the first build (`work\keys\`). Keep that folder:
 Android only installs an update over an existing install when it's signed with the same key.
 
+**The plain game:** `build.bat -Vanilla` makes `work\ufo50-vanilla.apk`, your copy of the game as
+Steam has it on the Android runner and nothing else: no mods, no online play, no save states and
+no touch controls, so it needs a controller or a keyboard. Nothing is patched and no mods are
+downloaded. It is the same app as the online build, signed with the same key: installing one
+replaces the other and keeps the saves. (The game still asks Steam for things every frame and the
+runner notes each one in the Android log; that is harmless.)
+`build.bat -Vanilla -Windows` makes `work\windows\UFO 50 Vanilla`, a portable copy of the plain game
+that doesn't need Steam: no game file is changed, Steam's libraries are left out. Start
+`UFO 50 Portable.bat` in it and the saves stay inside the folder (`saves\`), so the whole folder can
+be moved to another PC. (Starting `ufo50.exe` itself uses the PC's save folder, the Steam game's.)
+
 **What the quick build does:** it patches the modded game for Android
 (`scripts/android_patch.csx`: hot seat, pad bindings, the lobby menu, Quit). It takes the
 overlay's font and button icons from your copy of the game (`scripts/export_overlay_art.csx`).

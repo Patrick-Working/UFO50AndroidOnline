@@ -9,10 +9,15 @@
 #                    with the same online play, save states and rewind, which plays with the phones.
 #                    It never talks to Steam and keeps its saves apart from the Steam game's.
 #   -WinDll <dll>    with -Windows: use this PFO.dll instead of the published one (the full build passes its own)
+#   -Vanilla         make an APK of the game as Steam has it (work\ufo50-vanilla.apk): no mods, no
+#                    online play, no save states, no touch controls (it needs a controller or a
+#                    keyboard). Only the Android runner from the kit is used; nothing is patched.
+#                    With -Windows: a portable copy of the game that doesn't need Steam
+#                    (work\windows\UFO 50 Vanilla), its saves kept inside its own folder.
 #   -ManualLoader    open the UFO 50 Mod Loader's window and click Install yourself, instead of the
 #                    build running it without a window
 [CmdletBinding(PositionalBinding = $false)]
-param([switch]$Install, [string]$Runner = "", [string]$GamePath = "", [string]$ModdedDir = "", [switch]$Windows, [string]$WinDll = "", [switch]$ManualLoader,
+param([switch]$Install, [string]$Runner = "", [string]$GamePath = "", [string]$ModdedDir = "", [switch]$Windows, [string]$WinDll = "", [switch]$ManualLoader, [switch]$Vanilla,
       [Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"   # Invoke-WebRequest is far faster without the progress bar
@@ -79,13 +84,15 @@ function Utmt([string[]]$CliArgs, [hashtable]$Env = @{}) {
 }
 
 $Version = (Get-Content (Join-Path $Root "VERSION") -ErrorAction SilentlyContinue | Select-Object -First 1)
-Write-Host "UFO 50 Android Online v$Version - quick build$(if ($Windows) { ' of the Windows version' })" -ForegroundColor Cyan
+Write-Host "UFO 50 Android Online v$Version - quick build$(if ($Windows) { ' of the Windows version' })$(if ($Vanilla) { ' of the vanilla game' })" -ForegroundColor Cyan
 if ($Rest) { Die "didn't understand: $($Rest -join ' '). A folder name with spaces in it needs quotes around it, like -GamePath ""D:\My Games\UFO 50""" }
 # PowerShell reads [ and ] in a path as a pattern, and half of what this script does would miss its files
 foreach ($d in @($Root, $GamePath, $ModdedDir)) { if ($d -match '[\[\]]') { Die "the folder $d has [ or ] in its name, which this build can't work with. Move it to a folder without them and run this again." } }
 if ($Windows -and $Install) { Die "-Install is for the Android build (the Windows build is a folder: work\windows)" }
 if ($Windows -and $Runner) { Die "-Runner is for the Android build (with -Windows, a PFO.dll of your own goes in -WinDll)" }
 if ($WinDll -and -not $Windows) { Die "-WinDll goes with -Windows" }
+if ($Vanilla -and $WinDll) { Die "-Vanilla uses none of this port's files, so -WinDll doesn't go with it" }
+if ($Vanilla -and ($ModdedDir -or $ManualLoader)) { Die "-Vanilla uses no mods, so -ModdedDir and -ManualLoader don't go with it" }
 
 # ---- 1. the game ----------------------------------------------------------------------------
 Say "Finding UFO 50"
@@ -103,15 +110,64 @@ if (-not $GamePath -or -not (Test-Path (Join-Path $GamePath "data.win"))) { Die 
 if ((Sha (Join-Path $GamePath "data.win")) -ne $Pins.GameSha) { Die "$GamePath has a different version of UFO 50. This build is made for $($Pins.GameVersion)." }
 Ok "UFO 50 $($Pins.GameVersion) ($GamePath)"
 
+# ---- VW. the vanilla game for Windows: a portable copy that doesn't need Steam ----------------
+# Your game folder without Steam's libraries (the game runs without them: its Steam calls find
+# nothing and it carries on), plus a .bat that starts it with its saves kept inside the folder.
+# No game file is changed.
+if ($Vanilla -and $Windows) {
+    Say "Copying the game"
+    $steamFiles = @("Steamworks_x64.dll", "steam_api64.dll", "steam_api.dll", "steam_appid.txt")
+    $bat = "UFO 50 Portable.bat"
+    $win = Join-Path $Work "windows\UFO 50 Vanilla"
+    if (Get-Process -Name ufo50 -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($win, [StringComparison]::OrdinalIgnoreCase) }) { Die "the vanilla copy is running: close it first" }
+    New-Item -ItemType Directory -Force $win | Out-Null
+    # a copy from an earlier run goes, but never its saves
+    Get-ChildItem -LiteralPath $win -Force | Where-Object { $_.Name -ne "saves" } | ForEach-Object { Remove-Item -Recurse -Force -LiteralPath $_.FullName }
+    $take = @(Get-ChildItem -LiteralPath $GamePath -Force | Where-Object { $steamFiles -notcontains $_.Name -and $_.Name -ne "saves" -and $_.Name -ne $bat })
+    $take | ForEach-Object { Copy-Item -Recurse -LiteralPath $_.FullName -Destination $win }
+    $files = { param($d, $names) @($names | ForEach-Object { Get-Item -LiteralPath (Join-Path $d $_) -Force } | ForEach-Object { if ($_.PSIsContainer) { Get-ChildItem -LiteralPath $_.FullName -Recurse -File -Force } else { $_ } }) }
+    $from = & $files $GamePath $take.Name
+    $to = & $files $win $take.Name
+    $size = { param($l) ($l | Measure-Object Length -Sum).Sum }
+    $steamLeft = $steamFiles | Where-Object { Test-Path (Join-Path $win $_) }
+    if ($from.Count -ne $to.Count -or (& $size $from) -ne (& $size $to) -or (Sha (Join-Path $win "data.win")) -ne $Pins.GameSha -or $steamLeft) { Die "the copy isn't whole (is the disk full?)" }
+    $lines = @(
+        '@echo off',
+        'rem UFO 50, portable: starts the game with its saves kept in this folder (saves\), so the',
+        'rem whole folder can be moved or copied to another PC or a USB stick. It does not use Steam.',
+        'set "USERPROFILE=%~dp0saves"',
+        'set "LOCALAPPDATA=%~dp0saves\AppData\Local"',
+        'set "APPDATA=%~dp0saves\AppData\Roaming"',
+        'if not exist "%LOCALAPPDATA%" mkdir "%LOCALAPPDATA%"',
+        'if not exist "%APPDATA%" mkdir "%APPDATA%"',
+        'start "" "%~dp0ufo50.exe"')
+    [IO.File]::WriteAllLines((Join-Path $win $bat), $lines, (New-Object Text.ASCIIEncoding))
+    Ok "$($to.Count) files, $([math]::Round((& $size $to) / 1MB)) MB, without Steam's libraries"
+    Write-Host ""
+    Write-Host "Done: $win" -ForegroundColor Green
+    Write-Host "This is your game as Steam has it, without Steam: no game file is changed, only Steam's"
+    Write-Host "libraries are left out, so it runs with Steam closed or not installed (and has no"
+    Write-Host "achievements, cloud saves or online play)."
+    Write-Host "Start ""$bat"" in that folder: the saves then stay inside it (saves\) and the whole"
+    Write-Host "folder can be moved to another PC. Starting ufo50.exe itself works too, but then it uses"
+    Write-Host "this PC's save folder, %LOCALAPPDATA%\ufo50, which is the Steam game's."
+    Write-Host "To bring your Steam saves along, copy save*.ufo and account.ufo from there to"
+    Write-Host "saves\AppData\Local\ufo50 in that folder (copy, don't move)."
+    Write-Host "It contains your copy of the game: keep it to yourself."
+    exit 0
+}
+
 # ---- 2. downloads ---------------------------------------------------------------------------
 Say "Downloading tools and mods"
 New-Item -ItemType Directory -Force $Dl | Out-Null
 $utmtZip = Fetch $Pins.Utmt
 $script:UtmtExe = Join-Path $Work "utmt\UndertaleModCli.exe"
 if (-not (Test-Path $script:UtmtExe)) { Unzip $utmtZip (Join-Path $Work "utmt") }
-$loaderZip = Fetch $Pins.Loader
-$pfoZip = Fetch $Pins.Pfo
-$mmmZip = Fetch $Pins.Mmm
+if (-not $Vanilla) {
+    $loaderZip = Fetch $Pins.Loader
+    $pfoZip = Fetch $Pins.Pfo
+    $mmmZip = Fetch $Pins.Mmm
+}
 $localKit = Join-Path $Root ("kit\" + $Pins.Kit[2])   # the repository zip carries the kit
 $localWinKit = Join-Path $Root ("kit\" + $Pins.WinKit[2])
 if ($Windows) {
@@ -122,7 +178,43 @@ if ($Windows) {
 elseif ($Runner) { $kit = (Resolve-Path $Runner).Path; Ok "runner: $kit" }
 elseif ((Test-Path $localKit) -and ((Sha $localKit) -eq $Pins.Kit[1])) { $kit = $localKit; Ok "runner kit v0.4.0" }
 else { $kit = Fetch $Pins.Kit; Ok "runner kit v0.4.0 (downloaded)" }
-Ok "UndertaleModTool 0.9.2.0, UFO 50 Mod Loader 2.3.0, PFO 50 0.10.0, MultiMadnessMod 1.30"
+if ($Vanilla) { Ok "UndertaleModTool 0.9.2.0 (only its APK packer is used)" }
+else { Ok "UndertaleModTool 0.9.2.0, UFO 50 Mod Loader 2.3.0, PFO 50 0.10.0, MultiMadnessMod 1.30" }
+
+# ---- the APK: the runner's files plus a game folder, signed --------------------------------
+function PackApk($game, $apk, $plain) {
+    Say "Packing and signing the APK"
+    if (Test-Path $apk) { Remove-Item -Force $apk }   # one left from an earlier run must not pass for this one
+    $out = Utmt @("load", (Join-Path $game "data.win"), "-s", (Join-Path $Root "scripts\pack_apk.csx")) @{
+        RUNNER_APK = $kit; GAME_DIR = $game; OUT_APK = $apk; KEY_FILE = (Join-Path $Work "keys\ufo50-online-key.pfx"); VANILLA = $(if ($plain) { "1" } else { "0" }) }
+    $out | Where-Object { $_ -match "^APK" } | ForEach-Object { Write-Host "   $_" }
+    if (-not (Test-Path $apk) -or (Get-Item $apk).Length -lt 100MB) { Die "the APK wasn't made (see the lines above)" }
+    Write-Host ""
+    Write-Host "Done: $apk" -ForegroundColor Green
+    Write-Host "It contains your copy of the game: keep it to yourself."
+}
+function InstallApk($apk) {
+    Say "Installing"
+    $adb = (Get-Command adb -ErrorAction SilentlyContinue).Source
+    if (-not $adb) { $adb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe" }
+    if (-not (Test-Path $adb)) { Die "adb not found: copy the APK to the phone instead, or install Android platform-tools" }
+    & $adb install -r $apk
+    if ($LASTEXITCODE -ne 0) { Die "adb couldn't install the APK (is the phone connected with USB debugging on? An app of the same name from another build must be uninstalled first)" }
+}
+
+# ---- V. the vanilla game: your copy as it is, on the Android runner --------------------------
+# The packer leaves the kit's additions out (the native library, and the manifest entry that starts
+# the touch overlay), so what runs is the game's own data.win on the plain GameMaker runner.
+if ($Vanilla) {
+    $apk = Join-Path $Work "ufo50-vanilla.apk"
+    PackApk $GamePath $apk $true
+    Write-Host "This is the game as Steam has it: no online play, no save states and no touch controls,"
+    Write-Host "so it needs a controller or a keyboard. On a phone it is the same app as the online build:"
+    Write-Host "installing one replaces the other, and they share the saves on the phone."
+    Write-Host "Copy it to your phone and open it, or run: build.bat -Vanilla -Install"
+    if ($Install) { InstallApk $apk }
+    exit 0
+}
 
 # ---- 3. mods: the UFO 50 Mod Loader makes a modded copy of the game -------------------------
 $loader = Join-Path $Work "modloader"
@@ -277,22 +369,7 @@ $out = Utmt @("load", (Join-Path $game "data.win"), "-s", (Join-Path $Root "scri
 Ok "game data"
 
 # ---- 5. the APK -----------------------------------------------------------------------------
-Say "Packing and signing the APK"
 $apk = Join-Path $Work "ufo50-online.apk"
-$out = Utmt @("load", (Join-Path $game "data.win"), "-s", (Join-Path $Root "scripts\pack_apk.csx")) @{
-    RUNNER_APK = $kit; GAME_DIR = $game; OUT_APK = $apk; KEY_FILE = (Join-Path $Work "keys\ufo50-online-key.pfx") }
-$out | Where-Object { $_ -match "^APK" } | ForEach-Object { Write-Host "   $_" }
-if (-not (Test-Path $apk) -or (Get-Item $apk).Length -lt 100MB) { Die "the APK wasn't made (see the lines above)" }
-Write-Host ""
-Write-Host "Done: $apk" -ForegroundColor Green
-Write-Host "It contains your copy of the game: keep it to yourself."
+PackApk $game $apk
 Write-Host "Copy it to your phone and open it, or run: build.bat -Install"
-
-if ($Install) {
-    Say "Installing"
-    $adb = (Get-Command adb -ErrorAction SilentlyContinue).Source
-    if (-not $adb) { $adb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe" }
-    if (-not (Test-Path $adb)) { Die "adb not found: copy the APK to the phone instead, or install Android platform-tools" }
-    & $adb install -r $apk
-    if ($LASTEXITCODE -ne 0) { Die "adb couldn't install the APK (is the phone connected with USB debugging on? An app of the same name from another build must be uninstalled first)" }
-}
+if ($Install) { InstallApk $apk }

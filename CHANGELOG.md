@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `build.bat -Vanilla`: an APK of the game as Steam has it (`work\ufo50-vanilla.apk`), with none of
+  this port's additions: no mods, no online play, no save states, no touch controls (it needs a
+  controller or a keyboard). The packer leaves the port's native library out and the runner starts
+  no extension. With `-Windows` it makes a portable copy of the plain game that doesn't need Steam
+  (`work\windows\UFO 50 Vanilla`): Steam's libraries are left out, and `UFO 50 Portable.bat` keeps the
+  saves inside the folder.
+
 ## v0.4.1 (2026-11-11)
 
 A fix for the quick build. The game side is unchanged: the runner kit and the Windows kit are

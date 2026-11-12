@@ -4,6 +4,9 @@
 // in KEY_FILE: keep it, Android only installs an update signed with the same key.
 //
 // Env: RUNNER_APK, GAME_DIR, OUT_APK, KEY_FILE.  Runs inside UndertaleModCli (any data file loaded).
+// VANILLA=1 leaves this port's additions out of the runner (for packing the unmodded game): the
+// native library goes, and the manifest no longer names the extension class that starts the touch
+// overlay and loads that library, so the runner finds no extension and carries on without one.
 // Without GAME_DIR it repacks the runner alone (the "runner kit" the quick build starts from).
 using System.Linq;
 using System.Security.Cryptography;
@@ -14,6 +17,7 @@ string gameDir = Environment.GetEnvironmentVariable("GAME_DIR");
 if (string.IsNullOrEmpty(gameDir)) gameDir = null;
 string outPath = Environment.GetEnvironmentVariable("OUT_APK");
 string keyPath = Environment.GetEnvironmentVariable("KEY_FILE");
+bool vanilla = Environment.GetEnvironmentVariable("VANILLA") == "1";
 const string KeyPassword = "ufo50android";   // a local key for personal builds
 
 // ---------------------------------------------------------------- zip reading (the runner) ---
@@ -51,9 +55,35 @@ for (int k = 0; k < count; k++)
 bool IsOldSignature(string n) => n.StartsWith("META-INF/") &&
     (n.EndsWith(".SF") || n.EndsWith(".RSA") || n.EndsWith(".DSA") || n.EndsWith(".EC") || n == "META-INF/MANIFEST.MF");
 string runnerIni = "";
+byte[] vanillaManifest = null;
+byte[] Unpacked(Entry e)
+{
+    if (e.Method == 0) return runner.Skip((int)e.SrcData).Take((int)e.CSize).ToArray();
+    var ms = new MemoryStream();
+    new System.IO.Compression.DeflateStream(new MemoryStream(runner, (int)e.SrcData, (int)e.CSize), System.IO.Compression.CompressionMode.Decompress).CopyTo(ms);
+    return ms.ToArray();
+}
 var keep = new List<Entry>();
 foreach (var e in entries)
 {
+    if (vanilla && e.Name.EndsWith("/libPFO.so")) continue;
+    if (vanilla && e.Name == "AndroidManifest.xml")
+    {
+        // the class name becomes one of the same length that doesn't exist (the binary XML keeps its layout)
+        vanillaManifest = Unpacked(e);
+        byte[] was = System.Text.Encoding.Unicode.GetBytes("PFO_Android"), now = System.Text.Encoding.Unicode.GetBytes("PFO_Nothing");
+        int hits = 0;
+        for (int i = 0; i + was.Length <= vanillaManifest.Length; i++)
+        {
+            int j = 0;
+            while (j < was.Length && vanillaManifest[i + j] == was[j]) j++;
+            if (j < was.Length) continue;
+            Array.Copy(now, 0, vanillaManifest, i, now.Length);
+            hits++;
+        }
+        if (hits != 1) throw new Exception("runner APK: expected the extension class once in the manifest, found it " + hits + " times");
+        continue;
+    }
     if (e.Name == "assets/options.ini")
     {
         runnerIni = e.Method == 0 ? System.Text.Encoding.UTF8.GetString(runner, (int)e.SrcData, (int)e.CSize)
@@ -127,6 +157,11 @@ using (var fs = new FileStream(partPath, FileMode.Create, FileAccess.ReadWrite, 
     }
     foreach (var (name, path) in added) using (var s = File.OpenRead(path)) AddStored(name, s);
     AddStored("assets/options.ini", new MemoryStream(iniBytes));
+    if (vanilla)
+    {
+        if (vanillaManifest == null) throw new Exception("runner APK: no AndroidManifest.xml");
+        AddStored("AndroidManifest.xml", new MemoryStream(vanillaManifest));
+    }
     w.Flush();
 }
 
