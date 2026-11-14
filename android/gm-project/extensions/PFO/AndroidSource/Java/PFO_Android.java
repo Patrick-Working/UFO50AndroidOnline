@@ -471,6 +471,8 @@ public class PFO_Android {
             vInputs = IconStrip.load(c, "pfo_vinputs.png", 16);
             gameIcons = IconStrip.load(c, "pfo_gameicons.png", 24);   // game N's picture: frame (N-1)*2
             statesBtn = new Control("states", Control.GEAR, "", 0.895f, 0.065f, 0.075f);
+            quickSaveBtn = new Control("quicksave", Control.GEAR, "", 0.755f, 0.065f, 0.075f);
+            quickLoadBtn = new Control("quickload", Control.GEAR, "", 0.825f, 0.065f, 0.075f);
             load();
             text.setTextAlign(Paint.Align.CENTER);
             text.setFakeBoldText(true);
@@ -581,6 +583,16 @@ public class PFO_Android {
                 if (onBadge || (chip != null && !chip.hidden && hit(chip, e.getX(i), e.getY(i), 1.3f))) {
                     if (onlineSeat != -1 && !soloSession()) { if (showOnlineSeats()) showNames(); else setPlayer(player, null); }   // online: who's who
                     else openPanel(-1);
+                    performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                    return true;
+                }
+                if (!panelOpen && !naming && !inviting && hit(quickSaveBtn, e.getX(i), e.getY(i), 1.15f)) {
+                    quickSave();
+                    performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                    return true;
+                }
+                if (!panelOpen && !naming && !inviting && hit(quickLoadBtn, e.getX(i), e.getY(i), 1.15f)) {
+                    quickLoad();
                     performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
                     return true;
                 }
@@ -1828,6 +1840,7 @@ public class PFO_Android {
             boolean behindStates = statesOpen && !editing;
             if (!behindStates) drawGear(canvas);
             if (!editing && !behindStates) drawStatesButton(canvas);
+            if (!editing && !behindStates) { drawQuickButton(canvas, quickSaveBtn, true); drawQuickButton(canvas, quickLoadBtn, false); }
             if (!editing && !behindStates) drawBadges(canvas, u);
             if (!editing && !behindStates) drawPill(canvas, u);
             if (!editing && panelOpen) drawPanel(canvas, u);
@@ -1988,7 +2001,7 @@ public class PFO_Android {
         int stateStatus = 0, lastResultSeq = -1, pendingSlot = 0, pendingWhat = 0;
         long pendingStartMs = 0;   // when the load or rewind on screen started (for the time left)
         IconStrip gameIcons;
-        Control statesBtn;
+        Control statesBtn, quickSaveBtn, quickLoadBtn;
         final RectF statesRect = new RectF(), listRect = new RectF();
         final List<RectF> stateHits = new ArrayList<>();
         final List<Integer> stateCodes = new ArrayList<>();
@@ -2008,6 +2021,10 @@ public class PFO_Android {
         // "auto save when I pause": opening the game's pause menu in solo play saves into one auto
         // slot (id 0, replaced each time). Not right after a load, which can land on a paused game.
         static final int AUTO_SLOT = 0;
+        // the quick save: the two buttons left of the disk save into one slot (replaced each time) and
+        // load it, in solo play (online, the disk's SAVE NOW saves for everyone and a load asks them)
+        static final int QUICK_SLOT = 9999;   // as libPFO's c_QuickSlot
+        boolean pendingQuick = false;
         static final int ST_AUTO = -15;
         boolean autoSavePause = false, pendingAuto = false;
         long noAutoUntil = 0;
@@ -2331,8 +2348,30 @@ public class PFO_Android {
 
         void startLoad(final int slot) {
             statesOpen = false;
-            pendingSlot = slot; pendingWhat = 3; pendingAuto = false;
+            pendingSlot = slot; pendingWhat = 3; pendingAuto = false; pendingQuick = slot == QUICK_SLOT;
             nativeStateRequest(3, slot);
+        }
+
+        boolean onlineGame() { return (netStatus & 64) != 0 && !soloSession(); }
+        boolean haveQuickSave() { return saveFile(QUICK_SLOT, ".pfostate").exists(); }
+
+        void quickSave() {
+            if (restoring()) return;
+            if (onlineGame()) { showBanner("QUICK SAVE IS FOR SOLO PLAY (THE DISK SAVES FOR EVERYONE)", 2200); return; }
+            if (!soloSession()) { showBanner("START SOLO PLAY TO SAVE (THE DISK BUTTON)", 2200); return; }
+            if (!canSaveState()) { showBanner("CAN'T SAVE RIGHT NOW", 1500); return; }
+            pendingAuto = false; pendingQuick = true;
+            saveState(QUICK_SLOT);
+        }
+
+        void quickLoad() {
+            if (restoring()) return;
+            if (onlineGame()) { showBanner("QUICK LOAD IS FOR SOLO PLAY (THE DISK HAS THE SAVES)", 2200); return; }
+            if (!haveQuickSave()) { showBanner("NO QUICK SAVE YET", 1800); return; }
+            int est = loadEstimateMs(QUICK_SLOT);
+            if (est >= CONFIRM_FROM_MS)
+                ask("LOAD THE QUICK SAVE?", aboutSeconds(est) + " TO LOAD (IT REPLAYS THE SESSION)", "LOAD", new Runnable() { @Override public void run() { startLoad(QUICK_SLOT); } });
+            else startLoad(QUICK_SLOT);
         }
 
         boolean soloSession() { return (stateStatus & 1) != 0; }
@@ -2387,7 +2426,7 @@ public class PFO_Android {
         int nextSaveId() {
             int max = 0;
             String[] names = new java.io.File(STATE_DIR).list();
-            if (names != null) for (String n : names) { int id = idOf(n, ".pfostate"); if (id > max) max = id; }
+            if (names != null) for (String n : names) { int id = idOf(n, ".pfostate"); if (id != QUICK_SLOT && id > max) max = id; }
             return max + 1;
         }
 
@@ -2525,12 +2564,12 @@ public class PFO_Android {
                 if (asked || !statesOpen) selectedSave = id;
                 if (id == selectedSave) deleteArmedUntil = 0;
                 refreshSaves();
-                notePill(pendingAuto ? "AUTO SAVED" : "SAVED", 2000);
-                pendingAuto = false;
+                notePill(pendingAuto ? "AUTO SAVED" : pendingQuick ? "QUICK SAVED" : "SAVED", 2000);
+                pendingAuto = false; pendingQuick = false;
             } else {
                 fresh.delete();
                 if (pendingAuto && pendingWhat == 2) { pendingAuto = false; return; }   // an auto save that couldn't happen: say nothing
-                if (result == 3) notePill(pendingWhat == 4 ? "REWOUND" : "LOADED", 2000);
+                if (result == 3) notePill(pendingWhat == 4 ? "REWOUND" : pendingQuick ? "QUICK LOADED" : "LOADED", 2000);
                 else if (result == -6) showBanner("NOTHING TO REWIND THAT FAR YET", 1500);
                 else if (result == -3) showBanner("LOADED - BUT IT DIDN'T CHECK OUT", 3000, ATTN);
                 else if (result == -2) showBanner("THAT SAVE CAN'T BE READ", 1800);
@@ -2542,6 +2581,7 @@ public class PFO_Android {
                 }
                 else if (result == -1) showBanner(pendingWhat == 2 ? "START SOLO PLAY TO SAVE" : "NOT DURING AN ONLINE GAME", 2000);
                 if (pendingWhat == 4) pendingWhat = 0;   // the rewind is over: a later load isn't one
+                pendingQuick = false;
             }
         }
 
@@ -2602,7 +2642,7 @@ public class PFO_Android {
                     boolean onlineNow = (netStatus & 64) != 0 && !soloSession();
                     if (!canSaveState()) { showBanner(onlineNow ? "ONLY PLAYERS WITH A SEAT CAN SAVE" : soloSession() ? "CAN'T SAVE RIGHT NOW" : "START SOLO PLAY TO SAVE", 1800); break; }
                     statesOpen = false;
-                    pendingAuto = false;
+                    pendingAuto = false; pendingQuick = false;
                     saveAsked = true;
                     if (onlineNow) {
                         // online every device saves on the same frame (libPFO sends a command and picks the
@@ -2715,7 +2755,7 @@ public class PFO_Android {
                 if (row.bottom < listRect.top || row.top > listRect.bottom) continue;
                 if (id == selectedSave) { solid(fill, 0xFF2E3466, 1f); cv.drawRect(row, fill); solid(line, 0xFFFFFFFF, 0.8f); cv.drawRect(row, line); }
                 gameIcon(cv, o, row.left + rowH * 0.5f, row.centerY(), rowH * 0.7f);
-                String t = titleOf(o), d = (id == AUTO_SLOT ? "AUTO  " : "") + when(o.optLong("savedAt", 0));
+                String t = titleOf(o), d = (id == AUTO_SLOT ? "AUTO  " : id == QUICK_SLOT ? "QUICK  " : "") + when(o.optLong("savedAt", 0));
                 float dw = font_w(d, lineH * 0.75f);
                 float tsz = lineH;
                 float room = row.width() - rowH * 1.1f - dw - gap * 2;
@@ -2854,6 +2894,26 @@ public class PFO_Android {
             cv.drawRect(x - s, y - s, x + s, y + s, line);
             cv.drawRect(x - s * 0.5f, y - s, x + s * 0.4f, y - s * 0.35f, line);
             cv.drawRect(x - s * 0.6f, y + s * 0.15f, x + s * 0.6f, y + s, line);
+            cv.restoreToCount(layer);
+        }
+
+        // quick save (an arrow down into a tray) and quick load (an arrow up out of it), left of the
+        // disk: faded when they can't be used now (a tap says why)
+        void drawQuickButton(Canvas cv, Control b, boolean save) {
+            boolean on = save ? soloSession() && canSaveState() : !onlineGame() && haveQuickSave() && !restoring();
+            float x = cx(b), y = cy(b), r = radius(b);
+            fill.setStyle(Paint.Style.FILL); fill.setColor(0xFF000000); fill.setAlpha(on ? 110 : 60);
+            cv.drawCircle(x, y, r, fill);
+            float s = r * 0.5f, head = s * 0.45f;
+            int layer = cv.saveLayerAlpha(x - r, y - r, x + r, y + r, on ? 150 : 60);
+            line.setColor(0xFFFFFFFF); line.setAlpha(255);
+            cv.drawLine(x - s, y + s * 0.25f, x - s, y + s, line);
+            cv.drawLine(x - s, y + s, x + s, y + s, line);
+            cv.drawLine(x + s, y + s, x + s, y + s * 0.25f, line);
+            float tip = save ? y + s * 0.5f : y - s, tail = save ? y - s : y + s * 0.5f, dir = save ? -1 : 1;
+            cv.drawLine(x, tail, x, tip, line);
+            cv.drawLine(x - head, tip + dir * head, x, tip, line);
+            cv.drawLine(x + head, tip + dir * head, x, tip, line);
             cv.restoreToCount(layer);
         }
 

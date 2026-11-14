@@ -145,6 +145,7 @@ namespace pfo_win_ui
 
     constexpr int c_VoteSeconds = 15, c_ProposalSeconds = 20;   // as the overlay's
     using pfo_android::c_AutoSlot;
+    using pfo_android::c_QuickSlot;
 
     int g_Status = 0, g_Net = 0, g_Seat = -1;
     int g_Vote[11] = {};
@@ -152,6 +153,7 @@ namespace pfo_win_ui
     int g_WaitShown = 0, g_WaitedFor = 0;
     int g_PendingWhat = 0;           // what we last asked for: 2 save, 3 load, 4 rewind
     bool g_PendingAuto = false;
+    bool g_PendingQuick = false;     // that save or load was the quick one (F5 / F9)
     ULONGLONG g_NoAutoUntil = 0, g_LastOfferCheck = 0;
     std::string g_RejoinOffer, g_RejoinDeclined;
 
@@ -340,7 +342,7 @@ namespace pfo_win_ui
                 at = end + 1;
             }
         }
-        s.label = (id == c_AutoSlot ? L"AUTO: " : L"") + s.title + L"   " + When(s.savedAt, true);
+        s.label = (id == c_AutoSlot ? L"AUTO: " : id == c_QuickSlot ? L"QUICK: " : L"") + s.title + L"   " + When(s.savedAt, true);
         return true;
     }
 
@@ -371,7 +373,7 @@ namespace pfo_win_ui
         do
         {
             int id = -1; wchar_t rest[32] = {};
-            if (swscanf(found.cFileName, L"slot%d.%31ls", &id, rest) == 2 && wcscmp(rest, L"pfostate") == 0 && id > max) max = id;
+            if (swscanf(found.cFileName, L"slot%d.%31ls", &id, rest) == 2 && wcscmp(rest, L"pfostate") == 0 && id != c_QuickSlot && id > max) max = id;
         }
         while (FindNextFileW(h, &found));
         FindClose(h);
@@ -641,7 +643,7 @@ namespace pfo_win_ui
 
     // ---- the menu ----
     enum { PageClosed, PageMain, PageSaves, PageConfirm, PageName, PageCode };
-    enum { ActNone, ActClose, ActBack, ActSolo, ActSave, ActSaves, ActLoad, ActRewind, ActAccept, ActDecline, ActRejoin, ActForget, ActAutoSave, ActCopyCode, ActCode, ActName, ActUpnp };
+    enum { ActNone, ActClose, ActBack, ActSolo, ActSave, ActSaves, ActLoad, ActRewind, ActAccept, ActDecline, ActRejoin, ActForget, ActAutoSave, ActCopyCode, ActCode, ActName, ActUpnp, ActQuickSave, ActQuickLoad };
     struct Item { std::wstring text; int action = ActNone; int arg = 0; bool enabled = true; };
 
     // a box about one save: lines of text, its picture, the names of who was playing
@@ -780,7 +782,9 @@ namespace pfo_win_ui
             if (VoteShown()) { Add(L"ACCEPT THE LOAD P" + std::to_wstring(g_Vote[2] + 1) + L" ASKED FOR", ActAccept); Add(L"DECLINE THE LOAD", ActDecline); }
             if (!g_RejoinOffer.empty()) { Add(L"REJOIN YOUR MATCH (" + RejoinText() + L")", ActRejoin); Add(L"FORGET THAT MATCH", ActForget); }
             if (Solo() || OnlineGame()) Add(OnlineGame() ? L"SAVE (EVERY PLAYER'S GAME SAVES)" : L"SAVE", ActSave, 0, (g_Status & 2) != 0);
+            if (Solo()) Add(L"QUICK SAVE (F5)", ActQuickSave, 0, (g_Status & 2) != 0);
             Add(L"LOAD A SAVE...", ActSaves, 0, !restoring);
+            if (!OnlineGame() && SaveOf(c_QuickSlot)) Add(L"QUICK LOAD (F9)", ActQuickLoad, 0, !restoring);
             if (Solo())
             {
                 static const int c_Seconds[3] = { 15, 30, 60 };
@@ -971,12 +975,35 @@ namespace pfo_win_ui
         case ActBack: LeaveConfirm(); break;
         case ActSolo: Request(1, 0); Open(PageClosed); Say(L"SOLO PLAY: SAVES AND REWIND ARE ON (F1)", 3000); break;
         case ActSave:
-            g_PendingWhat = 2; g_PendingAuto = false;
+            g_PendingWhat = 2; g_PendingAuto = false; g_PendingQuick = false;
             // online every device saves on the same frame, and the netcode picks the slot
             if (OnlineGame()) Request(2, -1); else Request(2, NextSaveId());
             Open(PageClosed);
             break;
         case ActSaves: Open(PageSaves); break;
+        // the quick slot: one save, replaced by each quick save (solo play only: online, SAVE in the
+        // menu saves for everyone and a load asks the others)
+        case ActQuickSave:
+            Open(PageClosed);
+            if ((g_Status & 4) != 0) break;
+            if (OnlineGame()) { Say(L"QUICK SAVE IS FOR SOLO PLAY (F1: SAVE FOR EVERY PLAYER)", 2200); break; }
+            if (!Solo()) { Say(L"START SOLO PLAY TO SAVE (F1)", 2200); break; }
+            if ((g_Status & 2) == 0) { Say(L"CAN'T SAVE RIGHT NOW", 1500); break; }
+            g_PendingWhat = 2; g_PendingAuto = false; g_PendingQuick = true;
+            Request(2, c_QuickSlot);
+            break;
+        case ActQuickLoad:
+            if ((g_Status & 4) != 0) { Open(PageClosed); break; }
+            if (OnlineGame()) { Open(PageClosed); Say(L"QUICK LOAD IS FOR SOLO PLAY (F1: LOAD A SAVE)", 2200); break; }
+            g_SaveCache.erase(c_QuickSlot);
+            RefreshSaves();   // LOAD's estimate (and the question for a slow load) reads the list
+            if (!SaveOf(c_QuickSlot)) { Open(PageClosed); Say(L"NO QUICK SAVE YET (F5 MAKES ONE)", 2000); break; }
+            {
+                Item load = it;
+                load.action = ActLoad; load.arg = c_QuickSlot; load.enabled = true;
+                Activate(load);   // as LOAD on the save list (it asks first when the load is slow)
+            }
+            break;
         case ActLoad:
             if (OnlineGame() && g_Seat < 0) { Say(L"ONLY PLAYERS WITH A SEAT CAN LOAD", 1800); break; }
             if (!confirmed && !OnlineGame())
@@ -985,7 +1012,7 @@ namespace pfo_win_ui
                 for (auto& s : g_Saves) if (s.id == it.arg) est = LoadEstimate(s);
                 if (est >= 5000) { g_ConfirmAction = ActLoad; g_ConfirmArg = it.arg; g_ConfirmEst = est; Open(PageConfirm); break; }
             }
-            g_PendingWhat = 3; g_PendingAuto = false;
+            g_PendingWhat = 3; g_PendingAuto = false; g_PendingQuick = it.arg == c_QuickSlot;
             g_CoverSlot = it.arg; g_CoverWhat = 3;
             Request(3, it.arg);
             Open(PageClosed);
@@ -1098,13 +1125,14 @@ namespace pfo_win_ui
             g_LastResultSeq = seq;
             if (result == 1)
             {
-                Say(g_PendingAuto ? L"SAVED BY ITSELF" : L"SAVED", 2000);
+                Say(g_PendingAuto ? L"SAVED BY ITSELF" : g_PendingQuick ? L"QUICK SAVED (F9 LOADS IT)" : L"SAVED", 2000);
                 g_PendingAuto = false;
+                g_SaveCache.erase(pfo_android::g_LastSavedSlot.load());
                 TakePicture(pfo_android::g_LastSavedSlot.load());
                 g_SavesReadAt = 0;
             }
             else if (g_PendingAuto && g_PendingWhat == 2) g_PendingAuto = false;   // an auto save that couldn't happen: say nothing
-            else if (result == 3) Say(g_PendingWhat == 4 ? L"REWOUND" : L"LOADED", 2000);
+            else if (result == 3) Say(g_PendingWhat == 4 ? L"REWOUND" : g_PendingQuick ? L"QUICK LOADED" : L"LOADED", 2000);
             else if (result == -6) Say(L"NOTHING TO REWIND THAT FAR YET", 1500);
             else if (result == -3) Say(L"LOADED - BUT IT DIDN'T CHECK OUT", 3000, true);
             else if (result == -2) Say(L"THAT SAVE CAN'T BE READ", 1800);
@@ -1117,6 +1145,7 @@ namespace pfo_win_ui
             else if (result == -1) Say(g_PendingWhat == 2 ? (OnlineGame() ? L"ONLY PLAYERS WITH A SEAT CAN SAVE" : L"START SOLO PLAY TO SAVE (F1)") : L"NOT DURING AN ONLINE GAME", 2000);
             // a load that is over (or never began) leaves nothing for the next loading screen to show
             if (result != 1 && !restoring) { g_CoverSlot = -1; g_CoverWhat = 0; }
+            g_PendingQuick = false;
         }
 
         // which player we are, when an online game starts and whenever the seats change (a game for
@@ -1900,6 +1929,18 @@ namespace pfo_win_ui
                 it.text = vk == VK_F2 ? L"REJOIN" : L"FORGET THAT MATCH";
                 it.action = vk == VK_F2 ? ActRejoin : ActForget;
                 Activate(it);
+            }
+        }
+        else if (vk == VK_F5 || vk == VK_F9)
+        {
+            // quick save and quick load (not repeated while the key is held)
+            ours = true;
+            if (!repeat)
+            {
+                Item q;
+                q.text = vk == VK_F5 ? L"QUICK SAVE (F5)" : L"QUICK LOAD (F9)";
+                q.action = vk == VK_F5 ? ActQuickSave : ActQuickLoad;
+                Activate(q);
             }
         }
         else if (g_Held[vk] && repeat) ours = true;   // still held from the menu

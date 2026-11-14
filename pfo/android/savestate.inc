@@ -363,6 +363,7 @@ namespace pfo_android
     bool g_MpSavePendingAuto = false;        // ... an auto save (into our AUTO slot, replaced each time)
     constexpr int c_AutoSaveParam = 255;     // SAVE's parameter for "auto save on pause"
     constexpr int c_AutoSlot = 0;
+    constexpr int c_QuickSlot = 9999;   // the quick save (F5 / the overlay's quick save), replaced each time
     bool g_AutoSavedThisPause = false;       // the game's pause already got its auto save (others' are ignored)
     constexpr int c_MpReplaySnapBase = 1000000;   // snapshot ids for saves passed while replaying
     std::atomic<int> g_LastSavedSlot{-1};
@@ -1583,7 +1584,7 @@ namespace pfo_android
             while (dirent* e = readdir(d))
             {
                 int id = 0; char rest[32] = {};
-                if (sscanf(e->d_name, "slot%d.%31s", &id, rest) == 2 && !strcmp(rest, "pfostate") && id > max) max = id;
+                if (sscanf(e->d_name, "slot%d.%31s", &id, rest) == 2 && !strcmp(rest, "pfostate") && id != c_QuickSlot && id > max) max = id;
             }
             closedir(d);
         }
@@ -1876,7 +1877,7 @@ namespace pfo_android
             while (dirent* e = readdir(d))
             {
                 int id = 0; char rest[32] = {};
-                if (sscanf(e->d_name, "slot%d.%31s", &id, rest) != 2 || strcmp(rest, "pfostate") || id == c_AutoSlot) continue;
+                if (sscanf(e->d_name, "slot%d.%31s", &id, rest) != 2 || strcmp(rest, "pfostate") || id == c_AutoSlot || id == c_QuickSlot) continue;
                 bool exists = false;
                 auto v = ReadWhole((dir + "/" + e->d_name).c_str(), exists);
                 StateHeader o;

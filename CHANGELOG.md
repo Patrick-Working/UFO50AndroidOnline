@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Quick save and quick load.** One QUICK slot, replaced by each quick save, in solo play: on a
+  phone the two new buttons left of the disk, on Windows **F5** and **F9** (also in the F1 menu).
+  The save list shows it as QUICK. (Built by `bash build.sh` for now: the quick build uses the
+  v0.4.0 kits until they are made again for a release; it gets the tile fix below.)
+- **Fixed: a load could leave tiles a game had drawn since the save.** Some games draw one-off
+  tiles at run time (in Barbuta a loose block lands as three of them, beside the blocks that make
+  it solid): a load took the solid blocks away but left the tiles, so a fallen block still showed,
+  with nothing solid there. Snapshots now keep those tiles too (games 07, 13, 21, 29, 33, 40, 41,
+  45 and 48 in the code's numbering make them).
 - `build.bat -Vanilla`: an APK of the game as Steam has it (`work\ufo50-vanilla.apk`), with none of
   this port's additions: no mods, no online play, no save states, no touch controls (it needs a
   controller or a keyboard). The packer leaves the port's native library out and the runner starts

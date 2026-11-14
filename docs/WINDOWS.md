@@ -72,6 +72,7 @@ What the touch overlay is on a phone is here a menu made for a keyboard and a co
 | delete a save (in the list, twice) | Del | X |
 | accept a load another player asked for; rejoin your match when the game offers it | **F2** | from the menu |
 | decline the load; forget the match | **F3** | from the menu |
+| quick save, quick load (one slot, solo play) | **F5**, **F9** | from the menu |
 
 While the menu is open the game gets no keys and a controller at rest, so nothing you press in the
 menu reaches the game. Typing a name or a join code needs the keyboard.

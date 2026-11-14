@@ -164,6 +164,9 @@ it shows in the session pill after the chips. See *Overlay* in [CHANGELOG.md](CH
   the game, who was playing and how far into the game. Saves are kept until you delete them.
 - In single player, saving needs a recorded session: tap **START SOLO PLAY** in the save list once
   (it starts you in the library). The pill then says SOLO: SAVES ON.
+- **Quick save and quick load**: the two buttons left of the disk (an arrow down into a tray, an
+  arrow up out of it) save into one QUICK slot, replaced each time, and load it, in one tap. On
+  Windows: **F5** and **F9**. They work in solo play; in an online match, use SAVE NOW and LOAD.
 - **Loading** takes about a second for a save made since the app started: the game puts its state
   back and checks the next two seconds of play against what was recorded. Older saves (after the
   app restarted) replay the session at high speed instead, a few seconds per minute of play. Either
@@ -338,6 +341,7 @@ step 3 of the [quick build](#quick-build). Start `ufo50.exe` in that folder.
   does on a phone, made for a keyboard and a controller (seat and connection, invite code, SAVE,
   the list of saves with their pictures, START SOLO PLAY and REWIND, auto save, name, UPnP). A load
   another player asks for shows in a box with the save's picture: **F2** accepts, **F3** declines.
+  **F5** quick saves and **F9** quick loads (solo play).
 - **Saves load from snapshots as on the phones** (about a second; in a match, on every device
   within a few frames). They are made for the `ufo50.exe` of UFO 50 1.9.5: with another one the
   game turns them off, replays instead (about 4 seconds per minute played on the test PC), and a
