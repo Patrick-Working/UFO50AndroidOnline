@@ -24,6 +24,7 @@ def mash(sec):
     while time.time() - t < sec: key(rnd.choice(['DPAD_LEFT', 'DPAD_RIGHT', 'Z', 'X', 'DPAD_RIGHT']), 0.15)
 
 adb('shell', 'am', 'force-stop', 'com.unofficial.ufo50'); adb('shell', f'rm -f {D}/rejoin.txt')
+adb('shell', f'echo off > {D}/okplay.txt')   # no room server: this test plays alone (mp_test.py takes it away again)
 adb('logcat', '-G', '16M'); adb('logcat', '-c')   # a bigger log buffer, if the device allows it: the run takes about 8 minutes
 adb('shell', 'monkey', '-p', 'com.unofficial.ufo50', '-c', 'android.intent.category.LAUNCHER', '1'); time.sleep(24)
 cmd('solo'); time.sleep(14); key('Z'); time.sleep(6)
@@ -65,7 +66,7 @@ for round_ in (1, 2):
     ok = ok and good
     print(f'estimate {round_}: {"PASS" if good else "FAIL"} estimated {est} ms, took {took} ms ({took / max(1, est):.2f}x), {v}', flush=True)
 print('replay speeds:', ' | '.join(adb('shell', f'cat {D}/replay_speed.txt').split(chr(10))).strip())
-bad = [x for x in adb('logcat', '-d').splitlines() if re.search(r'FATAL|SIGSEGV|Assertion failed', x)]   # the whole run
+bad = [x for x in adb('logcat', '-d').splitlines() if re.search(r'FATAL|SIGSEGV|Assertion failed|ERROR in action', x)]   # the whole run
 if bad: print('crash or failed assertion:', bad[0].strip()[-160:])
 print('rewind:', 'PASS' if ok and not bad else 'FAIL')
 sys.exit(0 if ok and not bad else 1)

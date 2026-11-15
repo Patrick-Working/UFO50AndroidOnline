@@ -126,7 +126,7 @@ def launch():
     if w.game_pids(): w.stop()
     for n in (1, 2):
         set_name(n, "TEST%d" % n)
-        for f in ("rejoin.txt", "ss_cmd"):
+        for f in ("rejoin.txt", "ss_cmd", "okplay.txt"):   # (okplay.txt: the tests that play alone switch the room server off)
             try: os.remove(os.path.join(folder(n), f))
             except OSError: pass
     pids = [w.start(1)]
@@ -401,7 +401,12 @@ if __name__ == "__main__":
         print("PASSED" if not c.failed else "FAILED: " + "; ".join(c.failed))
         sys.exit(1 if c.failed else 0)
     elif what == "all":
-        c = test(*start())
+        try:
+            c = test(*start())
+        except Exception as e:
+            print("FAILED: " + str(e))
+            w.stop()   # a test that stops half way mustn't leave its games running (they'd answer the next test's commands)
+            sys.exit(1)
         print("PASSED" if not c.failed else "FAILED: " + "; ".join(c.failed))
         good = w.stop()
         sys.exit(1 if c.failed or not good else 0)

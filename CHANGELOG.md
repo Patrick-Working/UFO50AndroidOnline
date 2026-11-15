@@ -6,6 +6,33 @@
   phone the two new buttons left of the disk, on Windows **F5** and **F9** (also in the F1 menu).
   The save list shows it as QUICK. (Built by `bash build.sh` for now: the quick build uses the
   v0.4.0 kits until they are made again for a release; it gets the tile fix below.)
+- **Keyboard and controller on a phone, as on Windows.** F1, or both sticks pressed in, opens the
+  save list; arrows / D-pad move a yellow outline, Enter / A chooses, Esc / B goes back, Delete / X
+  deletes; F5 / F9 quick save and load; F2 / F3 answer a load vote or the offer to rejoin. The game
+  gets every key while the save list is closed. The save list has QUICK SAVE and QUICK LOAD too.
+- **Loads check the picture too.** A snapshot load already compared PFO's checksums over the two
+  seconds after the save; now it also compares the picture the game draws at three of those
+  frames, and replays instead when anything differs. It found the next three fixes.
+- **Fixed: game 48 (8 in the library) had a black floor after a load through the library**: its
+  floor is tiles drawn one by one, which a room built afresh didn't have.
+- **Fixed: after a load from another game, some games drew their score in the other game's
+  colour** (games 34 and 46 in the code, 3 and 24 in the library): GameMaker's drawing state
+  (colour, alpha, font, text alignment, blend mode) wasn't part of a snapshot, and they draw their
+  score without setting a colour. Snapshots keep it now.
+- **Fixed: a "Code Error" box (Windows) or a game-code error (Android) when a load from another
+  game fell back to replaying** ("Unable to find instance for object index ..." in
+  o07__eSpikes, o12_mapAnimal, o37_buSmallBench): leaving the game before the replay left its
+  objects running a step without their controller. They are switched off first now. The fallback
+  is rare, but the picture check makes it run more often, which is how it came up.
+- **Loads wait for the saved game's textures** before putting the state back (they load in the
+  background), so the first frames after a load through the library are drawn right.
+- **Tests:** `tests/quickslot.py` and `tests/win/quickslot.py` (quick slot, the keys, the fallen
+  block), `tests/win/rewind.py` (rewind on Windows). The sweeps count a game-code error or crash
+  as a result (GAME ERROR) instead of retrying it, and a load that compared no pictures as not good.
+  The tests that play alone (the sweeps, quick slot, rewind) switch the room server off
+  (`okplay.txt`: `off`), so hundreds of test games don't ask oldkid.net for lobbies; the online
+  tests switch it on again. The Windows tests press keys in their own game's window only and close
+  only their own game, so they can run beside a sweep.
 - **Fixed: a load could leave tiles a game had drawn since the save.** Some games draw one-off
   tiles at run time (in Barbuta a loose block lands as three of them, beside the blocks that make
   it solid): a load took the solid blocks away but left the tiles, so a fallen block still showed,

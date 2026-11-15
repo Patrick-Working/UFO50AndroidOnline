@@ -72,6 +72,9 @@ Files in `/sdcard/Android/data/com.unofficial.ufo50/files/` that change how the 
 |---|---|
 | `forcerelay` (empty) | join through the relay only |
 | `okplay.txt` (a URL) | use another room server |
+| `okplay.txt` (`off`) | no room server at all: what the tests that play alone use (the sweeps, quick slot, rewind write it; `mp_test.py` removes it) |
+| `snapfail` | testing: every snapshot load fails its check on purpose, so the replay it falls back to runs (a sweep with it on tests the fallback in every game) |
+| `picdebug` | development: the pictures a load compares are saved as PNGs (`picdbg_<slot><frame>.png` after a save, `picdbg_<slot>5<frame>.png` in the load's check), and a picture that differs is logged with both fingerprints |
 | `snapdebug` | development: a snapshot also remembers the whole game state one frame later, and a load compares against it (logcat `PFOSNAP`) |
 | `snapdiffat` (`<frame>` or `<first> <step> <count>`) | development: live play remembers the whole state at those frames, a replay compares there |
 | `replay_speed.txt` | not a switch: the replay speed this device has measured in each game (`<game id> <frames a second>`, `-100` overall). Delete it to start over. |
@@ -82,13 +85,34 @@ Files in `/sdcard/Android/data/com.unofficial.ufo50/files/` that change how the 
 
 Remove the development switches after use: they slow saves and loads down.
 
+## What a load checks
+
+A snapshot load puts the state back, then plays the 120 frames that followed the save flat out
+(hidden behind the loading screen) and compares two things with what was noted when they were
+first played: PFO's checksum of every frame, and the picture the game drew (its 384x216 surface)
+at three of them. The picture check catches what the checksums don't cover: anything that only
+shows. It is how the tiles some games draw one by one were found (a fallen block stayed on screen
+after a load in Barbuta; game 48's floor came back black after a load through the library).
+Anything different and the snapshot doesn't count: the load replays the session instead, which is
+slower but always right. The log says which frame differed (`snapshot didn't check out (the
+picture at frame 21 of 120 differs), replaying instead`), and a good load says how many pictures
+it compared (`... 120 frames checked, 3 pictures: verified`).
+
+A snapshot also keeps GameMaker's drawing state (colour, alpha, font, text alignment, blend mode):
+some games draw text without setting a colour, and after a load from another game drew it in that
+game's last colour.
+
+Before putting the state back, a load waits for the saved game's textures (each game's are loaded
+in the background): `load slot N: waited N ms for the game's textures`.
+
 ## The scripts
 
 All are in `tests/`; run them with Python 3 from anywhere.
 
 | script | what it checks | usage |
 |---|---|---|
-| `sweep4.py` | **Every game's save states.** Per game: a fresh app, solo session, opens the game through the library with key presses, plays, saves, leaves to the library (or into another game, or stays), loads (snapshot + its 120-frame check), plays, saves again, then loads that save by replay only. Every step checks which game is running; a run that went astray is retried from a fresh app (up to 3 tries) and kept apart from real failures, with its logcat, screen and files kept as `noresult_*`. | `sweep4.py 1,2,3 out.txt [library\|other\|same]` (game numbers as in the library, 1-50) |
+| `sweep4.py` | **Every game's save states.** Per game: a fresh app, solo session, opens the game through the library with key presses, plays, saves, leaves to the library (or into another game, or stays), loads (snapshot + its 120-frame check, with the pictures it compared: a load that compared none doesn't count), plays, saves again, then loads that save by replay only. Every step checks which game is running; a run that went astray is retried from a fresh app (up to 3 tries) and kept apart from real failures, with its logcat, screen and files kept as `noresult_*`. A game-code error ("ERROR in action"), a crash or a failed assertion anywhere in a run is a result of its own, `GAME ERROR`, never retried. | `sweep4.py 1,2,3 out.txt [library\|other\|same]` (game numbers as in the library, 1-50; `SWEEP_PORT=5565` for the second instance) |
+| `quickslot.py` | **Quick save and quick load, and the overlay's keys.** F5 before solo play is refused with the banner saying how to start it; in Barbuta F5 saves the QUICK slot, walking right makes the loose block fall, F9 loads the quick save from its snapshot with its pictures compared, and the room is as it was saved (no block left drawn). F1 opens the save list, an arrow moves the outline, Esc closes it; both sticks pressed in open it, B closes it; with the controller alone the quick save is picked in the list and loaded. No game-code error or crash in the log. | `quickslot.py [port]` |
 | `rewind_test.py` | **Rewind and its estimates.** Solo session, opens Velgress, plays with a pause (so there's a keyframe), then rewinds 15 s and 60 s; each must land on its frame with the replay checksums matching. Then twice: plays 2.5 minutes, rewinds 60 s, and compares the time it took with its estimate (it fails if it took over 25% longer). Prints the learned replay speeds. | `rewind_test.py [port]` |
 | `mp_test.py` | **One online save and load.** Starts both apps, hosts a public lobby, joins, readies, picks a profile; the host saves, plays on, proposes loading; the joiner accepts or declines. Then it judges both logs: the save has the same frame and checksum on both phones; an accepted load ends on the same frame on both, and a declined one loads nothing; no desync or crash line in the log of the whole test, which ends 15 s after the vote. The last line is `mp_test: PASS` or `mp_test: FAIL (why)`. | `mp_test.py [accept\|decline] [--no-start]` (`--no-start`: use the match that is already running) |
 | `mp_regress.py` | **Every online scenario**, one after another, each judged automatically: 1 save + accepted load, 2 declined load, 3 rejoin through an online save and load, 4 a 20-second network drop, 5 the joiner's app killed and rejoining, 6 loading a save from an earlier match. Each scenario checks its own log lines (in 1 the save's frame and checksum and the load's frame are the same on both phones, in 4 the drop really happened, in 3 and 6 the replays are verified). After each one both phones answer `where`: both must say 2 players and the same game, their frame numbers must be within 120 of each other and still going up, and the same game must be picked on both screens. Checksums are not compared at this point: PFO compares them during play, and the script fails a scenario when a "Desync detected" line, a crash or a failed assertion is anywhere in that scenario's log. | `mp_regress.py [1,4,5]` |
@@ -125,7 +149,9 @@ game, so keep them to yourself.
 | script | what it checks | usage |
 |---|---|---|
 | `wingame.py` | The sandbox, and the helper the others use: start and stop test games, pictures of the window, key presses, and presses of the menu's test controller (a message the build takes as a controller's buttons; no driver). `WINGAME_DIR` names another game folder to test. | `wingame.py start [n]`, `stop`, `check`, `home [n]`, `shot out.png`, `keys z z down z`, `keys pad:l3+r3 pad:a` |
-| `sweep.py` | **Save states, game by game** (the Windows twin of `sweep4.py`): save, play on, leave to the library (or into another game, or stay), load from the snapshot with the 120-frame check, save again, then a load by replay through the snapshot load. | `sweep.py 1,2,3 out.txt [library\|other\|same] [box]`, `sweep.py all out.txt library x5` |
+| `sweep.py` | **Save states, game by game** (the Windows twin of `sweep4.py`): save, play on, leave to the library (or into another game, or stay), load from the snapshot with the 120-frame check (and the pictures it compared: none doesn't count), save again, then a load by replay through the snapshot load. A game that shows the Code Error box or closes by itself is a result, `GAME ERROR`, never retried. | `sweep.py 1,2,3 out.txt [library\|other\|same] [box]`, `sweep.py all out.txt library x5` |
+| `quickslot.py` | **Quick save and quick load** (the twin of `tests/quickslot.py`): F5 before solo play refused, F5 / F9 in Barbuta with the loose block falling in between, the load verified with its pictures, then the controller alone (both sticks in, down to QUICK LOAD (F9), A). Keys go to its own window only. | `quickslot.py [box]` |
+| `rewind.py` | **Rewind and its estimates** (the twin of `tests/rewind_test.py`). | `rewind.py [box]` |
 | `uitest.py` | **The menu, step by step**, by keyboard and by the test controller: every page, the saves list with pictures, the confirm page, the loading screen, with a picture of each step. | `uitest.py <folder for the pictures> [box]` |
 | `duo.py` | **Two Windows games in one match.** A private lobby joined by its code; an online save (the same frame and checksum on both, a snapshot and a picture on both); a two-player game; a save there; a load that is declined (the box asking shows the save's picture); a load that is accepted (both put the snapshot back on the same frame and carry on); a library save loaded from inside the game; the joiner killed, started again and rejoining; no desync lines, no error box, and no save files piling up. With `PFO_NO_SNAPSHOTS=1` set it expects a match of files only (every accepted load restarts the match from the save by replay). | `duo.py all` (or `start`, `test`, `stop`) |
 | `cross.py` | **A Windows game and an Android emulator in one match.** Both in the online library; a save asked for by each side (the same frame and checksum on both: the two builds compute the same game); a two-player game; a load asked for by each side and accepted by the other; a minute of play with a save at the end; each side's app killed and rejoining. | `cross.py win [port]` (Windows hosts), `cross.py android [port]` (the emulator hosts) |
@@ -143,6 +169,38 @@ be closed. `wingame.state_of(pid)` prints the box's text, and `duo.py` checks fo
 
 For `vergate.py` and `xgate.py` the "other version" is a second game folder whose `PFO.dll` was
 built with another `c_BuildWire` (in `pfo/android/fakesteam_impl.inc`).
+
+## Results after the picture check (2026-11-14, not yet released)
+
+On the final build (picture check, tile restore by id and by content, the drawing state, the wait
+for textures, the fallback that switches the left game's objects off), BlueStacks x86_64 and the
+Windows build on one PC:
+
+| test | Windows | Android |
+|---|---|---|
+| sweep, all 50 games, loaded from the library | 50 / 50 | 50 / 50 |
+| sweep, loaded from another game | 50 / 50 | 50 / 50 |
+| sweep, loaded in the same game | 50 / 50 (the build before the fallback fix) | 50 / 50 (the same) |
+| every snapshot forced to fail (`snapfail`): the fallback replay in games 9, 29, 30, 40, 44, 46 | no error, replays verified | no error, replays verified (29, 40, 44) |
+| `quickslot.py` | PASS | PASS |
+| rewind (`rewind.py` / `rewind_test.py`) | PASS (estimates 0.76x, 0.85x) | PASS (0.92x, 0.95x) |
+| `uitest.py` | all as expected | - |
+| `duo.py all` | PASSED | - |
+| `mp_regress.py` | - | 6 / 6 |
+| `mp_nosnap.py` | - | PASS |
+| `cross.py win` / `cross.py android` | PASSED / PASSED | |
+
+Found and fixed on the way (each a load that looked right to the checksums): tiles drawn one by
+one left behind or missing (Barbuta's fallen block, game 48's floor), the textures of a game
+still loading during a load's check, another game's drawing colour, and an error box when a load
+fell back to replaying from another game.
+
+Still open:
+- Game 29 (07 in the code) loaded from another game: its snapshot sometimes fails its check at
+  frame 3 (seen once on Windows and on Android). The load then replays and comes out right, slower.
+- Games 50 and 24 (45 and 46 in the code): a replay-only load sometimes doesn't verify (game 50 in
+  about 4 runs of 10, on the build before these changes too; game 24 once in 7).
+- `vergate.py` and `xgate.py` were not run (the version gate wasn't changed).
 
 ## Results for v0.4.0
 
@@ -188,6 +246,10 @@ frames a second depending on the game, so a replayed load or rewind takes a few 
 of play.
 
 ## Not tested yet
+
+- **The overlay's keys with a real keyboard or controller on a phone.** They were driven by adb
+  (`input keyevent`, `input gamepad keyevent`): the D-pad given as keys, not as a hat axis, and
+  both sticks as two presses in a row rather than held together.
 
 - **A real phone, and arm64.** The kit builds `libPFO.so` for arm64-v8a and x86_64, but all testing
   above ran on x86_64 BlueStacks. Save states read the GameMaker runner's internal structures, and

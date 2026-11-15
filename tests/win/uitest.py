@@ -88,8 +88,9 @@ def main():
         g.mark(); wingame.pad("l3+r3", g.hwnd); time.sleep(0.5)
         step("both sticks open the menu", r"menu: open"); shot("menu_pad")
         expect("a controller is noticed", r"controller: one is connected", 2)
-        g.mark(); wingame.pad("down", g.hwnd); wingame.pad("a", g.hwnd); time.sleep(0.6)
-        step("down, A: the saves page", r"menu: LOAD A SAVE"); shot("saves_pad")
+        # (SAVE, QUICK SAVE (F5), LOAD A SAVE...)
+        g.mark(); wingame.pad("down", g.hwnd); wingame.pad("down", g.hwnd); wingame.pad("a", g.hwnd); time.sleep(0.6)
+        step("down, down, A: the saves page", r"menu: LOAD A SAVE"); shot("saves_pad")
         wingame.pad("down", g.hwnd); time.sleep(0.4); shot("saves_pad_second")
         wingame.pad("x", g.hwnd); time.sleep(0.4); shot("saves_delete_armed")
         time.sleep(2.8); shot("saves_delete_lapsed")
@@ -98,7 +99,7 @@ def main():
         step("B, B: closed", r"menu: closed")
 
         # by keyboard: the saves page, load the first save in the list
-        g.key("f1", 0.5); g.key("down", 0.3); g.key("enter", 0.6); shot("saves_keys")
+        g.key("f1", 0.5); g.key("down", 0.3); g.key("down", 0.3); g.key("enter", 0.6); shot("saves_keys")
         g.mark(); g.key("enter", 0.3)
         step("enter on a save", r"menu: ([^\n]*)")
         cover = since(r"cover: on \(([^\n]*)\)", 3)
@@ -141,7 +142,7 @@ def main():
         if not g.to_library(): raise SystemExit("did not reach the library")
         g.cmd("solo"); time.sleep(3)
         g.to_library(20)
-        g.key("f1", 0.5); g.key("down", 0.3); g.key("enter", 0.8); shot("saves_after_restart")
+        g.key("f1", 0.5); g.key("down", 0.3); g.key("down", 0.3); g.key("enter", 0.8); shot("saves_after_restart")
         g.mark(); g.key("enter", 0.6)
         asked = since(r"cover: on", 1.5) is None
         g.say(("ok   " if asked else "FAIL ") + "a long load is asked about first")

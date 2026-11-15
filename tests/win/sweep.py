@@ -5,8 +5,10 @@ against the next 120 frames), mash, save 2, then a replay-only load of save 2 (w
 session through the snapshot load).
 Every step checks where it is (the game's internal id); a run that isn't where it should be is
 retried from a fresh test game (up to 3 tries) instead of being reported as a result.
-A game is good when its line says "snapshot ok ..." and "replay through it ok ...". The last line
-counts the games that are not; the exit code is 1 when there is one, else 0.
+A game is good when its line says "snapshot ok ..." (with the pictures it compared: a load that
+compared none doesn't count) and "replay through it ok ...". A game that shows GameMaker's "Code
+Error" box or closes by itself is a result, GAME ERROR, not something to retry. The last line counts
+the games that are not good; the exit code is 1 when there is one, else 0.
 
   python sweep.py 1,2,3 out.txt [library|other|same] [box]     these games, in test game <box> (11)
   python sweep.py all out.txt [library|other|same] x5          all 50, five test games at a time
@@ -25,9 +27,11 @@ MODES = ("library", "other", "same")
 
 
 def setup(box):
-    """the box's own game settings: sound off, in a window"""
+    """the box's own game settings: sound off, in a window, and no room server (these tests play
+    alone: hundreds of test games asking oldkid.net for lobbies would only load it)"""
     d = os.path.join(wingame.home(box), "ufo50_online")
     os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "okplay.txt"), "w") as f: f.write("off\n")
     cfg = os.path.join(d, "config.json")
     if not os.path.exists(cfg):
         # the settings another test game wrote (the game writes the file on its first run)
@@ -140,6 +144,15 @@ class Game:
             if self.where(1)[0] is not None: return True
         return False
 
+    def game_error(self):
+        """'' while the test game is fine, else what went wrong: its Code Error box, or it closed"""
+        st = wingame.state_of(self.pid)
+        if st.startswith("the process is gone"): return "the game closed by itself"
+        if "'Code Error'" in st:
+            lines = [l.strip() for l in st.splitlines() if "ERROR in" in l]
+            return ("Code Error box: " + (lines[0] if lines else "")).strip()[:220]
+        return ""
+
     def diag(self, n, what):
         """everything about a run that gave no result: the end of the log, the screen"""
         base = os.path.join(os.path.dirname(os.path.abspath(self.out.name)), "noresult_%d_%s_%s" % (n, what, time.strftime("%H%M%S")))
@@ -200,7 +213,9 @@ class Game:
         while time.time() - t0 < 60:
             time.sleep(0.5)
             o = self.log()
-            if "from its snapshot in" in o and "verified" in o: snap = "ok " + re.search(r"from its snapshot in (\d+) ms", o).group(1) + " ms"; break
+            if "from its snapshot in" in o and "verified" in o:
+                pics = re.search(r"(\d+) pictures: verified", o)
+                snap = "ok " + re.search(r"from its snapshot in (\d+) ms", o).group(1) + " ms, " + (pics.group(1) if pics else "0") + " pictures"; break
             m = re.search(r"snapshot didn't check out \(([^)]*)\)", o)
             if m and "reached frame" in o: snap = "FAILED (" + m.group(1) + ")"; break
             if "capture failed" in o or "restore failed" in o: snap = "capture/restore error"; break
@@ -244,7 +259,7 @@ class Game:
 
 
 def good(line):
-    return ": snapshot ok " in line and "| replay through it ok " in line
+    return ": snapshot ok " in line and "| replay through it ok " in line and " 0 pictures" not in line
 
 
 def worker(games, outpath, mode, box):
@@ -258,6 +273,8 @@ def worker(games, outpath, mode, box):
                 g.run_start = os.path.getsize(g.logpath) if os.path.exists(g.logpath) else 0
                 res, problem = g.run_once(n, mode)
                 if res: break
+                err = g.game_error()
+                if err: res = "GAME ERROR: %s (while: %s)" % (err, problem); break   # a result, not a harness hiccup
                 why.append(problem)
             tag = "game %2d (internal %d, loaded from %s)" % (n, ID[n], mode)
             line = "%s: %s" % (tag, res) + ("  [retried: %s]" % "; ".join(why) if why else "") if res else "%s: HARNESS could not run it: %s" % (tag, "; ".join(why))

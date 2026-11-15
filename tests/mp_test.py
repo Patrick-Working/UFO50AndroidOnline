@@ -32,7 +32,7 @@ def full(p): return adb(p, 'logcat', '-d')
 def start_once():
     for p in (H, J):
         adb(p, 'shell', 'am', 'force-stop', 'com.unofficial.ufo50')
-        adb(p, 'shell', f'rm -f {D}/rejoin.txt')   # no "rejoin your match?" over the menus
+        adb(p, 'shell', f'rm -f {D}/rejoin.txt {D}/okplay.txt')   # no "rejoin your match?" over the menus; the room server on (the offline tests switch it off)
         adb(p, 'logcat', '-c')
         adb(p, 'shell', 'monkey', '-p', 'com.unofficial.ufo50', '-c', 'android.intent.category.LAUNCHER', '1')
     time.sleep(24)
@@ -134,7 +134,7 @@ def main():
     for p, n in ((H, 'host'), (J, 'join')):
         lines = full(p).splitlines()
         bad = [x for x in lines if re.search(r'(?i)desync|ran out of input|GoingOffline', x)]
-        crash = [x for x in lines if re.search(r'FATAL|SIGSEGV|Assertion failed', x)]
+        crash = [x for x in lines if re.search(r'FATAL|SIGSEGV|Assertion failed|ERROR in action', x)]
         print(n, 'after 15 s:', 'no desync' if not bad else bad[:3])
         if bad: fails.append(f'{n}: {bad[0].strip()[-120:]}')
         if crash: fails.append(f'{n}: crash or failed assertion: {crash[0].strip()[-120:]}')

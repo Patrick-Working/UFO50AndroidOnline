@@ -11,6 +11,9 @@
 // uses: layer_tile_get_xscale layer_tile_get_yscale layer_tile_get_blend layer_tile_get_alpha layer_tile_exists
 // uses: layer_tile_create layer_tile_destroy layer_tile_change layer_tile_x layer_tile_y layer_tile_region
 // uses: layer_tile_visible layer_tile_xscale layer_tile_yscale layer_tile_blend layer_tile_alpha layer_create
+// uses: draw_get_colour draw_get_alpha draw_get_font draw_get_halign draw_get_valign draw_set_colour
+// uses: draw_set_alpha draw_set_font draw_set_halign draw_set_valign gpu_get_blendmode_ext gpu_set_blendmode_ext
+// uses: array_pop variable_struct_names_count is_numeric texturegroup_get_status texturegroup_load surface_save buffer_get_surface surface_exists surface_get_width surface_get_height
 // uses: array_length array_push string_char_at object_get_name buffer_seek string_length
 // uses: instance_change instance_activate_object ds_map_exists ds_map_delete asset_get_index
 // uses: instance_number array_sort audio_stop_all buffer_create buffer_delete buffer_md5
@@ -47,6 +50,10 @@
 //   "hash", 0       a fingerprint of the current state (instances by their order, not their ids,
 //                   so a restored state compares equal to the original)
 //   "drop", id      forget a snapshot
+//   "textures", id  the snapshot's game's textures: starts loading them if they aren't; "1" once they
+//                   are on the GPU (libPFO waits for that before a load puts the state back)
+//   "picture", 0    a fingerprint of the picture the game drew this frame (from its drawing: libPFO
+//                   compares the frames after a save with the same frames of a load's check)
 //   "probe", 0      log what values look like at runtime
 function pfo_snapshot(_cmd, _arg)
 {
@@ -100,6 +107,30 @@ function pfo_snapshot(_cmd, _arg)
             var _t = variable_global_exists("pfo_snap_touched") && global.pfo_snap_touched;
             global.pfo_snap_touched = false;
             return _t ? 1 : 0;
+        case "park":   // a game being left from a running state: its own objects stop (libPFO LeaveGame)
+            with (all) if (!persistent) instance_deactivate_object(id);
+            return 0;
+        case "textures":
+            // Each game's textures are a dynamic texture group (load_datagroup), loaded in the
+            // background. A load from the library starts loading them, and its check would then draw
+            // the first frames without them: libPFO waits for "1" before putting the state back.
+            var _ts = variable_struct_get(global.pfo_snaps, string(_arg));
+            if (is_undefined(_ts) || !variable_struct_exists(_ts.globals, "currGameID") || !variable_global_exists("TEXTUREGROUP")) return "1";
+            var _tg = variable_struct_get(_ts.globals, "currGameID");
+            if (!is_numeric(_tg) || _tg <= 0 || _tg >= array_length(global.TEXTUREGROUP)) return "1";
+            var _grp = global.TEXTUREGROUP[_tg];
+            var _st = texturegroup_get_status(_grp);
+            if (_st == 0) texturegroup_load(_grp, true);
+            return _st == 3 ? "1" : "0";   // (0 unloaded, 1 loading, 2 loaded, 3 on the GPU)
+        case "picture":   // the game's 384x216 application surface, before it is scaled to the window
+            if (!surface_exists(application_surface)) return "none";
+            var _pw = surface_get_width(application_surface), _ph = surface_get_height(application_surface);
+            var _pb = buffer_create(_pw * _ph * 4, buffer_fixed, 1);
+            buffer_get_surface(_pb, application_surface, 0);
+            var _pm = buffer_md5(_pb, 0, _pw * _ph * 4);
+            buffer_delete(_pb);
+            if (_arg > 0) surface_save(application_surface, "picdbg_" + string(_arg) + ".png");   // (development: libPFO's picdebug)
+            return string(_pw) + "x" + string(_ph) + " " + _pm;
         case "drop":
             if (variable_struct_exists(global.pfo_snaps, string(_arg))) struct_remove(global.pfo_snaps, string(_arg));
             return 0;
@@ -286,6 +317,9 @@ function pfo_snap_capture()
 {
     var _ctx = { ds: {} };
     var _snap = { rm: room, ctx: _ctx, globals: {}, insts: [], layers: [], views: [], frame: pfo_get_frame(), icount: instance_count, sprites: pfo_snap_sprites_copy() };
+    // GameMaker's drawing state as the last frame left it: some games draw text without setting a
+    // colour first (game 34's score came out in the colour another game had left set)
+    _snap.draw = [draw_get_colour(), draw_get_alpha(), draw_get_font(), draw_get_halign(), draw_get_valign(), gpu_get_blendmode_ext()];
     // globals
     var _gn = variable_instance_get_names(global);
     for (var i = 0; i < array_length(_gn); i++)
@@ -428,81 +462,117 @@ function pfo_snap_count(_where)
     global.pfo_snap_stages += " " + _where + "=" + string(_n) + "/" + string(instance_count) + "/" + string(_f >= 0 ? instance_number(_f) : -1);
 }
 
-// single tiles (layer element type 7, GameMaker 1's tiles, which tile_add makes one by one): the
-// ones added since the save go. Barbuta's loose block lands as three tiles drawn with tile_add
-// beside the blocks that make it solid; a load took the blocks away and left the tiles drawn.
-// A tile deleted since is made again (with a new id, last in its layer): some games keep their
-// terrain in tiles, looking them up by place and replacing them (game 33 in the code,
-// 41 in the library), so a tile missing there is a hole in the game. Only what changed is touched:
-// a tile still here is put back where and as it was only where it differs (setting every tile again
-// made game 45, 50 in the library, play on differently after a load from the library).
-// Only when the room is the one the snapshot saw: a load that went through a room change finds the
-// room built afresh by the game's own start, its tiles with other ids (game 07 in the code, 29 in
-// the library, builds its levels out of hundreds of tile_add tiles as a room starts). Told apart by
-// the tiles themselves: most of the snapshot's are still there, by id and place.
+// Single tiles (layer element type 7: GameMaker 1's tiles, which tile_add makes one by one) as the
+// snapshot had them. Games add and delete them as they play: Barbuta's loose block lands as three
+// of them (a load left the block drawn after taking its solid part away), game 33 keeps its
+// terrain in them (looked up by place, replaced as it changes), game 48 builds each level's floor
+// out of them (a load through the library left the floor black), game 07 builds its levels from
+// hundreds of them as a room starts. In three passes, touching only what differs:
+//   1. a tile of the snapshot still here (same id, a layer at the same depth): what differs is put
+//      back. (Setting every property of every tile again made game 45 play on differently.)
+//   2. any other tile here that shows just what one of the rest did (depth, place, picture) stays:
+//      a room built afresh by the game's own start has its tiles with other ids. (Replacing those
+//      changed the order game 07 finds them in, and the load didn't check out.)
+//   3. the tiles here that are still unmatched go, and the snapshot's that are still missing are
+//      made again (with new ids, last in their layer).
+function pfo_snap_tile_key(_depth, _x, _y, _spr, _reg)
+{
+    var _k = string(_depth) + "|" + string(_x) + "|" + string(_y) + "|" + string(_spr);
+    if (is_array(_reg)) for (var i = 0; i < array_length(_reg); i++) _k += "|" + string(_reg[i]);
+    return _k;
+}
+
+function pfo_snap_tile_props(_el, _tr)
+{
+    if (layer_tile_get_sprite(_el) != _tr[3]) layer_tile_change(_el, _tr[3]);
+    if (layer_tile_get_x(_el) != _tr[1]) layer_tile_x(_el, _tr[1]);
+    if (layer_tile_get_y(_el) != _tr[2]) layer_tile_y(_el, _tr[2]);
+    var _reg = _tr[4], _now = layer_tile_get_region(_el);
+    if (is_array(_reg) && array_length(_reg) >= 4 && is_array(_now) && array_length(_now) >= 4
+        && (_now[0] != _reg[0] || _now[1] != _reg[1] || _now[2] != _reg[2] || _now[3] != _reg[3]))
+        layer_tile_region(_el, _reg[0], _reg[1], _reg[2], _reg[3]);
+    if (layer_tile_get_visible(_el) != _tr[5]) layer_tile_visible(_el, _tr[5]);
+    if (layer_tile_get_xscale(_el) != _tr[6]) layer_tile_xscale(_el, _tr[6]);
+    if (layer_tile_get_yscale(_el) != _tr[7]) layer_tile_yscale(_el, _tr[7]);
+    if (layer_tile_get_blend(_el) != _tr[8]) layer_tile_blend(_el, _tr[8]);
+    if (layer_tile_get_alpha(_el) != _tr[9]) layer_tile_alpha(_el, _tr[9]);
+}
+
 function pfo_snap_legacy_tiles(_snap)
 {
-    var _had = {};
-    var _n = 0, _same = 0;
-    for (var i = 0; i < array_length(_snap.layers); i++)
-    {
-        var _lr = _snap.layers[i];
-        if (!variable_struct_exists(_lr, "legacy")) continue;
-        for (var t = 0; t < array_length(_lr.legacy); t++)
-        {
-            var _tr = _lr.legacy[t];
-            variable_struct_set(_had, string(_tr[0]), true);
-            _n++;
-            if (layer_tile_exists(_tr[0]) && layer_tile_get_x(_tr[0]) == _tr[1] && layer_tile_get_y(_tr[0]) == _tr[2]) _same++;
-        }
-    }
-    if (_n > 0 && _same * 2 < _n) return;   // a room built afresh: its own tiles stand
+    // the tiles here now: id -> the depth of their layer
+    var _here = {};
+    var _ids = [];
     var _all = layer_get_all();
     for (var i = 0; i < array_length(_all); i++)
     {
         var _els = layer_get_all_elements(_all[i]);
         for (var e = 0; e < array_length(_els); e++)
-            if (layer_get_element_type(_els[e]) == 7 && !variable_struct_exists(_had, string(_els[e]))) layer_tile_destroy(_els[e]);
+            if (layer_get_element_type(_els[e]) == 7) { variable_struct_set(_here, string(_els[e]), layer_get_depth(_all[i])); array_push(_ids, _els[e]); }
     }
+    // 1. by id
+    var _used = {};
+    var _rest = [];
     for (var i = 0; i < array_length(_snap.layers); i++)
     {
         var _lr = _snap.layers[i];
         if (!variable_struct_exists(_lr, "legacy")) continue;
-        var _l = -1;
         for (var t = 0; t < array_length(_lr.legacy); t++)
         {
             var _tr = _lr.legacy[t];
-            var _el = _tr[0];
-            if (!layer_tile_exists(_el))
+            var _d = variable_struct_get(_here, string(_tr[0]));
+            if (!is_undefined(_d) && _d == _lr.ld && !variable_struct_exists(_used, string(_tr[0])))
             {
-                var _r = _tr[4];
-                if (!is_array(_r) || array_length(_r) < 4) continue;
-                if (_l == -1)
-                {
-                    // its layer: by name, else one at its depth (tile_add's way), else a new one
-                    if (layer_exists(_lr.name)) _l = layer_get_id(_lr.name);
-                    else
-                    {
-                        var _ls = layer_get_all();
-                        for (var k = 0; k < array_length(_ls); k++) if (layer_get_depth(_ls[k]) == _lr.ld) { _l = _ls[k]; break; }
-                        if (_l == -1) _l = layer_create(_lr.ld);
-                    }
-                }
-                _el = layer_tile_create(_l, _tr[1], _tr[2], _tr[3], _r[0], _r[1], _r[2], _r[3]);
+                variable_struct_set(_used, string(_tr[0]), true);
+                pfo_snap_tile_props(_tr[0], _tr);
             }
-            if (layer_tile_get_sprite(_el) != _tr[3]) layer_tile_change(_el, _tr[3]);
-            if (layer_tile_get_x(_el) != _tr[1]) layer_tile_x(_el, _tr[1]);
-            if (layer_tile_get_y(_el) != _tr[2]) layer_tile_y(_el, _tr[2]);
-            var _reg = _tr[4], _now = layer_tile_get_region(_el);
-            if (is_array(_reg) && array_length(_reg) >= 4 && is_array(_now) && array_length(_now) >= 4
-                && (_now[0] != _reg[0] || _now[1] != _reg[1] || _now[2] != _reg[2] || _now[3] != _reg[3]))
-                layer_tile_region(_el, _reg[0], _reg[1], _reg[2], _reg[3]);
-            if (layer_tile_get_visible(_el) != _tr[5]) layer_tile_visible(_el, _tr[5]);
-            if (layer_tile_get_xscale(_el) != _tr[6]) layer_tile_xscale(_el, _tr[6]);
-            if (layer_tile_get_yscale(_el) != _tr[7]) layer_tile_yscale(_el, _tr[7]);
-            if (layer_tile_get_blend(_el) != _tr[8]) layer_tile_blend(_el, _tr[8]);
-            if (layer_tile_get_alpha(_el) != _tr[9]) layer_tile_alpha(_el, _tr[9]);
+            else array_push(_rest, [_tr, _lr]);
         }
+    }
+    if (array_length(_rest) == 0 && array_length(_ids) == variable_struct_names_count(_used)) return;
+    // 2. by what they show
+    var _free = {};
+    for (var i = 0; i < array_length(_ids); i++)
+    {
+        var _el = _ids[i];
+        if (variable_struct_exists(_used, string(_el))) continue;
+        var _k = pfo_snap_tile_key(variable_struct_get(_here, string(_el)), layer_tile_get_x(_el), layer_tile_get_y(_el), layer_tile_get_sprite(_el), layer_tile_get_region(_el));
+        var _list = variable_struct_get(_free, _k);
+        if (is_undefined(_list)) { _list = []; variable_struct_set(_free, _k, _list); }
+        array_push(_list, _el);
+    }
+    var _make = [];
+    for (var i = 0; i < array_length(_rest); i++)
+    {
+        var _tr = _rest[i][0], _lr = _rest[i][1];
+        var _list = variable_struct_get(_free, pfo_snap_tile_key(_lr.ld, _tr[1], _tr[2], _tr[3], _tr[4]));
+        if (!is_undefined(_list) && array_length(_list) > 0)
+        {
+            var _el = array_pop(_list);
+            variable_struct_set(_used, string(_el), true);
+            pfo_snap_tile_props(_el, _tr);
+        }
+        else array_push(_make, _rest[i]);
+    }
+    // 3. the unmatched go, the missing are made
+    for (var i = 0; i < array_length(_ids); i++)
+        if (!variable_struct_exists(_used, string(_ids[i]))) layer_tile_destroy(_ids[i]);
+    for (var i = 0; i < array_length(_make); i++)
+    {
+        var _tr = _make[i][0], _lr = _make[i][1];
+        var _r = _tr[4];
+        if (!is_array(_r) || array_length(_r) < 4) continue;
+        // its layer: by name, else one at its depth (tile_add's way), else a new one
+        var _l = -1;
+        if (layer_exists(_lr.name)) _l = layer_get_id(_lr.name);
+        else
+        {
+            var _ls = layer_get_all();
+            for (var k = 0; k < array_length(_ls); k++) if (layer_get_depth(_ls[k]) == _lr.ld) { _l = _ls[k]; break; }
+            if (_l == -1) _l = layer_create(_lr.ld);
+        }
+        var _el = layer_tile_create(_l, _tr[1], _tr[2], _tr[3], _r[0], _r[1], _r[2], _r[3]);
+        pfo_snap_tile_props(_el, _tr);
     }
 }
 
@@ -786,6 +856,15 @@ function pfo_snap_restore(_snap)
         }
     }
     pfo_snap_legacy_tiles(_snap);
+    // the drawing state
+    if (variable_struct_exists(_snap, "draw"))
+    {
+        var _dr = _snap.draw;
+        draw_set_colour(_dr[0]); draw_set_alpha(_dr[1]);
+        if (_dr[2] >= 0) draw_set_font(_dr[2]);
+        draw_set_halign(_dr[3]); draw_set_valign(_dr[4]);
+        if (is_array(_dr[5]) && array_length(_dr[5]) >= 2) gpu_set_blendmode_ext(_dr[5][0], _dr[5][1]);
+    }
     // cameras
     for (var i = 0; i < 8; i++)
     {

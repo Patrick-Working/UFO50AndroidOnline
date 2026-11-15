@@ -107,7 +107,7 @@ def both_where(a, b):
 
 def start_windows():
     if w.game_pids(): w.stop()
-    for f in ("rejoin.txt", "ss_cmd"):
+    for f in ("rejoin.txt", "ss_cmd", "okplay.txt"):   # (okplay.txt: the tests that play alone switch the room server off)
         try: os.remove(os.path.join(duo.folder(1), f))
         except OSError: pass
     return w.start(1)    # the pid (its window comes a few seconds later)

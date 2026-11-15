@@ -379,6 +379,7 @@ namespace pfo_android
         Script_Perform(fn, self, self, argc, &result, args);
     }
     bool GlobalGet(const char* name, RValue& out, CInstance* self);
+    std::string Snap(const char* cmd, int id, CInstance* self);
 
     // A session starts in the library, so one started from inside a game (a solo session, or a
     // load replaying from the start) first leaves the game the way the game itself does
@@ -395,6 +396,11 @@ namespace pfo_android
         if (gameID > 0) { RValue a[3]; init_real(a[0], gameID); init_bool(a[1], true); init_bool(a[2], true); CallScript("unload_datagroup", self, 3, a); }
         if (GlobalGet("paused", v, self) && YYGetBool(&v, 0)) CallScript("scrUnpause", self);
         CallScript("scrCleanup", self);
+        // The game's own exit happens from its pause menu, with its objects switched off; from a
+        // running game (a load whose snapshot didn't check out, replaying from the start) they would
+        // run another step without the controller scrCleanup removed ("Unable to find instance" in
+        // o07__eSpikes, o12_mapAnimal, o37_buSmallBench): switched off now, they go with the room.
+        Snap("park", 0, self);
         __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "left game %d before the session start", game);
     }
 
@@ -757,6 +763,7 @@ namespace pfo_android
         std::vector<SnapFile> files;
         uint32 rng[16] = {}, rndIndex = 0, rndSeed = 0;
         std::vector<uint32> checksums;        // frames frame+1 .. frame+120
+        std::vector<std::pair<int, std::string>> pictures;   // (frame - frame - 1, fingerprint of the drawn picture)
         std::vector<uint32> touches;          // the timeline's touches up to frame (incl. this capture's)
         std::vector<uint32> touchesAfter;     // and in the 120 frames after (for the check)
         std::vector<uint8> replay;            // the session's replay up to frame+120
@@ -1192,6 +1199,54 @@ namespace pfo_android
         __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "snapshot %d: taken at frame %u in %lld ms", id, g_Session.m_Frame, static_cast<long long>(fakesteam::NowMs() - t0));
     }
 
+    // The picture check. PFO's checksums cover what the game's logic reads; a load can still get
+    // something wrong that only shows (Barbuta's fallen block was drawn as tiles, which snapshots
+    // didn't keep: it stayed on screen after a load, and every checksum agreed). So the picture the
+    // game draws (its 384x216 application surface, fingerprinted by pfo_snapshot.gml) is noted at a
+    // few frames after a save, and the load's check compares the same frames: any difference and the
+    // snapshot doesn't count (the load replays instead) and the log says which frame.
+    constexpr int c_SnapPictureAt[] = { 20, 60, 100 };   // within the 120 checked frames (0 = the first)
+    int g_SnapPictureBad = -1;                            // the first checked frame whose picture differed
+    // development: files/picdebug saves the pictures compared (picdbg_1<frame>.png after a save,
+    // picdbg_2<frame>.png in a load's check), to see what differs
+    bool PictureDebug() { return access("/sdcard/Android/data/" PFO_PACKAGE "/files/picdebug", F_OK) == 0; }
+    bool SnapPictureFrame(int i) { for (int k : c_SnapPictureAt) if (k == i) return true; return false; }
+
+    // from the game's drawing (pfo_android_screen), once a frame
+    void SnapPictures(CInstance* self)
+    {
+        auto& s = g_Session;
+        if (s.m_OnlineState != EOnlineState::Online) return;
+        if (g_SnapLoad.phase == 2)
+        {
+            auto it = g_Snaps.find(g_SnapLoad.id);
+            if (it == g_Snaps.end()) return;
+            int i = static_cast<int>(s.m_Frame) - static_cast<int>(it->second.frame) - 1;
+            for (auto& p : it->second.pictures)
+            {
+                if (p.first != i) continue;
+                std::string now = Snap("picture", PictureDebug() ? (it->first % 100000) * 1000 + 500 + i : 0, self);
+                if (now != p.second && g_SnapPictureBad < 0)
+                {
+                    g_SnapPictureBad = i;
+                    __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "picture at frame %d: saved %s, now %s", i + 1, p.second.c_str(), now.c_str());
+                }
+            }
+            return;
+        }
+        if (g_SnapLoad.phase != 0 || s.m_ReplayReader.m_Buffer != nullptr) return;
+        for (auto& kv : g_Snaps)
+        {
+            auto& n = kv.second;
+            if (n.ready || n.mp) continue;
+            int i = static_cast<int>(s.m_Frame) - static_cast<int>(n.frame) - 1;
+            if (!SnapPictureFrame(i) || i + 1 != static_cast<int>(n.checksums.size())) continue;   // (this frame's checksum noted: the session ran it live)
+            bool have = false;
+            for (auto& p : n.pictures) if (p.first == i) have = true;
+            if (!have) n.pictures.push_back({ i, Snap("picture", PictureDebug() ? (kv.first % 100000) * 1000 + i : 0, self) });
+        }
+    }
+
     // after each live frame: note checksums for snapshots still collecting their 120 frames
     void SnapCollect(CInstance* self)
     {
@@ -1402,6 +1457,22 @@ namespace pfo_android
         // Just arrived in the snapshot's room: a room change lines the persistent instances up anew,
         // so line up the runner's animation pass again (gmi::ArrangeSuccessor) and restore next step.
         static bool arrived = false;
+        // the saved game's textures first (they load in the background: a check without them would
+        // draw other pictures than the save's). Not for an online load, which mustn't hold the match.
+        static int64 texturesFrom = 0;
+        if (g_SnapLoad.phase == 1 && !arrived && !g_SnapLoad.forward)
+        {
+            int64 now = fakesteam::NowMs();
+            if (Snap("textures", g_SnapLoad.id, self) != "1")
+            {
+                if (texturesFrom == 0) texturesFrom = now;
+                if (now - texturesFrom < 8000) { g_SnapSkipUpdate = true; return; }
+                __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: the game's textures didn't load in 8 s, going on", g_SnapLoad.id);
+            }
+            else if (texturesFrom != 0)
+                __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "load slot %d: waited %lld ms for the game's textures", g_SnapLoad.id, static_cast<long long>(now - texturesFrom));
+            texturesFrom = 0;
+        }
         if (arrived)
         {
             arrived = false;
@@ -1455,7 +1526,7 @@ namespace pfo_android
                 g_SnapLoad.id, it->second.frame, g_Restore.header.frame);
             return;
         }
-        if (!final) { g_SnapLoad.phase = 2; return; }
+        if (!final) { g_SnapLoad.phase = 2; g_SnapPictureBad = -1; return; }
         if (g_SnapLoad.forward && g_SnapLoad.nested)
         {
             g_SnapLoad.phase = 0; g_SnapLoad.forward = false; g_SnapLoad.nested = false;
@@ -1478,8 +1549,12 @@ namespace pfo_android
         g_SnapLoad.phase = 0;
         g_Restore.active = false;
         g_DiffAfterFinal = SnapDebug();   // development: compare the first live frame with the original's
-        __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "load slot %d: from its snapshot in %lld ms, %d frames checked: verified",
-            g_SnapLoad.id, static_cast<long long>(fakesteam::NowMs() - g_SnapLoad.startMs), c_SnapVerifyFrames);
+        {
+            auto pit = g_Snaps.find(g_SnapLoad.id);
+            int pictures = pit == g_Snaps.end() ? 0 : static_cast<int>(pit->second.pictures.size());
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "load slot %d: from its snapshot in %lld ms, %d frames checked, %d pictures: verified",
+                g_SnapLoad.id, static_cast<long long>(fakesteam::NowMs() - g_SnapLoad.startMs), c_SnapVerifyFrames, pictures);
+        }
         SetResult(3);
     }
 
@@ -1492,6 +1567,16 @@ namespace pfo_android
         auto& n = it->second;
         auto& s = g_Session;
         if (s.m_OnlineState != EOnlineState::Online) { SnapLoadFail("session ended", self); return; }
+        // testing: files/snapfail fails every snapshot load's check, so the replay it falls back to runs
+        if (access("/sdcard/Android/data/" PFO_PACKAGE "/files/snapfail", F_OK) == 0) { SnapLoadFail("forced by files/snapfail", self); return; }
+        if (g_SnapPictureBad >= 0)
+        {
+            char why[80];
+            snprintf(why, sizeof(why), "the picture at frame %d of %d differs", g_SnapPictureBad + 1, c_SnapVerifyFrames);
+            g_SnapPictureBad = -1;
+            SnapLoadFail(why, self);
+            return;
+        }
         if (s.m_Frame <= n.frame) return;
         size_t i = s.m_Frame - n.frame - 1;
         if (i >= n.checksums.size()) { SnapLoadFail("ran past the checked frames", self); return; }
@@ -2949,11 +3034,12 @@ static void pfo_runner_rehide(RValue& r, CInstance*, CInstance*, int, RValue*) {
 static void pfo_runner_settle(RValue& r, CInstance*, CInstance*, int, RValue*) { init_real(r, pfo_android::gmi::Settle()); }
 
 // pfo_android_screen(x, y, w, h, window w, window h): the game reports where it draws its picture each frame
-static void pfo_android_screen(RValue& r, CInstance*, CInstance*, int argc, RValue* arg)
+static void pfo_android_screen(RValue& r, CInstance* self, CInstance*, int argc, RValue* arg)
 {
     r.kind = VALUE_UNDEFINED;
     if (argc < 6) return;
     for (int i = 0; i < 6; i++) pfo_android::g_ScreenRect[i] = static_cast<int>(YYGetReal(arg, i));
+    pfo_android::SnapPictures(self);   // (before DuringDraw: the picture is drawn by now either way)
     pfo_android::DuringDraw();
 }
 

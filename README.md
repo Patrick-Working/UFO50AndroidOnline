@@ -165,12 +165,18 @@ it shows in the session pill after the chips. See *Overlay* in [CHANGELOG.md](CH
 - In single player, saving needs a recorded session: tap **START SOLO PLAY** in the save list once
   (it starts you in the library). The pill then says SOLO: SAVES ON.
 - **Quick save and quick load**: the two buttons left of the disk (an arrow down into a tray, an
-  arrow up out of it) save into one QUICK slot, replaced each time, and load it, in one tap. On
-  Windows: **F5** and **F9**. They work in solo play; in an online match, use SAVE NOW and LOAD.
+  arrow up out of it) save into one QUICK slot, replaced each time, and load it, in one tap; the
+  save list has QUICK SAVE and QUICK LOAD too. With a keyboard: **F5** and **F9** (on Windows as on
+  a phone). They work in solo play; in an online match, use SAVE NOW and LOAD.
+- **Keyboard and controller on a phone**, as on Windows: **F1**, or both sticks pressed in, opens
+  the save list; the arrows or the D-pad move a yellow outline, Enter / A chooses (on a save: loads
+  it), Esc / B goes back, Delete / X deletes (press twice). **F2** / **F3** answer a load another
+  player asked for, or the offer to rejoin; with a controller, both sticks in first.
 - **Loading** takes about a second for a save made since the app started: the game puts its state
-  back and checks the next two seconds of play against what was recorded. Older saves (after the
-  app restarted) replay the session at high speed instead, a few seconds per minute of play. Either
-  way the result is checked against PFO's own checksums.
+  back and checks the next two seconds of play against what was recorded, both PFO's checksums
+  and three pictures of what the game draws. Anything different and it replays instead. Older
+  saves (after the app restarted) replay the session at high speed, a few seconds per minute of
+  play. Either way the result is checked against PFO's own checksums.
 - **AUTO SAVE WHEN I PAUSE** (in the save list) saves into one AUTO slot each time you pause,
   replacing the last one. Its picture is from just before the pause.
 - Every game works: all 50 were tested loading in the same room, from the library and from inside

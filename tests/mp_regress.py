@@ -19,7 +19,7 @@ def say(n, ok, why=''):
 def clean(p):
     # '' when the device's log has no crash and no desync report, else what was found.
     # The log is cleared only when a scenario starts, so this covers the whole scenario.
-    for what, pat in (('crash/assert', r'FATAL|SIGSEGV|Assertion failed'), ('desync', r'(?i)desync detected')):
+    for what, pat in (('crash/assert', r'FATAL|SIGSEGV|Assertion failed|ERROR in action'), ('desync', r'(?i)desync detected')):
         hit = [x for x in m.full(p).splitlines() if re.search(pat, x)]
         if hit: return f'{what}: {hit[0].strip()[-100:]}'
     return ''

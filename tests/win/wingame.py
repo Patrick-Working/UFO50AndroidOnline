@@ -96,7 +96,11 @@ def start(n=1, front=True):
     profile = os.path.join(SANDBOX, str(n))
     for d in (home(n), os.path.join(profile, "AppData", "Roaming")): os.makedirs(d, exist_ok=True)
     mark = os.path.join(SANDBOX, "real_saves.json")
-    if not game_pids(): json.dump(fingerprint(), open(mark, "w"))
+    # the real save folder as it is now, to compare with when the test games stop: taken when no test
+    # game is running, and again when the one there is old (from an earlier day: since then you may
+    # have played the Steam game, which changes it)
+    stale = not os.path.exists(mark) or time.time() - os.path.getmtime(mark) > 6 * 3600
+    if not game_pids() or stale: json.dump(fingerprint(), open(mark, "w"))
     env = dict(os.environ)
     # SHGetFolderPath (what the runner asks) follows USERPROFILE; our own code reads LOCALAPPDATA
     env.update(USERPROFILE=profile, LOCALAPPDATA=home(n), APPDATA=os.path.join(profile, "AppData", "Roaming"))

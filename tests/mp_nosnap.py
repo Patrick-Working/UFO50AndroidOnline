@@ -99,7 +99,7 @@ def main():
     for p, n in ((H, 'host'), (J, 'joiner')):
         lines = m.full(p).splitlines()
         bad = [x for x in lines if re.search(r'(?i)desync|ran out of input|GoingOffline|MISMATCH', x)]
-        crash = [x for x in lines if re.search(r'FATAL|SIGSEGV|Assertion failed', x)]
+        crash = [x for x in lines if re.search(r'FATAL|SIGSEGV|Assertion failed|ERROR in action', x)]
         if bad: fails.append(f'{n}: {bad[0].strip()[-120:]}')
         if crash: fails.append(f'{n}: crash or failed assertion: {crash[0].strip()[-120:]}')
         if re.search(r'online load of snapshot', m.log(p)): fails.append(f'the {n} loaded by snapshot')

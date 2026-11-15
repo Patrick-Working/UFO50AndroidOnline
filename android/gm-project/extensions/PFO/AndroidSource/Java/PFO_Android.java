@@ -36,7 +36,7 @@ import java.util.Set;
 //    JNI_OnLoad can register PFO's functions as runner built-ins.
 // 2. Adds a classic touch controller (d-pad, A, B, Start, Back) on top of the game.
 //    Tap the gear (top right) to move, resize, hide controls and change opacity.
-public class PFO_Android {
+public class PFO_Android extends ExtensionBase {
     static {
         try {
             System.loadLibrary("PFO");
@@ -64,6 +64,19 @@ public class PFO_Android {
     }
 
     public void Init() {}
+
+    // Keyboard and controller: the runner offers every key and controller event to its extensions
+    // before the game sees it. The overlay takes the ones its menus use (TouchOverlay.onKey) and
+    // the game gets the rest.
+    @Override public boolean dispatchKeyEvent(KeyEvent e) {
+        TouchOverlay o = TouchOverlay.sInstance;
+        return o != null && o.onKey(e);
+    }
+
+    @Override public boolean dispatchGenericMotionEvent(MotionEvent e) {
+        TouchOverlay o = TouchOverlay.sInstance;
+        return o != null && o.onPadMotion(e);
+    }
 
     // The game's Quit (pfo_android_quit): close the app for real - finish the activity, drop it
     // from recent apps, then end the process so nothing (network threads) keeps running.
@@ -557,7 +570,7 @@ public class PFO_Android {
         @Override public boolean onTouchEvent(MotionEvent e) {
             if (editing) { onEditTouch(e); return true; }
             int action = e.getActionMasked();
-            if (action == MotionEvent.ACTION_DOWN) boxGesture = false;   // a new touch
+            if (action == MotionEvent.ACTION_DOWN) { boxGesture = false; if (keyMode || boxKeys) { keyMode = false; boxKeys = false; invalidate(); } }   // a new touch
             if (statesOpen && stateGesture && action == MotionEvent.ACTION_MOVE) { stateMove(e.getY(0)); return true; }
             if (statesOpen && stateGesture && action == MotionEvent.ACTION_UP) { stateGesture = false; stateTap(e.getX(0), e.getY(0)); return true; }
             if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
@@ -1351,6 +1364,7 @@ public class PFO_Android {
         // for a few seconds when something changes (or when tapped), then settles: a dot in solo play,
         // the dot and ONLINE online, nothing offline. Catching up is the one thing it keeps saying.
         void notePill(String t, long ms) {
+            Log.i("PFOKEYS", "pill: " + t);
             pillText = t;
             pillUntil = android.os.SystemClock.uptimeMillis() + ms;
             invalidate();
@@ -1675,6 +1689,7 @@ public class PFO_Android {
         void showBanner(String t, long ms) { showBanner(t, ms, 0); }
 
         void showBanner(String t, long ms, int color) {
+            Log.i("PFOKEYS", "banner: " + t);
             banner = t;
             bannerColor = color;
             bannerUntil = android.os.SystemClock.uptimeMillis() + ms;
@@ -1852,6 +1867,11 @@ public class PFO_Android {
             if (!editing && vote[0] != 0) drawVote(canvas, u);
             if (!editing && rejoinShown()) drawRejoin(canvas, u);
             if (!editing && confirmShown()) drawConfirm(canvas, u);
+            if (!editing && ((confirmShown() && keyMode) || (boxKeys && boxShown()))) {
+                RectF r = confirmShown() ? (boxFocus == 0 ? confirmYesRect : confirmNoRect)
+                        : voteShown() ? (boxFocus == 0 ? voteYes : voteNo) : (boxFocus == 0 ? rejoinYes : rejoinNo);
+                if (!r.isEmpty()) focusOutline(canvas, r, u);
+            }
             if (restoring()) { if (pendingStartMs == 0) pendingStartMs = android.os.SystemClock.uptimeMillis(); drawRestore(canvas, u); }
             else pendingStartMs = 0;
         }
@@ -2007,6 +2027,7 @@ public class PFO_Android {
         final List<Integer> stateCodes = new ArrayList<>();
         static final int ST_CLOSE = -10, ST_SOLO = -11, ST_SAVE = -12, ST_LOAD = -13, ST_DELETE = -14;   // >= 0: a list row (save id)
         static final int ST_REWIND = -20;   // -20, -21, -22: back 15, 30, 60 seconds
+        static final int ST_QSAVE = -16, ST_QLOAD = -17;   // the quick slot, as the two buttons left of the disk
         static final int[] REWIND_SECONDS = { 15, 30, 60 };
         static final int CONFIRM_FROM_MS = 5000;   // a load this slow asks first, with its estimate
         final List<Integer> saves = new ArrayList<>();                 // save ids, newest first
@@ -2081,12 +2102,18 @@ public class PFO_Android {
         }
 
         void rejoinTap(float x, float y) {
-            if (rejoinYes.contains(x, y)) {
+            if (rejoinYes.contains(x, y)) rejoinAnswer(true);
+            else if (rejoinNo.contains(x, y)) rejoinAnswer(false);
+            invalidate();
+        }
+
+        void rejoinAnswer(boolean yes) {
+            if (yes) {
                 try { nativeStateRequest(20, 0); } catch (Throwable t) { }
                 pendingSlot = -1; pendingWhat = 3;   // no save behind it: the loading screen just says LOADING
                 rejoinOffer = "";
                 performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-            } else if (rejoinNo.contains(x, y)) {
+            } else {
                 rejoinDeclined = rejoinOffer.contains("|") ? rejoinOffer.substring(rejoinOffer.indexOf('|')) : "";
                 try { nativeStateRequest(21, 0); } catch (Throwable t) { }
                 rejoinOffer = "";
@@ -2621,56 +2648,63 @@ public class PFO_Android {
                 if (!stateHits.get(k).contains(x, y)) continue;
                 int code = stateCodes.get(k);
                 performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-                if (code >= 0) { selectedSave = code; deleteArmedUntil = 0; }
-                else if (code == ST_CLOSE) statesOpen = false;
-                else if (code <= ST_REWIND && code > ST_REWIND - 3) {
-                    final int seconds = REWIND_SECONDS[ST_REWIND - code];
-                    int est = estimates[ST_REWIND - code];
-                    if (est < 0) { showBanner("NOTHING TO REWIND " + seconds + " S YET", 1500); break; }
-                    if (est >= CONFIRM_FROM_MS)
-                        ask("REWIND " + seconds + " SECONDS?", aboutSeconds(est) + " TO LOAD", "REWIND", new Runnable() { @Override public void run() { startRewind(seconds); } });
-                    else startRewind(seconds);
-                }
-                else if (code == ST_AUTO) {
-                    autoSavePause = !autoSavePause;
-                    prefs.edit().putBoolean("autosave_pause", autoSavePause).apply();
-                }
-                else if (code == ST_SOLO) {
-                    statesOpen = false;
-                    nativeStateRequest(1, 0);   // the pill says SOLO: SAVES ON when it starts
-                } else if (code == ST_SAVE) {
-                    boolean onlineNow = (netStatus & 64) != 0 && !soloSession();
-                    if (!canSaveState()) { showBanner(onlineNow ? "ONLY PLAYERS WITH A SEAT CAN SAVE" : soloSession() ? "CAN'T SAVE RIGHT NOW" : "START SOLO PLAY TO SAVE", 1800); break; }
-                    statesOpen = false;
-                    pendingAuto = false; pendingQuick = false;
-                    saveAsked = true;
-                    if (onlineNow) {
-                        // online every device saves on the same frame (libPFO sends a command and picks the
-                        // slot); the picture is taken when the save is done
-                        pendingSlot = -1; pendingWhat = 2;
-                        nativeStateRequest(2, -1);
-                    } else saveState(nextSaveId());
-                } else if (code == ST_LOAD && selectedSave >= 0) {
-                    boolean onlineNow = (netStatus & 64) != 0 && !soloSession();
-                    if (onlineNow && onlineSeat < 0) { showBanner("ONLY PLAYERS WITH A SEAT CAN LOAD", 1800); break; }
-                    final int slot = selectedSave;
-                    int est = onlineNow ? 0 : loadEstimateMs(slot);
-                    if (est >= CONFIRM_FROM_MS)
-                        ask("LOAD THIS SAVE?", aboutSeconds(est) + " TO LOAD (IT REPLAYS THE SESSION)", "LOAD", new Runnable() { @Override public void run() { startLoad(slot); } });
-                    else startLoad(slot);
-                } else if (code == ST_DELETE && selectedSave >= 0) {
-                    long now = android.os.SystemClock.uptimeMillis();
-                    if (now > deleteArmedUntil) { deleteArmedUntil = now + 2500; postDelayed(new Runnable() { @Override public void run() { invalidate(); } }, 2600); }
-                    else {
-                        for (String ext : new String[] { ".pfostate", ".json", ".png" }) saveFile(selectedSave, ext).delete();
-                        saveInfo.remove(selectedSave); saveThumb.remove(selectedSave);
-                        deleteArmedUntil = 0;
-                        refreshSaves();
-                    }
-                }
+                stateAction(code);
                 break;
             }
             invalidate();
+        }
+
+        // what a control of the save list does (a tap on it, or choosing it with a key)
+        void stateAction(int code) {
+            if (code >= 0) { selectedSave = code; deleteArmedUntil = 0; }
+            else if (code == ST_CLOSE) statesOpen = false;
+            else if (code <= ST_REWIND && code > ST_REWIND - 3) {
+                final int seconds = REWIND_SECONDS[ST_REWIND - code];
+                int est = estimates[ST_REWIND - code];
+                if (est < 0) { showBanner("NOTHING TO REWIND " + seconds + " S YET", 1500); return; }
+                if (est >= CONFIRM_FROM_MS)
+                    ask("REWIND " + seconds + " SECONDS?", aboutSeconds(est) + " TO LOAD", "REWIND", new Runnable() { @Override public void run() { startRewind(seconds); } });
+                else startRewind(seconds);
+            }
+            else if (code == ST_QSAVE) { statesOpen = false; quickSave(); }
+            else if (code == ST_QLOAD) { statesOpen = false; quickLoad(); }
+            else if (code == ST_AUTO) {
+                autoSavePause = !autoSavePause;
+                prefs.edit().putBoolean("autosave_pause", autoSavePause).apply();
+            }
+            else if (code == ST_SOLO) {
+                statesOpen = false;
+                nativeStateRequest(1, 0);   // the pill says SOLO: SAVES ON when it starts
+            } else if (code == ST_SAVE) {
+                boolean onlineNow = (netStatus & 64) != 0 && !soloSession();
+                if (!canSaveState()) { showBanner(onlineNow ? "ONLY PLAYERS WITH A SEAT CAN SAVE" : soloSession() ? "CAN'T SAVE RIGHT NOW" : "START SOLO PLAY TO SAVE", 1800); return; }
+                statesOpen = false;
+                pendingAuto = false; pendingQuick = false;
+                saveAsked = true;
+                if (onlineNow) {
+                    // online every device saves on the same frame (libPFO sends a command and picks the
+                    // slot); the picture is taken when the save is done
+                    pendingSlot = -1; pendingWhat = 2;
+                    nativeStateRequest(2, -1);
+                } else saveState(nextSaveId());
+            } else if (code == ST_LOAD && selectedSave >= 0) {
+                boolean onlineNow = (netStatus & 64) != 0 && !soloSession();
+                if (onlineNow && onlineSeat < 0) { showBanner("ONLY PLAYERS WITH A SEAT CAN LOAD", 1800); return; }
+                final int slot = selectedSave;
+                int est = onlineNow ? 0 : loadEstimateMs(slot);
+                if (est >= CONFIRM_FROM_MS)
+                    ask("LOAD THIS SAVE?", aboutSeconds(est) + " TO LOAD (IT REPLAYS THE SESSION)", "LOAD", new Runnable() { @Override public void run() { startLoad(slot); } });
+                else startLoad(slot);
+            } else if (code == ST_DELETE && selectedSave >= 0) {
+                long now = android.os.SystemClock.uptimeMillis();
+                if (now > deleteArmedUntil) { deleteArmedUntil = now + 2500; postDelayed(new Runnable() { @Override public void run() { invalidate(); } }, 2600); }
+                else {
+                    for (String ext : new String[] { ".pfostate", ".json", ".png" }) saveFile(selectedSave, ext).delete();
+                    saveInfo.remove(selectedSave); saveThumb.remove(selectedSave);
+                    deleteArmedUntil = 0;
+                    refreshSaves();
+                }
+            }
         }
 
         static String clock(long frames) {
@@ -2711,6 +2745,192 @@ public class PFO_Android {
             gameIcons.draw(cv, (icon - 1) * 2, x, y, px, 255);
         }
 
+        // ---- keyboard and controller, as the Windows menu ----
+        // F1, or both sticks pressed in, opens and closes the save list. In it the arrows (D-pad, left
+        // stick) move a yellow outline, Enter / Z / A chooses (on a save: loads it), Esc / X / B goes
+        // back, Delete (X on a pad) deletes the picked save (press twice). F5 quick saves, F9 quick
+        // loads. F2 / F3 answer the box that asks (a load another player asked for, the offer to
+        // rejoin, a slow load); with a pad, both sticks in gives that box the keys. While nothing of
+        // ours is open the game gets every key but those.
+        static final int K_NONE = 0, K_UP = 1, K_DOWN = 2, K_LEFT = 3, K_RIGHT = 4, K_OK = 5, K_BACK = 6, K_DEL = 7,
+            K_MENU = 8, K_QSAVE = 9, K_QLOAD = 10, K_YES = 11, K_NO = 12;
+        boolean keyMode = false;              // keys are in use: the outline shows (a touch hides it again)
+        int focusCode = Integer.MIN_VALUE;    // the save list's outlined control (its code)
+        boolean boxKeys = false;              // a box that asks has the keys
+        int boxFocus = 0;                     // in it: 0 its yes button, 1 its no button
+        long thumbLAt = -1000, thumbRAt = -2000;   // when each stick was last pressed in (both within 400 ms: the menu)
+        final java.util.HashSet<Integer> keysOurs = new java.util.HashSet<>();   // presses taken here: their releases are ours too
+        int padDir = 0;                       // the left stick or the hat, held as an arrow
+
+        static int keyOf(int code) {
+            switch (code) {
+                case KeyEvent.KEYCODE_DPAD_UP: return K_UP;
+                case KeyEvent.KEYCODE_DPAD_DOWN: return K_DOWN;
+                case KeyEvent.KEYCODE_DPAD_LEFT: return K_LEFT;
+                case KeyEvent.KEYCODE_DPAD_RIGHT: return K_RIGHT;
+                case KeyEvent.KEYCODE_ENTER: case KeyEvent.KEYCODE_NUMPAD_ENTER: case KeyEvent.KEYCODE_DPAD_CENTER:
+                case KeyEvent.KEYCODE_BUTTON_A: case KeyEvent.KEYCODE_Z: return K_OK;
+                case KeyEvent.KEYCODE_ESCAPE: case KeyEvent.KEYCODE_BUTTON_B: case KeyEvent.KEYCODE_X: return K_BACK;
+                case KeyEvent.KEYCODE_FORWARD_DEL: case KeyEvent.KEYCODE_BUTTON_X: return K_DEL;
+                case KeyEvent.KEYCODE_F1: return K_MENU;
+                case KeyEvent.KEYCODE_F5: return K_QSAVE;
+                case KeyEvent.KEYCODE_F9: return K_QLOAD;
+                case KeyEvent.KEYCODE_F2: return K_YES;
+                case KeyEvent.KEYCODE_F3: return K_NO;
+            }
+            return K_NONE;
+        }
+
+        boolean boxShown() { return confirmShown() || voteShown() || rejoinShown(); }
+        boolean keysOpen() { return statesOpen || (boxKeys && boxShown()) || (confirmShown() && keyMode); }
+
+        // PFO_Android.dispatchKeyEvent: true when the key is ours (the game doesn't get it)
+        boolean onKey(KeyEvent e) {
+            int code = e.getKeyCode();
+            if (e.getAction() == KeyEvent.ACTION_UP) return keysOurs.remove(code);
+            if (e.getAction() != KeyEvent.ACTION_DOWN) return keysOurs.contains(code);
+            if (e.getRepeatCount() > 0) {
+                if (!keysOurs.contains(code)) return false;
+                int k = keyOf(code);
+                if (k >= K_UP && k <= K_RIGHT && keysOpen()) { keyAction(k); invalidate(); }
+                return true;
+            }
+            boolean ours;
+            if (code == KeyEvent.KEYCODE_BUTTON_THUMBL || code == KeyEvent.KEYCODE_BUTTON_THUMBR) {
+                long now = android.os.SystemClock.uptimeMillis();
+                if (code == KeyEvent.KEYCODE_BUTTON_THUMBL) thumbLAt = now; else thumbRAt = now;
+                if (Math.abs(thumbLAt - thumbRAt) < 400) { thumbLAt = -1000; thumbRAt = -2000; padMenu(); ours = true; }
+                else ours = keysOpen();
+            } else {
+                int k = keyOf(code);
+                ours = k != K_NONE ? keyAction(k) : keysOpen();   // nothing reaches the game while ours has the keys
+            }
+            if (ours) { keysOurs.add(code); invalidate(); }
+            return ours;
+        }
+
+        // PFO_Android.dispatchGenericMotionEvent: the hat and the left stick as arrows, while ours has the keys
+        boolean onPadMotion(MotionEvent e) {
+            if (!keysOpen() || (e.getSource() & InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK) { padDir = 0; return false; }
+            float x = e.getAxisValue(MotionEvent.AXIS_HAT_X), y = e.getAxisValue(MotionEvent.AXIS_HAT_Y);
+            if (Math.abs(x) < 0.5f && Math.abs(y) < 0.5f) { x = e.getAxisValue(MotionEvent.AXIS_X); y = e.getAxisValue(MotionEvent.AXIS_Y); }
+            int dir = Math.abs(x) < 0.5f && Math.abs(y) < 0.5f ? 0 : Math.abs(x) > Math.abs(y) ? (x > 0 ? K_RIGHT : K_LEFT) : (y > 0 ? K_DOWN : K_UP);
+            if (dir != padDir) { padDir = dir; if (dir != 0) { keyMode = true; keyAction(dir); invalidate(); } }
+            return true;
+        }
+
+        void padMenu() {   // both sticks pressed in
+            keyMode = true;
+            Log.i("PFOKEYS", "controller: both sticks pressed in");
+            if (statesOpen) { statesOpen = false; Log.i("PFOKEYS", "save list: closed"); return; }
+            if (boxShown()) { boxKeys = !boxKeys; boxFocus = 0; Log.i("PFOKEYS", "box: " + (boxKeys ? "has the keys" : "lets go")); return; }
+            if (!editing && !panelOpen && !naming && !inviting && !restoring()) openStatesByKey();
+        }
+
+        void openStatesByKey() { keyMode = true; openStates(); focusCode = Integer.MIN_VALUE; Log.i("PFOKEYS", "save list: open"); }
+
+        // true: the key did something here
+        boolean keyAction(int k) {
+            if (editing || naming || inviting || restoring()) return false;   // (screens of their own: touch and typing)
+            if (keysOpen() && !statesOpen || confirmShown() && keyMode) {
+                keyMode = true;
+                switch (k) {
+                    case K_UP: case K_DOWN: case K_LEFT: case K_RIGHT: boxFocus = 1 - boxFocus; return true;
+                    case K_OK: answerBox(boxFocus == 0); return true;
+                    case K_YES: answerBox(true); return true;
+                    case K_NO: answerBox(false); return true;
+                    case K_BACK: if (confirmShown()) answerBox(false); else boxKeys = false; return true;
+                    case K_MENU: boxKeys = false; return true;
+                }
+                return true;
+            }
+            if ((k == K_YES || k == K_NO) && boxShown()) { answerBox(k == K_YES); return true; }
+            if (statesOpen) { keyMode = true; statesKey(k); return true; }
+            switch (k) {
+                case K_MENU: if (!blocked()) { openStatesByKey(); return true; } return false;
+                case K_QSAVE: keyMode = true; Log.i("PFOKEYS", "quick save"); quickSave(); return true;
+                case K_QLOAD: keyMode = true; Log.i("PFOKEYS", "quick load"); quickLoad(); return true;
+            }
+            return false;
+        }
+
+        void answerBox(boolean yes) {
+            Log.i("PFOKEYS", "box: " + (yes ? "yes" : "no"));
+            boxKeys = false;
+            boxFocus = 0;
+            if (confirmShown()) {
+                Runnable r = confirmAction;
+                confirmTitle = null; confirmAction = null;
+                if (yes && r != null) r.run();
+            } else if (voteShown()) {
+                try { nativeVoteAnswer(yes); } catch (Throwable t) { }
+                vote[6] = 1;
+            } else if (rejoinShown()) rejoinAnswer(yes);
+            invalidate();
+        }
+
+        void statesKey(int k) {
+            switch (k) {
+                case K_MENU: case K_BACK: statesOpen = false; Log.i("PFOKEYS", "save list: closed"); return;
+                case K_QSAVE: stateAction(ST_QSAVE); return;
+                case K_QLOAD: stateAction(ST_QLOAD); return;
+                case K_DEL: if (selectedSave >= 0) stateAction(ST_DELETE); return;
+                case K_OK:
+                    if (stateCodes.indexOf(focusCode) < 0) return;
+                    Log.i("PFOKEYS", "save list: choose " + focusCode);
+                    if (focusCode >= 0) { selectedSave = focusCode; deleteArmedUntil = 0; stateAction(ST_LOAD); }   // a save: load it
+                    else stateAction(focusCode);
+                    return;
+                case K_UP: case K_DOWN: case K_LEFT: case K_RIGHT: moveFocus(k); return;
+            }
+        }
+
+        // to the nearest control that way; in the list, up and down go save by save (scrolling it)
+        void moveFocus(int k) {
+            int cur = stateCodes.indexOf(focusCode);
+            if (cur >= 0 && focusCode >= 0 && (k == K_UP || k == K_DOWN)) {
+                int idx = saves.indexOf(focusCode), next = idx + (k == K_DOWN ? 1 : -1);
+                if (idx >= 0 && next >= 0 && next < saves.size()) { focusRow(next); return; }
+            }
+            if (cur < 0) { focusDefault(); return; }
+            RectF c = stateHits.get(cur);
+            int best = -1;
+            float bestScore = Float.MAX_VALUE;
+            for (int i = 0; i < stateHits.size(); i++) {
+                if (i == cur) continue;
+                RectF r = stateHits.get(i);
+                float dx = r.centerX() - c.centerX(), dy = r.centerY() - c.centerY();
+                float along = k == K_RIGHT ? dx : k == K_LEFT ? -dx : k == K_DOWN ? dy : -dy;
+                float across = k == K_LEFT || k == K_RIGHT ? Math.abs(dy) : Math.abs(dx);
+                if (along <= 1) continue;
+                // one that lines up with this one (overlaps it across the move) comes first
+                boolean lined = k == K_LEFT || k == K_RIGHT ? r.top < c.bottom && r.bottom > c.top : r.left < c.right && r.right > c.left;
+                float score = lined ? along : 100000f + along + across * 2.5f;
+                if (score < bestScore) { bestScore = score; best = i; }
+            }
+            if (best >= 0) setFocus(stateCodes.get(best));
+        }
+
+        void setFocus(int code) {
+            focusCode = code;
+            Log.i("PFOKEYS", "save list: on " + code);
+            if (code >= 0) { selectedSave = code; deleteArmedUntil = 0; }   // a save: its details show, as a tap does
+            invalidate();
+        }
+
+        void focusRow(int idx) {
+            float top = idx * rowH - listScroll;
+            if (top < 0) listScroll = idx * rowH;
+            else if (top + rowH > listRect.height()) listScroll = (idx + 1) * rowH - listRect.height();
+            listScroll = Math.max(0, Math.min(Math.max(0, saves.size() * rowH - listRect.height()), listScroll));
+            setFocus(saves.get(idx));
+        }
+
+        void focusDefault() {
+            for (int want : new int[] { ST_SAVE, ST_SOLO, ST_CLOSE }) if (stateCodes.contains(want)) { focusCode = want; return; }
+            if (!stateCodes.isEmpty()) focusCode = stateCodes.get(0);
+        }
+
         void drawStates(Canvas cv, float u) {
             stateHits.clear(); stateCodes.clear();
             float pw = Math.min(getWidth() * 0.94f, u * 1.95f), ph = Math.min(getHeight() * 0.94f, u * 1.0f), gap = u * 0.02f;
@@ -2732,9 +2952,15 @@ public class PFO_Android {
             // solo: rewind 15 / 30 / 60 seconds, each with how long it takes
             float bodyTop = top + gap * 3 + btnH + lineH, bodyBottom = top + ph - gap;
             if (soloSession()) {
-                float rh = btnH * 0.8f, ry = top + gap * 2 + btnH, rw = (pw - gap * 4) / 3f;
+                // the quick slot (as the buttons left of the disk), then rewind 15 / 30 / 60 seconds
+                float rh = btnH * 0.8f, ry = top + gap * 2 + btnH, rw = (pw - gap * 6) / 5f;
+                RectF qs = new RectF(left + gap, ry, left + gap + rw, ry + rh);
+                RectF ql = new RectF(qs.right + gap, ry, qs.right + gap + rw, ry + rh);
+                button(cv, qs, "QUICK SAVE", BTN_NEUTRAL, canSaveState(), rh, ST_QSAVE);
+                button(cv, ql, "QUICK LOAD", BTN_NEUTRAL, haveQuickSave(), rh, ST_QLOAD);
                 for (int k = 0; k < 3; k++) {
-                    RectF r = new RectF(left + gap + k * (rw + gap), ry, left + gap + k * (rw + gap) + rw, ry + rh);
+                    float x0 = ql.right + gap + k * (rw + gap);
+                    RectF r = new RectF(x0, ry, x0 + rw, ry + rh);
                     int est = estimates[k];
                     button(cv, r, "REWIND " + REWIND_SECONDS[k] + " S" + (est >= 0 ? "  -  " + Math.max(1, Math.round(est / 1000f)) + " S" : ""), BTN_NEUTRAL, est >= 0, rh, ST_REWIND - k);
                 }
@@ -2841,10 +3067,28 @@ public class PFO_Android {
                 boolean loadOk = !online || soloSession() || onlineSeat >= 0;
                 button(cv, ld, "LOAD", BTN_NEUTRAL, loadOk, btnH, ST_LOAD);
                 boolean armed = android.os.SystemClock.uptimeMillis() < deleteArmedUntil;
-                button(cv, del, armed ? "TAP AGAIN" : "DELETE", armed ? BTN_DANGER : 0, true, btnH, ST_DELETE);
+                button(cv, del, armed ? (keyMode ? "PRESS AGAIN" : "TAP AGAIN") : "DELETE", armed ? BTN_DANGER : 0, true, btnH, ST_DELETE);
             } else if (!saves.isEmpty()) {
                 txt(cv, "PICK A SAVE", (dl + dr) / 2f, (bodyTop + bodyBottom) / 2f, lineH, 0xFF6F6F6F, 255);
             }
+            if (keyMode) {
+                int fi = stateCodes.indexOf(focusCode);
+                if (fi < 0) { focusDefault(); fi = stateCodes.indexOf(focusCode); }
+                if (fi >= 0) focusOutline(cv, stateHits.get(fi), u);
+                String hint = "ARROWS: MOVE   ENTER / A: CHOOSE   ESC / B: BACK   DEL / X: DELETE   F5 / F9: QUICK SAVE / LOAD";
+                float hsz = lineH * 0.6f, room = getHeight() - statesRect.bottom;
+                while (font_w(hint, hsz) > getWidth() * 0.94f && hsz > lineH * 0.3f) hsz *= 0.9f;
+                if (room > hsz * 1.4f) txt(cv, hint, getWidth() / 2f, statesRect.bottom + room / 2f, hsz, 0xFFC8C8C8, 255);
+            }
+        }
+
+        // the control the keys are on: a yellow outline (as the layout editor's selection)
+        void focusOutline(Canvas cv, RectF on, float u) {
+            RectF r = new RectF(on);
+            r.inset(-u * 0.006f, -u * 0.006f);
+            Paint o = new Paint(line);
+            o.setColor(0xFFE8EA4A); o.setAlpha(255); o.setStrokeWidth(Math.max(3f, u * 0.006f));
+            cv.drawRect(r, o);
         }
 
         // while a save loads the game isn't drawn (it's replaying flat out): cover it, and show
