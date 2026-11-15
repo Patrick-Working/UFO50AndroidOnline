@@ -87,6 +87,7 @@ namespace fakesteam
         RejoinReady,      // rejoiner -> the others: caught up to frame R, carry on
         LoadOffer,        // a save from another match, sent to everyone before it's proposed (savestate.inc)
         LostInputs,       // a lost player's last inputs, shared among the players still in (savestate.inc)
+        RejoinState,      // -> the rejoiner: the match as it is, and its replay (savestate.inc's fast rejoin)
     };
 
     int64 NowMs()
@@ -1131,6 +1132,7 @@ namespace fakesteam
         case Msg::RejoinReady:
         case Msg::LoadOffer:
         case Msg::LostInputs:
+        case Msg::RejoinState:
         {
             // only from a player we have a game connection with, and no more than the game
             // thread could be behind on

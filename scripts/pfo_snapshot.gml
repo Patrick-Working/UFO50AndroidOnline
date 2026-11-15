@@ -38,7 +38,8 @@
 // uses: variable_instance_get variable_instance_get_names variable_instance_set
 // uses: variable_struct_exists variable_struct_get variable_struct_get_names variable_struct_set
 // uses: sprite_exists sprite_duplicate sprite_collision_mask sprite_delete array_concat
-// uses: string_replace_all
+// uses: string_replace_all buffer_read buffer_resize handle_parse instanceof ds_stack_write ds_stack_read
+// uses: ds_queue_write ds_queue_read ds_priority_write ds_priority_read
 //
 // A snapshot is the game's state at one moment, kept in memory: every global (except the game's
 // functions), every instance (active or deactivated) with its built-in and own variables, the data
@@ -55,6 +56,10 @@
 //   "picture", 0    a fingerprint of the picture the game drew this frame (from its drawing: libPFO
 //                   compares the frames after a save with the same frames of a load's check)
 //   "probe", 0      log what values look like at runtime
+//   "export", id    the snapshot as bytes, in a buffer (its number; libPFO reads and deletes it), or
+//                   why it can't be
+//   "import", buf   a buffer "export" made, back into a snapshot (kept under the id it was exported
+//                   with): 0, or why not
 function pfo_snapshot(_cmd, _arg)
 {
     if (!variable_global_exists("pfo_snaps")) global.pfo_snaps = {};
@@ -66,7 +71,11 @@ function pfo_snapshot(_cmd, _arg)
         case "restore":
             var _s = variable_struct_get(global.pfo_snaps, string(_arg));
             if (is_undefined(_s)) return -1;
-            return pfo_snap_restore(_s);
+            // (a game-code error here would stop the game in an error box: libPFO is told instead and
+            // replays; the same for export and import)
+            var _rr = -1;
+            try { _rr = pfo_snap_restore(_s); } catch (_e) { _rr = "error: " + string(_e.message); }
+            return _rr;
         case "hash":
             return pfo_snap_hash(_arg);
         case "keep":   // fingerprint item by item and remember it (for "diff"), under its frame when given
@@ -143,6 +152,17 @@ function pfo_snapshot(_cmd, _arg)
         case "probe":
             pfo_snap_probe();
             return 0;
+        case "export":
+            var _re = -1;
+            try { _re = pfo_snap_export(_arg); } catch (_e) { _re = "export error: " + string(_e.message); }
+            return _re;
+        case "wirecmp":   // development (libPFO's snapwire): what changed going through bytes and back
+            return pfo_snap_wirecmp(_arg);
+        case "import":
+            if (variable_struct_exists(global.pfo_snaps, string(_arg))) global.pfo_snap_wire_orig = undefined;
+            var _ri = -1;
+            try { _ri = pfo_snap_import(_arg); } catch (_e) { _ri = "import error: " + string(_e.message); }
+            return _ri;
     }
     return -1;
 }
@@ -417,6 +437,20 @@ function pfo_snap_remap(_v, _map, _depth)
     }
     if (is_struct(_v))
     {
+        if (variable_struct_exists(_v, "pfo_wref"))   // a ref from bytes (pfo_snap_r)
+        {
+            var _wt = variable_struct_get(_map, _v.pfo_wref);
+            return is_undefined(_wt) ? pfo_snap_here(_v) : _wt;
+        }
+        if (variable_struct_exists(_v, "pfo_snap_m"))   // a method from bytes, bound to an instance (pfo_snap_r)
+        {
+            var _m = _v.pfo_snap_m;
+            var _mt = variable_struct_get(_map, pfo_snap_key(_m[0]));
+            if (!is_undefined(_mt)) return method(_mt, _m[1]);
+            var _mh = pfo_snap_here(_m[0]);
+            if (typeof(_mh) == "ref" && instance_exists(_mh)) return method(_mh, _m[1]);
+            return method(undefined, _m[1]);
+        }
         var _names = variable_struct_get_names(_v);
         var _c = {};
         for (var i = 0; i < array_length(_names); i++)
@@ -580,15 +614,21 @@ function pfo_snap_legacy_tiles(_snap)
 // already made for it, in _map)
 function pfo_snap_ensure_ds(_ctx, _map)
 {
+    // which are still here is decided before any is made: a new one can get the number of another
+    // one's old ref (more so on another device, where none of them were ever made), which would
+    // then look as if it was still there, and two of the snapshot's would share it
     var _dk = variable_struct_get_names(_ctx.ds);
+    var _need = [];
     for (var i = 0; i < array_length(_dk); i++)
     {
         var _r = variable_struct_get(_ctx.ds, _dk[i]);
-        if (ds_exists(_r.ref, _r.kind)) continue;
-        var _have = variable_struct_get(_map, string(_r.ref));
+        if (ds_exists(pfo_snap_here(_r.ref), _r.kind)) continue;
+        var _have = variable_struct_get(_map, pfo_snap_key(_r.ref));
         if (!is_undefined(_have) && ds_exists(_have, _r.kind)) continue;
-        variable_struct_set(_map, string(_r.ref), pfo_snap_new_ds(_r.kind));
+        array_push(_need, _r);
     }
+    for (var i = 0; i < array_length(_need); i++)
+        variable_struct_set(_map, pfo_snap_key(_need[i].ref), pfo_snap_new_ds(_need[i].kind));
 }
 
 function pfo_snap_fill_ds(_ctx, _map)
@@ -597,8 +637,8 @@ function pfo_snap_fill_ds(_ctx, _map)
     for (var i = 0; i < array_length(_dk); i++)
     {
         var _r = variable_struct_get(_ctx.ds, _dk[i]);
-        var _to = variable_struct_get(_map, string(_r.ref));
-        var _ds = is_undefined(_to) ? _r.ref : _to;
+        var _to = variable_struct_get(_map, pfo_snap_key(_r.ref));
+        var _ds = is_undefined(_to) ? pfo_snap_here(_r.ref) : _to;
         switch (_r.kind)
         {
             case ds_type_list:
@@ -675,10 +715,10 @@ function pfo_snap_ensure_sprites(_snap, _map)
     for (var i = 0; i < array_length(_k); i++)
     {
         var _e = variable_struct_get(_snap.sprites, _k[i]);
-        if (sprite_exists(_e[0]) || !sprite_exists(_e[1])) continue;
-        var _key = string(_e[0]);   // how references to the gone sprite print now (pfo_snap_remap's key)
+        if (sprite_exists(pfo_snap_here(_e[0])) || !sprite_exists(pfo_snap_here(_e[1]))) continue;
+        var _key = pfo_snap_key(_e[0]);   // how references to the gone sprite print now (pfo_snap_remap's key)
         if (!is_undefined(variable_struct_get(_map, _key))) continue;
-        var _s = pfo_sprite_duplicate(_e[1]);
+        var _s = pfo_sprite_duplicate(pfo_snap_here(_e[1]));
         var _m = _e[2];
         if (is_array(_m)) pfo_sprite_collision_mask(_s, _m[0], _m[1], _m[2], _m[3], _m[4], _m[5], _m[6], _m[7]);
         variable_struct_set(_map, _key, _s);
@@ -723,8 +763,9 @@ function pfo_snap_restore(_snap)
         if (_bis[j] != "sprite_index" && _bis[j] != "mask_index") continue;
         for (var n = 0; n < array_length(_snap.insts); n++)
         {
-            var _sv = _snap.insts[n].b[j];
-            if (!is_undefined(_sv) && real(_sv) >= 0 && !sprite_exists(_sv) && is_undefined(variable_struct_get(_map0, string(_sv)))) return "missing sprite " + string(_sv);
+            var _sw = _snap.insts[n].b[j];
+            var _sv = pfo_snap_here(_sw);
+            if (!is_undefined(_sv) && real(_sv) >= 0 && !sprite_exists(_sv) && is_undefined(variable_struct_get(_map0, pfo_snap_key(_sw)))) return "missing sprite " + pfo_snap_key(_sw);
         }
     }
     if (room != _snap.rm)
@@ -755,11 +796,12 @@ function pfo_snap_restore(_snap)
         {
             var _rec = _snap.insts[n];
             if (_pi < 0 || !_rec.b[_pi]) continue;
-            if (instance_exists(_rec.oid) && _rec.oid.object_index == _rec.obj) continue;   // still here (oController and the like)
-            var _have = variable_struct_get(_map0, string(_rec.oid));
+            var _o0 = pfo_snap_here(_rec.oid), _k0 = pfo_snap_key(_rec.oid);
+            if (typeof(_o0) == "ref" && instance_exists(_o0) && _o0.object_index == _rec.obj) continue;   // still here (oController and the like)
+            var _have = variable_struct_get(_map0, _k0);
             if (!is_undefined(_have) && instance_exists(_have)) continue;
             var _inst = pfo_snap_make(_rec);
-            variable_struct_set(_map0, string(_rec.oid), _inst);
+            variable_struct_set(_map0, _k0, _inst);
             array_push(_carried, [_rec, _inst]);
         }
         pfo_snap_fill_ds(_snap.ctx, _map0);
@@ -791,19 +833,19 @@ function pfo_snap_restore(_snap)
     for (var n = 0; n < array_length(_snap.insts); n++)
     {
         var _rec = _snap.insts[n];
-        var _old = _rec.oid;
+        var _old = pfo_snap_here(_rec.oid), _okey = pfo_snap_key(_rec.oid);
         // reuse it if it's still here, as the same object, without variables it didn't have then
         // (an instance's variables can't be removed: one that gained some is made afresh)
-        if (instance_exists(_old) && _old.object_index == _rec.obj && pfo_snap_same_vars(_old, _rec.vars))
+        if (typeof(_old) == "ref" && instance_exists(_old) && _old.object_index == _rec.obj && pfo_snap_same_vars(_old, _rec.vars))
         {
             variable_struct_set(_keep, string(real(_old)), true);
             continue;
         }
         // made afresh (event-less), unless the room-change pass already made it
-        var _have = variable_struct_get(_map, string(_old));
+        var _have = variable_struct_get(_map, _okey);
         var _inst = !is_undefined(_have) && instance_exists(_have) && _have.object_index == _rec.obj ? _have : pfo_snap_make(_rec);
-        variable_struct_set(_map, string(_old), _inst);
-        variable_struct_set(_made, string(_old), _inst);
+        variable_struct_set(_map, _okey, _inst);
+        variable_struct_set(_made, _okey, _inst);
         _madeIds += string(real(_old)) + ":" + string(real(_inst)) + ",";
         variable_struct_set(_keep, string(real(_inst)), true);
     }
@@ -826,8 +868,8 @@ function pfo_snap_restore(_snap)
     for (var n = 0; n < array_length(_snap.insts); n++)
     {
         var _rec = _snap.insts[n];
-        var _to = variable_struct_get(_map, string(_rec.oid));
-        var _inst = is_undefined(_to) ? _rec.oid : _to;
+        var _to = variable_struct_get(_map, pfo_snap_key(_rec.oid));
+        var _inst = is_undefined(_to) ? pfo_snap_here(_rec.oid) : _to;
         if (!instance_exists(_inst)) continue;
         pfo_snap_set_vars(_rec, _inst, _map, _bi);
     }
@@ -1050,6 +1092,346 @@ function pfo_snap_hash(_part)
     var _md5 = buffer_md5(_buf, 0, _size);
     buffer_delete(_buf);
     return _md5 + ":" + string(array_length(_list)) + ":" + string(_size);
+}
+
+// ---- a snapshot as bytes: a rejoin sends one to another device (libPFO's RejoinState) ---------
+// A value is a type byte and what follows it:
+//   0 undefined   1 real (f64)   2 string   3 bool (u8)   4 int32 (s32)   5 int64 (u64)
+//   6 array: its length (u32) and the values
+//   7 struct: its count (u32), (name, value)..., and its constructor's name ("" for none)
+//   8 ref: its type and its number (f64)
+//   9 method: its self (a value) and its function's number   10 a method bound to the struct
+//     it's in: its function's number   11 anything else (read back as undefined)
+//   12 a method bound to the global struct (the game's functions kept in globals): its function's number
+// Refs keep their numbers: assets are the same in the same game data, and the instances and data
+// structures a restore makes stand in for the old ones by their old refs (pfo_snap_remap's keys).
+// A snapshot's structs are copies, and their methods stay bound to the originals (pfo_snap_copy):
+// a method in a struct (or in an array in it) bound to a struct like that one (the same constructor
+// and as many variables: its original) is bound to the copy it's in; one bound to any other struct
+// goes unbound (called as struct.method() it then runs on that struct anyway). The hidden copies
+// of stacks, queues and priority queues go as their ds_*_write text. global.pfo_snap_wire_info says
+// what didn't go across exactly.
+function pfo_snap_w(_b, _v, _parent, _depth, _st)
+{
+    switch (typeof(_v))
+    {
+        case "undefined": buffer_write(_b, buffer_u8, 0); return;
+        case "number": buffer_write(_b, buffer_u8, 1); buffer_write(_b, buffer_f64, _v); return;
+        case "string": buffer_write(_b, buffer_u8, 2); buffer_write(_b, buffer_string, _v); return;
+        case "bool": buffer_write(_b, buffer_u8, 3); buffer_write(_b, buffer_u8, _v ? 1 : 0); return;
+        case "int32": buffer_write(_b, buffer_u8, 4); buffer_write(_b, buffer_s32, _v); return;
+        case "int64": buffer_write(_b, buffer_u8, 5); buffer_write(_b, buffer_u64, _v); return;
+        case "array":
+            if (_depth > 32) break;
+            var _n = array_length(_v);
+            buffer_write(_b, buffer_u8, 6);
+            buffer_write(_b, buffer_u32, _n);
+            for (var i = 0; i < _n; i++) pfo_snap_w(_b, _v[i], _parent, _depth + 1, _st);
+            return;
+        case "method":
+            var _self = method_get_self(_v);
+            var _fn = real(method_get_index(_v));
+            if (is_struct(_self) && variable_struct_exists(_self, "pfo_snaps")) { buffer_write(_b, buffer_u8, 12); buffer_write(_b, buffer_f64, _fn); _st.glob++; return; }
+            if (is_struct(_self) && is_struct(_parent) && (_self == _parent
+                || (variable_struct_names_count(_self) == variable_struct_names_count(_parent) && instanceof(_self) == instanceof(_parent))))
+            {
+                buffer_write(_b, buffer_u8, 10); buffer_write(_b, buffer_f64, _fn); _st.own++;
+                return;
+            }
+            if (is_struct(_self))
+            {
+                if (_st.unbound < 3) _st.what += " [" + string(instanceof(_self)) + " of " + string(variable_struct_names_count(_self)) + (is_struct(_parent) ? " in " + string(variable_struct_names_count(_parent)) : " outside a struct") + "]";
+                _st.unbound++;
+                _self = undefined;
+            }
+            buffer_write(_b, buffer_u8, 9);
+            pfo_snap_w(_b, _self, undefined, _depth + 1, _st);
+            buffer_write(_b, buffer_f64, _fn);
+            return;
+        case "struct":
+            if (_depth > 32) break;
+            var _names = variable_struct_get_names(_v);
+            var _keep = [];
+            for (var i = 0; i < array_length(_names); i++) if (string_char_at(_names[i], 1) != "@") array_push(_keep, _names[i]);
+            buffer_write(_b, buffer_u8, 7);
+            buffer_write(_b, buffer_u32, array_length(_keep));
+            for (var i = 0; i < array_length(_keep); i++)
+            {
+                buffer_write(_b, buffer_string, _keep[i]);
+                pfo_snap_w(_b, variable_struct_get(_v, _keep[i]), _v, _depth + 1, _st);
+            }
+            var _ctor = instanceof(_v);
+            buffer_write(_b, buffer_string, is_string(_ctor) && _ctor != "Object" && _ctor != "struct" ? _ctor : "");
+            return;
+        case "ref":
+            buffer_write(_b, buffer_u8, 8);
+            buffer_write(_b, buffer_string, pfo_snap_ref_type(_v));
+            buffer_write(_b, buffer_f64, real(_v));
+            return;
+    }
+    _st.odd++;
+    buffer_write(_b, buffer_u8, 11);
+}
+
+function pfo_snap_r(_b, _into, _st)
+{
+    switch (buffer_read(_b, buffer_u8))
+    {
+        case 0: return undefined;
+        case 1: return buffer_read(_b, buffer_f64);
+        case 2: return buffer_read(_b, buffer_string);
+        case 3: return buffer_read(_b, buffer_u8) != 0;
+        case 4: return buffer_read(_b, buffer_s32);
+        case 5: return buffer_read(_b, buffer_u64);
+        case 6:
+            var _n = buffer_read(_b, buffer_u32);
+            var _a = array_create(_n);
+            for (var i = 0; i < _n; i++) _a[i] = pfo_snap_r(_b, _into, _st);
+            return _a;
+        case 7:
+            var _n = buffer_read(_b, buffer_u32);
+            var _c = {};
+            for (var i = 0; i < _n; i++)
+            {
+                var _k = buffer_read(_b, buffer_string);
+                variable_struct_set(_c, _k, pfo_snap_r(_b, _c, _st));
+            }
+            var _ctor = buffer_read(_b, buffer_string);
+            if (_ctor != "")
+            {
+                var _f = asset_get_index(_ctor);
+                if (_f != -1) static_set(_c, static_get(method(undefined, _f)));
+                else _st.odd++;
+            }
+            return _c;
+        case 8:
+            var _ty = buffer_read(_b, buffer_string);
+            var _num = buffer_read(_b, buffer_f64);
+            var _txt = "ref " + _ty + " " + string(_num);
+            // an instance, data structure or sprite of the other device's: a marker (pfo_snap_here)
+            if (_ty == "instance" || _ty == "sprite" || pfo_snap_ds_kind(_ty) >= 0) return { pfo_wref: _txt, t: _ty, n: _num };
+            var _h = handle_parse(_txt);
+            if (is_undefined(_h)) { _st.refs++; return _num; }
+            return _h;
+        case 9:
+            var _s = pfo_snap_r(_b, undefined, _st);
+            var _fn = buffer_read(_b, buffer_f64);
+            // bound to an instance: the restore binds it, once it knows which instance stands in for
+            // that one (pfo_snap_remap). Anything else that isn't a struct (noone, for one: a method
+            // whose instance is gone) goes unbound.
+            if (pfo_snap_is_wref(_s)) return _s.t == "instance" ? { pfo_snap_m: [_s, _fn] } : method(undefined, _fn);
+            if (is_struct(_s)) return method(_s, _fn);
+            return method(undefined, _fn);
+        case 10:
+            return method(_into, buffer_read(_b, buffer_f64));
+        case 12:
+            var _gf = buffer_read(_b, buffer_f64);
+            var _gs = pfo_snap_global_struct();
+            return is_undefined(_gs) ? method(undefined, _gf) : method(_gs, _gf);
+    }
+    return undefined;
+}
+
+// the global struct as a value: the self of the methods bound to it (the game keeps some of its
+// functions in globals like that; ours, global.pfo_snaps, tells it from any other struct)
+function pfo_snap_global_struct()
+{
+    if (variable_global_exists("pfo_snap_gs") && is_struct(global.pfo_snap_gs)) return global.pfo_snap_gs;
+    var _gn = variable_instance_get_names(global);
+    for (var i = 0; i < array_length(_gn); i++)
+    {
+        var _v = variable_global_get(_gn[i]);
+        if (!is_method(_v)) continue;
+        var _s = method_get_self(_v);
+        if (is_struct(_s) && variable_struct_exists(_s, "pfo_snaps")) { global.pfo_snap_gs = _s; return _s; }
+    }
+    return undefined;
+}
+
+// A ref from another device's snapshot to an instance, a data structure or a sprite can't be made
+// into a ref here when there's nothing of that number (handle_parse gives noone for an instance
+// that isn't there): such refs come as markers, { pfo_wref: "ref instance 100045", t: "instance",
+// n: 100045 }. pfo_snap_key gives the text a ref had (a restore's map is keyed by it), and
+// pfo_snap_here what it is here: the ref when there is one of that number, else the number.
+function pfo_snap_is_wref(_v) { return is_struct(_v) && variable_struct_exists(_v, "pfo_wref"); }
+function pfo_snap_key(_v) { return pfo_snap_is_wref(_v) ? _v.pfo_wref : string(_v); }
+function pfo_snap_here(_v)
+{
+    if (!pfo_snap_is_wref(_v)) return _v;
+    var _n = _v.n, _there = false;
+    if (_v.t == "instance") _there = _n >= 100000 && instance_exists(_n);
+    else if (_v.t == "sprite") _there = sprite_exists(_n);
+    else { var _k = pfo_snap_ds_kind(_v.t); _there = _k >= 0 && ds_exists(_n, _k); }
+    if (!_there) return _n;
+    var _h = handle_parse(_v.pfo_wref);
+    return typeof(_h) == "ref" && real(_h) == _n ? _h : _n;
+}
+
+// what a global of this kind of ref holds is this device's own (made at run time, numbered by it):
+// a snapshot from another device keeps ours there
+function pfo_snap_local_kind(_ty)
+{
+    switch (_ty)
+    {
+        case "buffer": case "surface": case "camera": case "audio_emitter": case "audio_listener":
+        case "sound_instance": case "time_source": case "particle_system": case "particle_system_instance":
+        case "particle_emitter": case "particle_type": case "vertex_buffer": case "vertex_format":
+        case "audio_sync_group": case "audio_bus":
+            return true;
+    }
+    return false;
+}
+
+function pfo_snap_export(_id)
+{
+    var _snap = variable_struct_get(global.pfo_snaps, string(_id));
+    if (is_undefined(_snap)) return "no snapshot " + string(_id);
+    // the hidden copies as text
+    var _ds = {};
+    var _dk = variable_struct_get_names(_snap.ctx.ds);
+    for (var i = 0; i < array_length(_dk); i++)
+    {
+        var _r = variable_struct_get(_snap.ctx.ds, _dk[i]);
+        var _d = _r.data;
+        if (_r.kind == ds_type_stack) _d = ["pfo_dsw", ds_stack_write(_d)];
+        else if (_r.kind == ds_type_queue) _d = ["pfo_dsw", ds_queue_write(_d)];
+        else if (_r.kind == ds_type_priority) _d = ["pfo_dsw", ds_priority_write(_d)];
+        variable_struct_set(_ds, _dk[i], { ref: _r.ref, kind: _r.kind, data: _d });
+    }
+    var _root = {};
+    var _names = variable_struct_get_names(_snap);
+    for (var i = 0; i < array_length(_names); i++)
+        variable_struct_set(_root, _names[i], _names[i] == "ctx" ? { ds: _ds } : variable_struct_get(_snap, _names[i]));
+    var _st = { odd: 0, unbound: 0, own: 0, glob: 0, what: "" };
+    var _b = buffer_create(1 << 20, buffer_grow, 1);
+    buffer_write(_b, buffer_string, "PFOSNAP1");
+    buffer_write(_b, buffer_f64, _id);
+    pfo_snap_w(_b, _root, undefined, 0, _st);
+    var _size = buffer_tell(_b);
+    buffer_resize(_b, _size);
+    global.pfo_snap_wire_info = string(_size) + " bytes, " + string(array_length(_snap.insts)) + " instances, "
+        + string(array_length(_dk)) + " data structures; " + string(_st.odd) + " values not sent; methods: " + string(_st.glob) + " bound to global, " + string(_st.own) + " to their struct, " + string(_st.unbound) + " sent unbound" + _st.what;
+    return real(_b);
+}
+
+function pfo_snap_import(_b)
+{
+    buffer_seek(_b, buffer_seek_start, 0);
+    if (buffer_read(_b, buffer_string) != "PFOSNAP1") return "not a snapshot";
+    var _id = buffer_read(_b, buffer_f64);
+    var _st = { odd: 0, refs: 0 };
+    var _root = pfo_snap_r(_b, undefined, _st);
+    if (!is_struct(_root) || !variable_struct_exists(_root, "ctx") || !variable_struct_exists(_root, "globals") || !variable_struct_exists(_root, "insts")) return "not a whole snapshot";
+    // the hidden copies made again
+    var _dk = variable_struct_get_names(_root.ctx.ds);
+    for (var i = 0; i < array_length(_dk); i++)
+    {
+        var _r = variable_struct_get(_root.ctx.ds, _dk[i]);
+        if (!is_array(_r.data) || array_length(_r.data) != 2 || _r.data[0] != "pfo_dsw") continue;
+        var _c = pfo_snap_new_ds(_r.kind);
+        if (_r.kind == ds_type_stack) ds_stack_read(_c, _r.data[1]);
+        else if (_r.kind == ds_type_queue) ds_queue_read(_c, _r.data[1]);
+        else ds_priority_read(_c, _r.data[1]);
+        _r.data = _c;
+    }
+    // globals holding this device's own buffers, surfaces, cameras and the like keep ours
+    var _kept = 0;
+    var _gn = variable_struct_get_names(_root.globals);
+    for (var i = 0; i < array_length(_gn); i++)
+    {
+        var _v = variable_struct_get(_root.globals, _gn[i]);
+        if (typeof(_v) != "ref" || !pfo_snap_local_kind(pfo_snap_ref_type(_v)) || !variable_global_exists(_gn[i])) continue;
+        var _mine = variable_global_get(_gn[i]);
+        if (typeof(_mine) != "ref" || pfo_snap_ref_type(_mine) != pfo_snap_ref_type(_v)) continue;
+        variable_struct_set(_root.globals, _gn[i], _mine);
+        _kept++;
+    }
+    global.pfo_snap_wire_orig = variable_struct_get(global.pfo_snaps, string(_id));   // (for "wirecmp")
+    variable_struct_set(global.pfo_snaps, string(_id), _root);
+    global.pfo_snap_wire_info = string(buffer_tell(_b)) + " bytes read, " + string(_st.odd) + " odd values, "
+        + string(_st.refs) + " refs kept as numbers, " + string(_kept) + " globals kept ours";
+    return 0;
+}
+
+// development: the snapshot before bytes (kept by the import) against the one after, value by
+// value: differences ("path: before / after", with their types) and values whose type changed
+function pfo_snap_wirecmp(_id)
+{
+    if (!variable_global_exists("pfo_snap_wire_orig") || is_undefined(global.pfo_snap_wire_orig)) return "no original kept";
+    var _st = { n: 0, types: 0, out: "", tout: "" };
+    pfo_snap_wcmp(global.pfo_snap_wire_orig, variable_struct_get(global.pfo_snaps, string(_id)), "", _st, 0);
+    global.pfo_snap_wire_orig = undefined;
+    return string(_st.n) + " differ, " + string(_st.types) + " changed type" + _st.out + (_st.tout != "" ? " | types:" + _st.tout : "");
+}
+
+function pfo_snap_wshort(_v)
+{
+    if (is_struct(_v) || is_array(_v) || is_method(_v)) return typeof(_v);
+    var _s = string(_v);
+    return string_length(_s) > 40 ? string_copy(_s, 1, 40) + "..." : _s;
+}
+
+function pfo_snap_wcmp(_a, _b, _path, _st, _depth)
+{
+    if (_depth > 32 || _st.n > 200) return;
+    if (pfo_snap_is_wref(_b))
+    {
+        if (typeof(_a) != "ref" || real(_a) != _b.n || pfo_snap_ref_type(_a) != _b.t) { _st.n++; if (_st.n <= 12) _st.out += " " + _path + ": " + pfo_snap_wshort(_a) + " / " + _b.pfo_wref; }
+        return;
+    }
+    if (is_struct(_b) && variable_struct_exists(_b, "pfo_snap_m"))
+    {
+        if (!is_method(_a) || real(method_get_index(_a)) != _b.pfo_snap_m[1]) { _st.n++; if (_st.n <= 12) _st.out += " " + _path + ": method / bound later"; }
+        return;
+    }
+    var _ta = typeof(_a), _tb = typeof(_b);
+    if (_ta == "method" || _tb == "method")
+    {
+        if (_ta != _tb || real(method_get_index(_a)) != real(method_get_index(_b))) { _st.n++; if (_st.n <= 12) _st.out += " " + _path + ": " + _ta + " / " + _tb; }
+        return;
+    }
+    if (_ta != _tb)
+    {
+        var _same = (is_numeric(_a) && is_numeric(_b) && real(_a) == real(_b));
+        if (_same) { _st.types++; if (_st.types <= 6) _st.tout += " " + _path + " " + _ta + "->" + _tb; }
+        else { _st.n++; if (_st.n <= 12) _st.out += " " + _path + ": " + pfo_snap_wshort(_a) + " (" + _ta + ") / " + pfo_snap_wshort(_b) + " (" + _tb + ")"; }
+        return;
+    }
+    if (_ta == "array")
+    {
+        if (array_length(_a) != array_length(_b)) { _st.n++; if (_st.n <= 12) _st.out += " " + _path + ": length " + string(array_length(_a)) + " / " + string(array_length(_b)); return; }
+        for (var i = 0; i < array_length(_a); i++) pfo_snap_wcmp(_a[i], _b[i], _path + "[" + string(i) + "]", _st, _depth + 1);
+        return;
+    }
+    if (_ta == "struct")
+    {
+        var _na = variable_struct_get_names(_a);
+        for (var i = 0; i < array_length(_na); i++)
+        {
+            if (string_char_at(_na[i], 1) == "@") continue;
+            if (!variable_struct_exists(_b, _na[i])) { _st.n++; if (_st.n <= 12) _st.out += " " + _path + "." + _na[i] + ": missing"; continue; }
+            pfo_snap_wcmp(variable_struct_get(_a, _na[i]), variable_struct_get(_b, _na[i]), _path + "." + _na[i], _st, _depth + 1);
+        }
+        if (instanceof(_a) != instanceof(_b)) { _st.n++; if (_st.n <= 12) _st.out += " " + _path + ": " + string(instanceof(_a)) + " / " + string(instanceof(_b)); }
+        return;
+    }
+    if (_ta == "ref")
+    {
+        var _ka = pfo_snap_ds_kind(pfo_snap_ref_type(_a));
+        if (_ka == ds_type_queue || _ka == ds_type_stack || _ka == ds_type_priority)   // a hidden copy: its contents
+        {
+            var _wa, _wb, _sa, _sb;
+            if (_ka == ds_type_queue) { _wa = ds_queue_write(_a); _wb = ds_queue_write(_b); _sa = ds_queue_size(_a); _sb = ds_queue_size(_b); }
+            else if (_ka == ds_type_stack) { _wa = ds_stack_write(_a); _wb = ds_stack_write(_b); _sa = ds_stack_size(_a); _sb = ds_stack_size(_b); }
+            else { _wa = ds_priority_write(_a); _wb = ds_priority_write(_b); _sa = ds_priority_size(_a); _sb = ds_priority_size(_b); }
+            if (_wa != _wb || _sa != _sb) { _st.n++; if (_st.n <= 12) _st.out += " " + _path + ": contents differ (" + string(_sa) + " / " + string(_sb) + " items, " + string_copy(_wa, 1, 60) + " / " + string_copy(_wb, 1, 60) + ")"; }
+            return;
+        }
+        if (string(_a) != string(_b)) { _st.n++; if (_st.n <= 12) _st.out += " " + _path + ": " + string(_a) + " / " + string(_b); }
+        return;
+    }
+    if (_ta == "number" && is_nan(_a) && is_nan(_b)) return;
+    if (_a != _b) { _st.n++; if (_st.n <= 12) _st.out += " " + _path + ": " + pfo_snap_wshort(_a) + " / " + pfo_snap_wshort(_b) + " (" + _ta + ")"; }
 }
 
 // ---- probe -----------------------------------------------------------------------------------

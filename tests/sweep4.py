@@ -46,7 +46,9 @@ def wait_ready(timeout=60):   # the app answers test commands once PFO is runnin
         if g is not None: return True
     return False
 def leave_game():   # pause menu > Back to Library > "Really close game?" yes
-    nav.key(P, 'ESCAPE'); time.sleep(1.2); nav.key(P, 'DPAD_DOWN'); time.sleep(0.3); nav.key(P, 'DPAD_DOWN'); time.sleep(0.3)
+    # (SNAPWIRE: the captures the pause makes, a rewind keyframe and the auto save, take half a second
+    # longer each, and keys pressed meanwhile can merge: wait them out)
+    nav.key(P, 'ESCAPE'); time.sleep(9 if os.environ.get('SNAPWIRE') else 1.2); nav.key(P, 'DPAD_DOWN'); time.sleep(0.3); nav.key(P, 'DPAD_DOWN'); time.sleep(0.3)
     nav.key(P, 'Z'); time.sleep(1.0); nav.key(P, 'Z'); time.sleep(6)
 def open_game(n):   # from the library's first game
     for _ in range((n - 1) // 10): nav.key(P, 'DPAD_DOWN'); time.sleep(0.3)
@@ -146,6 +148,9 @@ subprocess.run([nav.ADB, '-s', '127.0.0.1:' + P, 'shell', f'rm -f {D}/snapdebug 
 # no room server: this test plays alone (hundreds of app starts asking oldkid.net for lobbies would
 # only load it). mp_test.py takes the file away again.
 subprocess.run([nav.ADB, '-s', '127.0.0.1:' + P, 'shell', f'echo off > {D}/okplay.txt'], env=ENV)
+# SNAPWIRE=1: every save's snapshot goes through bytes and back (as a fast rejoin's does), so the
+# loads check the serializer too
+subprocess.run([nav.ADB, '-s', '127.0.0.1:' + P, 'shell', (f'touch {D}/snapwire' if os.environ.get('SNAPWIRE') else f'rm -f {D}/snapwire')], env=ENV)
 not_good = []
 for n in games:
     why = []

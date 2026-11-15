@@ -1,5 +1,5 @@
 diff --git a/PFO/dllmain.cpp b/PFO/dllmain.cpp
-index 7abb85d..335d86c 100644
+index 7abb85d..9a5bf37 100644
 --- a/PFO/dllmain.cpp
 +++ b/PFO/dllmain.cpp
 @@ -5,7 +5,14 @@
@@ -25,7 +25,7 @@ index 7abb85d..335d86c 100644
 +#include <atomic>
 +#include <chrono>
 +// savestate.inc (included at the end): online save/load commands added to our input
-+namespace pfo_android { unsigned int InjectCommand(unsigned int input); void RejoinServe(bool frozen); void MatchStarts(); }
++namespace pfo_android { unsigned int InjectCommand(unsigned int input); void RejoinServe(bool frozen, CInstance* self); void MatchStarts(); }
 +#endif
 +
  namespace
@@ -247,7 +247,7 @@ index 7abb85d..335d86c 100644
                      }
  
 +#if defined(PFO_OURS)
-+                    pfo_android::RejoinServe(!canMoveToNextFrame);   // a returning player (savestate.inc)
++                    pfo_android::RejoinServe(!canMoveToNextFrame, instance);   // a returning player (savestate.inc)
 +                    g_WaitMask = canMoveToNextFrame ? 0u : waitMask;
 +                    g_WaitSecondsLeft = waitCountdown ? waitLeft : -1;   // -1: no countdown (not known to be gone)
 +                    if (canMoveToNextFrame) g_StallSinceMs = 0;

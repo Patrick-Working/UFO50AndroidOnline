@@ -29,6 +29,23 @@ os.makedirs(OUT, exist_ok=True)
 PRIVATE = re.compile(r"STUN|UPnP|\d+\.\d+\.\d+\.\d+")   # lines that can hold an address
 BAD = re.compile(r"desync|ran out of input|GoingOffline|MISMATCH|didn't land|PFOCRASH|online load of snapshot \d+ failed", re.I)
 SNAPS = os.environ.get("PFO_NO_SNAPSHOTS") != "1"
+# a rejoin takes the match as it is from the other player (a fast rejoin); REJOIN_REPLAY=1 makes the
+# rejoining game ask for the replay instead (files/rejoinreplay), as builds before it did
+REJOIN_REPLAY = os.environ.get("REJOIN_REPLAY") == "1"
+FAST = r"rejoin: the game put back at frame (\d+), (\d+) ms after asking"
+
+
+def check_rejoin_kind(g, since, check, what, want_fast=None):
+    """the rejoin went the way it should: by the state with snapshots on (and no REJOIN_REPLAY), else by
+    replay (want_fast says which, when the caller knows better: through the relay it replays)"""
+    t = g.log(since)
+    fast = re.search(FAST, t)
+    if want_fast is None: want_fast = SNAPS and not REJOIN_REPLAY
+    if want_fast:
+        why = re.search(r"rejoin: the game (didn.t come across|from the other player didn.t work here)[^\n]*", t)
+        check(bool(fast), what + ": by the match's state (a fast rejoin)", ("frame %s, %s ms" % fast.groups()) if fast else (why.group(0) if why else "no fast-rejoin line"))
+    else:
+        check(not fast and bool(re.search(r"rejoin: got the match \(\d+ bytes\), replaying", t)), what + ": by replay", "by state" if fast else "")
 PROPOSE = r"command 24[15] \(\d+\)"   # a save of this match (241), or one sent along as a file (245)
 
 
@@ -155,7 +172,10 @@ def onto_lobby(g):
     wd, ht = img.size
     box = img.crop((int(wd * 0.77), int(ht * 0.21), int(wd * 0.93), int(ht * 0.82)))   # HOST PUBLIC, HOST PRIVATE, JOIN BY CODE
     yellow = sum(1 for r, gr, b in box.getdata() if r > 200 and gr > 200 and b < 130)
-    if yellow > 40: g.keys("left", 0.6)
+    # a blank picture (the window wasn't drawn: the display asleep, say) tells nothing: LEFT then,
+    # which leaves the cursor on the list if it was there already
+    lo, hi = min(img.convert("L").getdata()), max(img.convert("L").getdata())
+    if yellow > 40 or hi - lo < 8: g.keys("left", 0.6)
 
 
 def menu_status(g):
@@ -364,6 +384,9 @@ def test(a, b):
     mb = b.mark()
     subprocess.run(["taskkill", "/F", "/PID", str(b.pid)], capture_output=True)
     time.sleep(6)
+    rr = os.path.join(folder(2), "rejoinreplay")
+    if REJOIN_REPLAY: open(rr, "w").close()
+    elif os.path.exists(rr): os.remove(rr)
     pid = w.start(2)
     open(os.path.join(OUT, "pids.txt"), "w").write("%d %d" % (a.pid, pid))
     time.sleep(16)
@@ -373,6 +396,7 @@ def test(a, b):
     b.keys("f2")
     r = b.wait_log(r"rejoin: back in the match|rejoin: (no answer|can.t|nobody|bad|the replay)[^\n]*", mb, 90)
     check(bool(r and "back in the match" in r.group(0)), "F2: it rejoins", r.group(0) if r else "no rejoin line")
+    check_rejoin_kind(b, mb, check, "the joiner's rejoin")
     time.sleep(4)
     w1, w2 = both_where(a, b)
     check(bool(w1 and w2 and w1[0] == w2[0] and w1[2] == 2 and w2[2] == 2 and abs(w1[1] - w2[1]) <= FRAME_TOL), "together after the rejoin", "%s / %s" % (w1, w2))

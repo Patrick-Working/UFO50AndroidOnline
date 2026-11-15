@@ -217,8 +217,10 @@ it shows in the session pill after the chips. See *Overlay* in [CHANGELOG.md](CH
 - That goes for a player who has no player in the current game too (the third player in a 2-player
   game). If they aren't back after 90 seconds, the match carries on without them.
 - If a player's app was closed or crashed, reopening it offers **REJOIN YOUR MATCH?**. REJOIN
-  takes their old place: another player sends the match so far, their phone replays it in a couple
-  of seconds and joins back in. It works over the relay too.
+  takes their old place: the other player sends the game as it is, it's put back in about a second
+  and play carries on. (With three or more players, through the relay, or if that doesn't work
+  out, the match so far is sent instead and replayed at high speed, which takes longer for a long
+  match.) It works over the relay too.
 - With three or more players, the ones left share the dropped player's last inputs so they all wait
   at the same point. (Rejoining has been tested with two players.)
 

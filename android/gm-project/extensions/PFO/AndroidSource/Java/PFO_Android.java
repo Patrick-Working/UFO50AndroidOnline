@@ -568,6 +568,7 @@ public class PFO_Android extends ExtensionBase {
             editing = false; selected = null;
             dragPointer = -1; pinchStartDist = 0; sliderDrag = false;
             boxGesture = true;
+            invalidate();
         }
 
         // Hide the pad while a physical gamepad is connected (if enabled).
@@ -635,8 +636,10 @@ public class PFO_Android extends ExtensionBase {
                 boolean onBadge = false;
                 for (RectF r : badgeRects) if (r.contains(e.getX(i), e.getY(i))) onBadge = true;
                 if (onBadge || (chip != null && !chip.hidden && hit(chip, e.getX(i), e.getY(i), 1.3f))) {
-                    if (onlineSeat != -1 && !soloSession()) { if (showOnlineSeats()) showNames(); else setPlayer(player, null); }   // online: who's who
-                    else openPanel(-1);
+                    boolean mine = !chipRect.isEmpty() && chipRect.contains(e.getX(i), e.getY(i))
+                            || showOnlineSeats() && !myOnlineChip.isEmpty() && myOnlineChip.contains(e.getX(i), e.getY(i));   // (online our chip is one of the seat chips)
+                    if (onBadge && !mine && onlineSeat != -1 && !soloSession()) { if (showOnlineSeats()) showNames(); else setPlayer(player, null); }   // the others' chips: who's who
+                    else openPanel(-1);   // yours: the players panel, online too (touch or a gamepad for your seat)
                     performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
                     return true;
                 }
@@ -666,6 +669,8 @@ public class PFO_Android extends ExtensionBase {
             updatePressed(e, action);
             return true;
         }
+
+        boolean onlineGameNow() { return onlineSeat != -1 && !soloSession(); }
 
         void openPanel(int forPlayer) {
             releaseAll();
@@ -703,6 +708,8 @@ public class PFO_Android extends ExtensionBase {
                     if (row == 0) { if (col > 0) setPlayer(col - 1, null); }
                     else if (row - 1 < pads.size()) {
                         if (soloSession() && col >= 2) showBanner("SOLO PLAY IS ONE PLAYER", 1500);   // a session of one sends P1 only
+                        else if (onlineGameNow() && onlineSeat == -2 && col >= 1) showBanner("YOU ARE WATCHING", 1500);
+                        else if (onlineGameNow() && col >= 2) showBanner("ONLINE IT'S ONE PLAYER PER DEVICE", 1800);
                         else movePad(pads.get(row - 1), col - 1);
                     }
                 }
@@ -994,7 +1001,8 @@ public class PFO_Android extends ExtensionBase {
             pad.player = p;
             rememberedPlayer.put(pad.name, p);
             pushBindings();
-            showBanner("PAD " + pad.number + (p >= 0 ? " -> P" + (p + 1) : " OFF"), 1200, p >= 0 ? PLAYER_COLOR[p] : 0xFF6F6F6F);
+            int seat = onlineGameNow() && p == 0 && onlineSeat >= 0 ? onlineSeat : p;   // online this device's P1 plays as its seat
+            showBanner("PAD " + pad.number + (p >= 0 ? " -> P" + (seat + 1) : " OFF"), 1200, p >= 0 ? (seat == p ? PLAYER_COLOR[p] : SEAT_COLOR[Math.min(7, seat)]) : 0xFF6F6F6F);
         }
 
         Pad padOn(int p) {
@@ -1119,8 +1127,14 @@ public class PFO_Android extends ExtensionBase {
             float y = top + gap + rowH * 0.45f;
             txt(cv, "PLAYERS", left + pw / 2f, y, rowH * 0.5f, 0xFFFFFFFF, 255);
             y += rowH * 0.55f;
-            txt(cv, pads.isEmpty() ? "CONNECT A GAMEPAD TO ADD IT HERE" : "PRESS A BUTTON ON A GAMEPAD TO FIND IT",
-                    left + pw / 2f, y, rowH * 0.28f, 0xFFC8C8C8, 255);
+            boolean online = onlineGameNow();
+            String sub = online && onlineSeat == -2 ? "YOU ARE WATCHING THIS GAME"
+                    : online ? (pads.isEmpty() ? "ONLINE YOU ARE P" + (onlineSeat + 1) + ". CONNECT A GAMEPAD TO PLAY WITH IT"
+                                               : "ONLINE YOU ARE P" + (onlineSeat + 1) + ". PICK TOUCH OR A GAMEPAD FOR IT")
+                    : pads.isEmpty() ? "CONNECT A GAMEPAD TO ADD IT HERE" : "PRESS A BUTTON ON A GAMEPAD TO FIND IT";
+            float subSz = rowH * 0.28f;
+            while (font_w(sub, subSz) > pw * 0.94f && subSz > rowH * 0.15f) subSz *= 0.92f;
+            txt(cv, sub, left + pw / 2f, y, subSz, 0xFFC8C8C8, 255);
             y += rowH * 0.45f;
             float labelW = pw * 0.34f, cellsLeft = left + labelW + gap;
             float cellW = (left + pw - gap - cellsLeft - gap * 4) / 5f;
@@ -1152,14 +1166,17 @@ public class PFO_Android extends ExtensionBase {
                 }
                 for (int col = 0; col < 5; col++) {
                     if (row == 0 && col == 0) continue;   // touch is always on someone (hide it in the editor)
+                    if (online && col >= 2) continue;     // online a device is one player: OFF and its seat only
                     RectF r = new RectF(cellsLeft + col * (cellW + gap), ry + rowH * 0.08f, cellsLeft + col * (cellW + gap) + cellW, ry + rowH * 0.92f);
                     boolean on = bound == col - 1;
-                    boolean unused = soloSession() && col >= 2;   // solo play is one player
-                    int color = col == 0 ? NO_PLAYER : PLAYER_COLOR[col - 1];
+                    // solo play is one player; online a device is one player (its P1 plays as its seat)
+                    boolean unused = (soloSession() || online) && col >= 2 || online && onlineSeat == -2 && col >= 1;
+                    int color = col == 0 ? NO_PLAYER : online && col == 1 && onlineSeat >= 0 ? SEAT_COLOR[Math.min(7, onlineSeat)] : PLAYER_COLOR[col - 1];
+                    String cell = col == 0 ? "OFF" : online && col == 1 && onlineSeat >= 0 ? "P" + (onlineSeat + 1) : "P" + col;
                     solid(fill, on ? color : BTN_NEUTRAL, on ? 1f : unused ? 0.4f : 0.9f);
                     cv.drawRoundRect(r, rowH * 0.15f, rowH * 0.15f, fill);
                     if (on) { solid(line, 0xFFFFFFFF, 1f); cv.drawRoundRect(r, rowH * 0.15f, rowH * 0.15f, line); }
-                    txt(cv, col == 0 ? "OFF" : "P" + col, r.centerX(), r.centerY(), rowH * 0.36f, on ? 0xFFFFFFFF : NO_PLAYER, unused ? 90 : 255);
+                    txt(cv, cell, r.centerX(), r.centerY(), rowH * 0.36f, on ? 0xFFFFFFFF : NO_PLAYER, unused ? 90 : 255);
                     hitRects.add(r); hitCodes.add(row * 8 + col);
                 }
             }
@@ -1334,16 +1351,20 @@ public class PFO_Android extends ExtensionBase {
 
         // Online: every seat in the game, ours with the touch icon and YOU, the others with a globe
         // and their name.
+        final RectF myOnlineChip = new RectF();   // online: our own seat's chip (a tap opens the players panel)
+
         float drawOnlineSeats(Canvas cv, float u, Control chip) {
             float hh = halfH(chip), gap = u * 0.012f;
+            myOnlineChip.setEmpty();
             float x = cx(chip) - halfW(chip), y = cy(chip);
             for (int q = 0; q < 8; q++) {
                 int c = seatClient[q];
                 if (c < 0) continue;
                 boolean mine = c == seatMyClient;
                 String nm = mine ? "YOU" : shortName(c < clientNames.length ? clientNames[c] : "");
-                RectF r = drawSeatChip(cv, x, y, hh, SEAT_COLOR[q], true, mine ? ICON_TOUCH : ICON_NET, 0, "P" + (q + 1), nm.isEmpty() || !namesShown() ? null : nm, null, false);
+                RectF r = drawSeatChip(cv, x, y, hh, SEAT_COLOR[q], true, mine ? ICON_TOUCH : ICON_NET, 0, "P" + (q + 1), null, nm.isEmpty() || !namesShown() ? null : nm, false);
                 badgeRects.add(r);
+                if (mine) myOnlineChip.set(r);
                 x = nextX(r, gap); y = nextY(r, gap, hh);
             }
             return x;
@@ -1413,12 +1434,14 @@ public class PFO_Android extends ExtensionBase {
         int sessionMode() { return soloSession() ? 1 : (netStatus & 64) != 0 ? 3 : (netStatus & 16) != 0 ? 2 : 0; }   // offline, solo, lobby, online
 
         String netWord() { int kind = netStatus & 15; return kind == 1 ? "LAN" : kind == 2 ? "DIRECT" : kind == 3 ? "RELAY" : ""; }
+        // online: LAN (the same network), ONLINE (straight over the internet) or RELAY (through the room server)
+        String matchWord() { int kind = netStatus & 15; return kind == 1 ? "LAN" : kind == 3 ? "RELAY" : "ONLINE"; }
 
         String pillDetail() {
             int mode = sessionMode(), delay = (netStatus >> 8) & 255;
             if (mode == 1) return "SOLO: SAVES ON";
             if (mode == 2) return (netStatus & 32) != 0 ? "HOSTING" : netWord().isEmpty() ? "CONNECTING" : netWord();
-            if (mode == 3) { String w = netWord(); return "ONLINE" + (w.isEmpty() ? "" : ": " + w) + (delay > 0 ? " " + delay + "F" : ""); }
+            if (mode == 3) return matchWord() + (delay > 0 ? " " + delay + "F" : "");
             return null;
         }
 
@@ -1444,7 +1467,10 @@ public class PFO_Android extends ExtensionBase {
             boolean talking = pillText != null && now < pillUntil;
             if (mode == 0 && !talking) return;
             boolean attn = mode == 3 && (netStatus & 128) != 0;
-            String t = attn ? "CATCHING UP" : talking ? pillText : mode == 2 ? pillDetail() : mode == 3 ? "ONLINE" : null;
+            // online it stays out of the way: shown while the players' names are (a tap on the chips,
+            // the match starting), when something happens, and while catching up
+            if (mode == 3 && !attn && !talking && !namesShown()) return;
+            String t = attn ? "CATCHING UP" : talking ? pillText : mode == 2 ? pillDetail() : mode == 3 ? pillDetail() : null;
             float hh = halfH(chip) * 0.62f, th = hh * 0.95f, dot = hh * 0.32f;
             float x = (rowEnd >= 0 ? rowEnd : cx(chip) + halfW(chip) + u * 0.012f), y = cy(chip);
             if (chipsColumn) {
@@ -1782,6 +1808,7 @@ public class PFO_Android extends ExtensionBase {
             switch (action) {
                 case MotionEvent.ACTION_DOWN: {
                     dragPointer = -1;
+                    if (hit(gear, px, py, 1.3f)) { stopEditing(); performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); break; }   // ☰ again: done, as ACCEPT
                     if (edPanel.contains(px, py)) {
                         RectF grab = new RectF(edTrack);
                         grab.inset(-unit() * 0.03f, -unit() * 0.04f);
@@ -1880,6 +1907,7 @@ public class PFO_Android extends ExtensionBase {
             dragPointer = -1; pinchStartDist = 0; sliderDrag = false;
             boxGesture = true;   // a finger still down doesn't press the control under it
             save();
+            invalidate();
         }
 
         // ---- drawing ----
@@ -2641,7 +2669,7 @@ public class PFO_Android extends ExtensionBase {
                 if (asked || !statesOpen) selectedSave = id;
                 if (id == selectedSave) deleteArmedUntil = 0;
                 refreshSaves();
-                notePill(pendingAuto ? "AUTO SAVED" : pendingQuick ? "QUICK SAVED" : "SAVED", 2000);
+                notePill(pendingAuto ? "GAME SAVED ON PAUSE" : pendingQuick ? "QUICK SAVED" : "SAVED", 2000);
                 pendingAuto = false; pendingQuick = false;
             } else {
                 fresh.delete();
@@ -3112,8 +3140,9 @@ public class PFO_Android extends ExtensionBase {
                     txt(cv, "LOADS IN " + aboutSeconds(loadEstimateMs(selectedSave)), cxd, y, lineH * 0.75f, 0xFF8F8F8F, 255);
                 }
                 float bw = (dr - dl - gap) / 2f;
-                RectF ld = new RectF(dl, bodyBottom - btnH, dl + bw, bodyBottom);
-                RectF del = new RectF(ld.right + gap, ld.top, dr, ld.bottom);
+                // DELETE on the left, LOAD on the right (as the others' main action, on the side of the thumb)
+                RectF del = new RectF(dl, bodyBottom - btnH, dl + bw, bodyBottom);
+                RectF ld = new RectF(del.right + gap, del.top, dr, del.bottom);
                 boolean loadOk = !online || soloSession() || onlineSeat >= 0;
                 button(cv, ld, "LOAD", BTN_NEUTRAL, loadOk, btnH, ST_LOAD);
                 boolean armed = android.os.SystemClock.uptimeMillis() < deleteArmedUntil;

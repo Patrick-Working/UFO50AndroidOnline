@@ -256,6 +256,7 @@ def test(host, joiner, g, d):
     md = d.mark(); d.cmd("rejoin")
     r = d.wait_log(r"rejoin: back in the match|rejoin: (no answer|can.t|nobody|bad|the replay)", md, 60)
     check(bool(r and "back in the match" in r.group(0)), "the emulator's app killed: it rejoins", r.group(0) if r else "no rejoin line")
+    duo.check_rejoin_kind(d, md, check, "the emulator's rejoin")
     time.sleep(4)
     together(host, joiner, check, "together after the emulator's rejoin")
 
@@ -269,6 +270,7 @@ def test(host, joiner, g, d):
     mg = g2.mark(); g2.keys("f2")
     r = g2.wait_log(r"rejoin: back in the match|rejoin: (no answer|can.t|nobody|bad|the replay)", mg, 90)
     check(bool(r and "back in the match" in r.group(0)), "the Windows game killed: it rejoins", r.group(0) if r else "no rejoin line")
+    duo.check_rejoin_kind(g2, mg, check, "the Windows game's rejoin")
     time.sleep(4)
     h2, j2 = (g2, d) if host is g else (d, g2)
     together(h2, j2, check, "together after the Windows game's rejoin")

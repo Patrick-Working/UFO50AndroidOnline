@@ -366,6 +366,7 @@ namespace pfo_android
     constexpr int c_QuickSlot = 9999;   // the quick save (F5 / the overlay's quick save), replaced each time
     bool g_AutoSavedThisPause = false;       // the game's pause already got its auto save (others' are ignored)
     constexpr int c_MpReplaySnapBase = 1000000;   // snapshot ids for saves passed while replaying
+    constexpr int c_RejoinSnapId = 9990;          // the snapshot a rejoin sends (sender) or puts back (rejoiner)
     std::atomic<int> g_LastSavedSlot{-1};
 
     // A session starts in the library, which waits for the library's textures without loading
@@ -570,9 +571,9 @@ namespace pfo_android
     // overlay crops its screenshot for a slot to this
     std::atomic<int> g_ScreenRect[6] = { {0}, {0}, {0}, {0}, {0}, {0} };   // x, y, w, h, window w, window h
 
-    void SnapCapture(int id, CInstance* self, bool mp = false);   // snapshots, below
+    bool SnapCapture(int id, CInstance* self, bool mp = false);   // snapshots, below
 
-    void SnapCapture(int id, CInstance* self, bool mp);
+    bool SnapCapture(int id, CInstance* self, bool mp);
     bool SaveCore(int slot, CInstance* self, int mpIndex);
 
     bool Save(int slot, CInstance* self)
@@ -680,25 +681,11 @@ namespace pfo_android
     }
 
     // The replay has reached the saved frame: carry on live, recording from where the state left off.
-    void FinishRestore(CInstance* self)
+    // During a replay (or a fast rejoin) the save files live in memory; write ours back so progress
+    // from here on is saved to disk as usual. (Files with no extension are PFO's session files.)
+    void WriteBackOurFiles(CInstance* self)
     {
         auto& s = g_Session;
-        auto& h = g_Restore.header;
-        auto& me = s.m_ClientData[s.m_ClientIndex];
-        uint32 checksum = me.m_ChecksumData[s.m_Frame & (countof(me.m_ChecksumData) - 1)].m_Checksum;
-        // on track all the way: the replay's own checksums (one every 255 frames) and the final one
-        bool match = (g_Restore.rewind || checksum == h.checksum) && s.m_Frame == h.frame && g_ReplayFirstMismatchFrame == 0;
-        uint32 replayedFrom = g_Restore.fromFrame;
-        g_Restore.rewind = false; g_Restore.fromFrame = 0;
-
-        reset(s.m_ReplayReader, nullptr, 0);
-        reset(s.m_ReplayWriter, g_ReplayBuffer, narrow_cast<int>(c_ReplayBufferSize - 1u));
-        memcpy(g_ReplayBuffer, g_Restore.data.data(), g_Restore.data.size());
-        s.m_ReplayWriter.m_Offset = static_cast<int>(g_Restore.data.size());
-        s.m_ReplayLastFrameWritten = h.lastFrameWritten;
-
-        // During the replay the save files lived in memory; write ours back so progress from here
-        // on is saved to disk as usual. (Files with no extension are PFO's session files.)
         for (auto& fd : s.m_FileData)
         {
             if (fd.m_Filename == nullptr || fd.m_OwnerClientIndex != s.m_ClientIndex || strchr(fd.m_Filename, '.') == nullptr) continue;
@@ -722,6 +709,26 @@ namespace pfo_android
             fd.m_Size = 0;
             fd.m_Status = EFileStatus::Physical;
         }
+    }
+
+    void FinishRestore(CInstance* self)
+    {
+        auto& s = g_Session;
+        auto& h = g_Restore.header;
+        auto& me = s.m_ClientData[s.m_ClientIndex];
+        uint32 checksum = me.m_ChecksumData[s.m_Frame & (countof(me.m_ChecksumData) - 1)].m_Checksum;
+        // on track all the way: the replay's own checksums (one every 255 frames) and the final one
+        bool match = (g_Restore.rewind || checksum == h.checksum) && s.m_Frame == h.frame && g_ReplayFirstMismatchFrame == 0;
+        uint32 replayedFrom = g_Restore.fromFrame;
+        g_Restore.rewind = false; g_Restore.fromFrame = 0;
+
+        reset(s.m_ReplayReader, nullptr, 0);
+        reset(s.m_ReplayWriter, g_ReplayBuffer, narrow_cast<int>(c_ReplayBufferSize - 1u));
+        memcpy(g_ReplayBuffer, g_Restore.data.data(), g_Restore.data.size());
+        s.m_ReplayWriter.m_Offset = static_cast<int>(g_Restore.data.size());
+        s.m_ReplayLastFrameWritten = h.lastFrameWritten;
+
+        WriteBackOurFiles(self);
 
         SetFastForward(false, self);
         g_Restore.active = false;
@@ -885,6 +892,8 @@ namespace pfo_android
             int64 counter = 0;
             int roomMaxId = 0;
             int activeCount = 0;   // instance_count
+            // from another device (or through bytes): objects by their index, found here before Apply
+            std::vector<std::pair<int, std::pair<std::vector<int>, std::vector<int>>>> byIndex;
         };
         void NodeIds(void* obj, int off, std::vector<int>& out)
         {
@@ -908,6 +917,35 @@ namespace pfo_android
                     if (!st.objects.count(obj)) { auto& o = st.objects[obj]; NodeIds(obj, ObjList, o.first); NodeIds(obj, ObjWithList, o.second); }
             });
             return st;
+        }
+
+        // the runner's objects with their indexes (an instance's object, or a parent of one: its child
+        // names it), both ways
+        template <typename F> void ForEachObject(F f)
+        {
+            ForEachInstance([&](void* i, bool)
+            {
+                void* obj = At<void*>(i, InstObject);
+                if (!obj) return;
+                f(obj, At<int>(i, InstObjectIndex), true);
+                int depth = 0;
+                for (void* o = obj; o && depth < 32; o = At<void*>(o, ObjParent), depth++)
+                    if (void* parent = At<void*>(o, ObjParent)) f(parent, At<int>(o, ObjParentIndex), false);
+            });
+        }
+        std::map<void*, int> ObjectIndices()
+        {
+            std::map<void*, int> m;
+            ForEachObject([&](void* obj, int index, bool own) { if (own) m[obj] = index; else m.emplace(obj, index); });
+            return m;
+        }
+        void ResolveObjects(State& st)
+        {
+            if (st.byIndex.empty()) return;
+            std::map<int, void*> m;
+            ForEachObject([&](void* obj, int index, bool own) { if (own) m[index] = obj; else m.emplace(index, obj); });
+            for (auto& [index, lists] : st.byIndex) { auto it = m.find(index); if (it != m.end()) st.objects[it->second] = lists; }
+            st.byIndex.clear();
         }
 
         // put a room list (instances) or an object's list (nodes) in this order: the ones named first,
@@ -1024,13 +1062,14 @@ namespace pfo_android
             auto now = [&](int id) { auto m = newId.find(id); return m == newId.end() ? id : m->second; };
             auto find = [&](int id) -> void* { auto it = byId.find(now(id)); return it == byId.end() ? nullptr : it->second; };
             int missing = 0;
+            std::string missed;   // (the first few, for the log)
             int64 shift = *g_CreateCounter - st.counter;
             // 1. into the right list: the runner moves an instance by its off bit
             for (int pass = 0; pass < 2; pass++)
                 for (auto& r : pass == 0 ? st.active : st.inactive)
                 {
                     void* i = find(r.id);
-                    if (!i) { missing++; continue; }
+                    if (!i) { if (missing++ < 6) missed += " " + std::to_string(r.id) + (newId.count(r.id) ? "->" + std::to_string(newId.at(r.id)) : ""); continue; }
                     auto& f = Ref<uint32>(i, InstFlags);
                     f = pass == 1 ? f | FlagOff : f & ~FlagOff;
                     Ref<int64>(i, InstCreate) = r.created + shift;
@@ -1057,7 +1096,7 @@ namespace pfo_android
             }
             char b[96];
             snprintf(b, sizeof(b), "%zu+%zu instances, %zu objects, %d missing", st.active.size(), st.inactive.size(), st.objects.size(), missing);
-            return b;
+            return b + (missing ? " (" + missed.substr(1) + (missing > 6 ? " ..." : "") + ")" : std::string());
         }
 
         // Reading the game (GML) needs every instance where `with (all)` finds it. instance_activate_all()
@@ -1111,7 +1150,10 @@ namespace pfo_android
     // nested: an online load met while replaying (a rejoin, or a load by replay): the replay's own
     // restore carries on around it
     // rewind: the snapshot is a starting point; the replay then runs on to the rewind's frame
-    struct SnapLoad { int phase = 0, id = 0; int64 startMs = 0; bool forward = false, nested = false, rewind = false; } g_SnapLoad;
+    struct SnapLoad { int phase = 0, id = 0; int64 startMs = 0; bool forward = false, nested = false, rewind = false, rejoin = false; } g_SnapLoad;
+    void InstallRejoin(CInstance* self);                      // fast rejoin (below): the session, at the restore
+    void RejoinStateRestored(CInstance* self);
+    void RejoinStateFailed(const char* why, CInstance* self);
     std::vector<uint32> g_RewindTouches;      // a rewind's touch frames, up to its frame
     bool g_DiffAfterFinal = false;   // phase 1 restore, 2 check, 3 restore again
     bool g_SnapSkipUpdate = false;            // this step, don't run pfo_update (waiting for a room change)
@@ -1137,18 +1179,167 @@ namespace pfo_android
         Snap("drop", id, self);
     }
 
+    // ---- a snapshot as bytes (a rejoin sends one to another device) ----
+    struct Bytes
+    {
+        std::vector<uint8> b;
+        void raw(const void* p, size_t n) { b.insert(b.end(), static_cast<const uint8*>(p), static_cast<const uint8*>(p) + n); }
+        void u8(uint8 v) { b.push_back(v); }
+        void u32(uint32 v) { raw(&v, 4); }   // (little-endian on both: arm64 and x64)
+        void i32(int v) { raw(&v, 4); }
+        void u64(uint64 v) { raw(&v, 8); }
+        void i64(int64 v) { raw(&v, 8); }
+        void blob(const uint8* p, size_t n) { u32(static_cast<uint32>(n)); raw(p, n); }
+        void blob(const std::vector<uint8>& v) { blob(v.data(), v.size()); }
+        void str(const std::string& t) { blob(reinterpret_cast<const uint8*>(t.data()), t.size()); }
+    };
+    struct Unbytes
+    {
+        const uint8* p; size_t n, o = 0; bool ok = true;
+        Unbytes(const uint8* p_, size_t n_) : p(p_), n(n_) {}
+        void take(void* d, size_t k) { if (!ok || n - o < k) { ok = false; memset(d, 0, k); return; } memcpy(d, p + o, k); o += k; }
+        uint8 u8() { uint8 v; take(&v, 1); return v; }
+        uint32 u32() { uint32 v; take(&v, 4); return v; }
+        int i32() { int v; take(&v, 4); return v; }
+        uint64 u64() { uint64 v; take(&v, 8); return v; }
+        int64 i64() { int64 v; take(&v, 8); return v; }
+        std::vector<uint8> blob() { uint32 k = u32(); std::vector<uint8> v; if (!ok || n - o < k) { ok = false; return v; } v.assign(p + o, p + o + k); o += k; return v; }
+        std::string str() { auto v = blob(); return std::string(v.begin(), v.end()); }
+        size_t count(size_t each) { uint32 k = u32(); if (!ok || each == 0 || k > (n - o) / each) { ok = false; return 0; } return k; }   // (a count of items each at least this big)
+    };
+
+    // the game's side (pfo_snapshot.gml "export"): the bytes, or why not
+    bool SnapGameToBytes(int id, CInstance* self, std::vector<uint8>& out, std::string& why)
+    {
+        std::string r = Snap("export", id, self);
+        char* end = nullptr;
+        long buf = strtol(r.c_str(), &end, 10);
+        if (r.empty() || *end != 0 || buf < 0) { why = r.empty() ? "the game's export failed" : r; return false; }
+        void* data = nullptr; int size = 0;
+        bool ok = BufferGetContent(static_cast<int>(buf), &data, &size);
+        if (ok) { out.assign(static_cast<uint8*>(data), static_cast<uint8*>(data) + size); YYFree(data); }
+        else why = "can't read the game's export";
+        RValue arg = {}; init_buffer(arg, static_cast<int>(buf));
+        RValue result = {};
+        Script_Perform(g_gml_buffer_delete, self, self, 1, &result, &arg);
+        return ok;
+    }
+    // ...and back (kept under the id it was exported with)
+    bool SnapGameFromBytes(const std::vector<uint8>& in, CInstance* self, std::string& why)
+    {
+        int buffer = CreateBuffer(static_cast<int>(std::max<size_t>(1, in.size())), eBuffer_Format_Fixed, 1);
+        if (buffer < 0) { why = "no buffer for the game"; return false; }
+        BufferWriteContent(buffer, 0, in.data(), static_cast<int>(in.size()), false, false);
+        std::string r = Snap("import", buffer, self);
+        RValue arg = {}; init_buffer(arg, buffer);
+        RValue result = {};
+        Script_Perform(g_gml_buffer_delete, self, self, 1, &result, &arg);
+        if (r != "0") { why = r.empty() ? "the game's import failed" : r; return false; }
+        return true;
+    }
+    std::string SnapWireInfo(CInstance* self)
+    {
+        RValue v;
+        return GlobalGet("pfo_snap_wire_info", v, self) ? ValueString(v) : std::string();
+    }
+
+    // the runner's side: objects by their index (another device's are elsewhere in memory)
+    void PackRunner(Bytes& o, const gmi::State& st)
+    {
+        auto idx = gmi::ObjectIndices();
+        o.i64(st.counter); o.i32(st.roomMaxId); o.i32(st.activeCount);
+        for (auto* list : { &st.active, &st.inactive })
+        {
+            o.u32(static_cast<uint32>(list->size()));
+            for (auto& r : *list) { o.i32(r.id); o.u8(r.off ? 1 : 0); o.i64(r.created); }
+        }
+        uint32 n = 0;
+        for (auto& kv : st.objects) if (idx.count(kv.first)) n++;
+        o.u32(n);
+        for (auto& [obj, lists] : st.objects)
+        {
+            auto it = idx.find(obj);
+            if (it == idx.end()) continue;
+            o.i32(it->second);
+            o.u32(static_cast<uint32>(lists.first.size())); for (int id : lists.first) o.i32(id);
+            o.u32(static_cast<uint32>(lists.second.size())); for (int id : lists.second) o.i32(id);
+        }
+    }
+    bool UnpackRunner(Unbytes& in, gmi::State& st)
+    {
+        st = gmi::State();
+        st.counter = in.i64(); st.roomMaxId = in.i32(); st.activeCount = in.i32();
+        for (auto* list : { &st.active, &st.inactive })
+        {
+            size_t n = in.count(13);
+            for (size_t k = 0; k < n && in.ok; k++) { gmi::State::Inst r; r.id = in.i32(); r.off = in.u8() != 0; r.created = in.i64(); list->push_back(r); }
+        }
+        size_t n = in.count(12);
+        for (size_t k = 0; k < n && in.ok; k++)
+        {
+            std::pair<int, std::pair<std::vector<int>, std::vector<int>>> e;
+            e.first = in.i32();
+            size_t a = in.count(4); for (size_t j = 0; j < a && in.ok; j++) e.second.first.push_back(in.i32());
+            size_t b = in.count(4); for (size_t j = 0; j < b && in.ok; j++) e.second.second.push_back(in.i32());
+            st.byIndex.push_back(std::move(e));
+        }
+        return in.ok;
+    }
+
+    // development: files/snapwire sends every save's snapshot through bytes and back (both sides),
+    // so a load (and its 120-frame check) tests what a rejoin's snapshot goes through
+    bool SnapWire() { return access("/sdcard/Android/data/" PFO_PACKAGE "/files/snapwire", F_OK) == 0; }
+    void SnapWireRoundTrip(int id, CInstance* self)
+    {
+        int64 t0 = fakesteam::NowMs();
+        std::vector<uint8> game; std::string why;
+        if (!SnapGameToBytes(id, self, game, why)) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "snapwire %d: export: %s", id, why.c_str()); return; }
+        std::string out = SnapWireInfo(self);
+        int64 t1 = fakesteam::NowMs();
+        if (!SnapGameFromBytes(game, self, why)) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "snapwire %d: import: %s", id, why.c_str()); return; }
+        Bytes o; PackRunner(o, g_SnapRunner[id]);
+        Unbytes in(o.b.data(), o.b.size());
+        gmi::State st;
+        if (!UnpackRunner(in, st)) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "snapwire %d: the runner's side didn't read back", id); return; }
+        {
+            // development: do the objects come back as the same objects? (indexes must name them uniquely)
+            gmi::State chk = st;
+            gmi::ResolveObjects(chk);
+            auto& orig = g_SnapRunner[id];
+            int same = 0, other = 0, lost = 0;
+            for (auto& [obj, lists] : orig.objects)
+            {
+                auto it = chk.objects.find(obj);
+                if (it == chk.objects.end()) lost++;
+                else if (it->second == lists) same++;
+                else other++;
+            }
+            std::map<int, int> uses;
+            for (auto& [obj, index] : gmi::ObjectIndices()) uses[index]++;
+            int shared = 0;
+            for (auto& kv : uses) if (kv.second > 1) shared++;
+            __android_log_print(other || lost || shared ? ANDROID_LOG_WARN : ANDROID_LOG_INFO, "PFOSTATE", "snapwire %d: runner objects %d back the same, %d other lists, %d lost, %zu objects there, %d indexes naming several", id, same, other, lost, chk.objects.size(), shared);
+        }
+        g_SnapRunner[id] = std::move(st);
+        __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "snapwire %d: %zu bytes (runner %zu) out in %lld ms, back in %lld ms; out: %s; back: %s", id, game.size(), o.b.size(),
+            static_cast<long long>(t1 - t0), static_cast<long long>(fakesteam::NowMs() - t1), out.c_str(), SnapWireInfo(self).c_str());
+        std::string cmp = Snap("wirecmp", id, self);
+        for (size_t at = 0; at < cmp.size(); at += 900)   // (the log cuts long lines)
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "snapwire %d compared%s %s", id, at ? " (more)" : ":", cmp.substr(at, 900).c_str());
+    }
+
     constexpr size_t c_MpSnapKeep = 24;      // online saves kept for loading in this match
     constexpr size_t c_KeyframeKeep = 4;     // rewind keyframes
     bool g_CaptureKeyframe = false;
 
-    void SnapCapture(int id, CInstance* self, bool mp)
+    bool SnapCapture(int id, CInstance* self, bool mp)
     {
-        if (!NativeSnapshots()) return;
+        if (!NativeSnapshots()) return false;
         auto& s = g_Session;
         int64 t0 = fakesteam::NowMs();
         gmi::State runner = gmi::Capture();
         std::string r = Snap("capture", id, self);
-        if (r != "0") { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "snapshot %d: capture failed (%s)", id, r.c_str()); return; }
+        if (r != "0") { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "snapshot %d: capture failed (%s)", id, r.c_str()); return false; }
         Snap("touched", 0, self);
         gmi::ResetCollisionTree();
         // replays do the same here (online saves are commands in the input stream: replays meet them anyway)
@@ -1192,6 +1383,7 @@ namespace pfo_android
                 auto oldest = g_Snaps.end();
                 for (auto it = g_Snaps.begin(); it != g_Snaps.end(); ++it)
                 {
+                    if (it->first == c_RejoinSnapId) continue;   // (a rejoin's: gone once it's sent or put back)
                     int k = it->second.mp ? 1 : it->second.keyframe ? 2 : 0;
                     if (k != kind) continue;
                     count++;
@@ -1203,6 +1395,8 @@ namespace pfo_android
             }
         }
         __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "snapshot %d: taken at frame %u in %lld ms", id, g_Session.m_Frame, static_cast<long long>(fakesteam::NowMs() - t0));
+        if (!mp && SnapWire()) SnapWireRoundTrip(id, self);
+        return true;
     }
 
     // The picture check. PFO's checksums cover what the game's logic reads; a load can still get
@@ -1417,6 +1611,7 @@ namespace pfo_android
     {
         int id = g_SnapLoad.id;
         SnapDropStandIn(self);
+        if (g_SnapLoad.rejoin) { RejoinStateFailed(why, self); return; }
         if (g_SnapLoad.rewind)
         {
             __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "rewind: snapshot %d didn't work (%s), replaying from the start", id, why);
@@ -1466,7 +1661,7 @@ namespace pfo_android
         // the saved game's textures first (they load in the background: a check without them would
         // draw other pictures than the save's). Not for an online load, which mustn't hold the match.
         static int64 texturesFrom = 0;
-        if (g_SnapLoad.phase == 1 && !arrived && !g_SnapLoad.forward)
+        if (g_SnapLoad.phase == 1 && !arrived && !g_SnapLoad.forward && !g_SnapLoad.rejoin)
         {
             int64 now = fakesteam::NowMs();
             if (Snap("textures", g_SnapLoad.id, self) != "1")
@@ -1509,6 +1704,8 @@ namespace pfo_android
                 }
             }
             auto& st = g_SnapRunner[g_SnapLoad.id];
+            gmi::ResolveObjects(st);   // (a snapshot through bytes names its objects by index)
+            if (g_SnapLoad.rejoin) __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: %zu made afresh (%.160s)", newId.size(), ValueString(made).c_str());
             std::string how = gmi::Apply(st, newId);
             gmi::ResetCollisionTree();
             g_SnapStandIn = false;   // (dropped by the restore)
@@ -1521,9 +1718,11 @@ namespace pfo_android
             __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "runner state put back: %s, instance count off by %d this frame", how.c_str(), g_ChecksumInstanceFix);
         }
         if (SnapDebug() && g_SnapLoad.phase == 1) gmi::DumpTo(("lists_restored_" + std::to_string(g_SnapLoad.id) + "_0.txt").c_str());
-        bool final = g_SnapLoad.phase == 3 || g_SnapLoad.forward;
-        SnapApplyNative(it->second, final, self);              // again: the room change steps ran the game
+        bool final = g_SnapLoad.phase == 3 || g_SnapLoad.forward || g_SnapLoad.rejoin;
+        if (g_SnapLoad.rejoin) InstallRejoin(self);           // the match's session, as the sender has it
+        else SnapApplyNative(it->second, final, self);         // again: the room change steps ran the game
         g_SnapSettle = true;
+        if (g_SnapLoad.rejoin) { RejoinStateRestored(self); return; }
         if (!final && g_SnapLoad.rewind)
         {
             // the snapshot was the starting point: the replay runs on to the rewind's frame (FinishRestore)
@@ -2029,10 +2228,12 @@ namespace pfo_android
     }
 
     // after each new frame of a session with others (live or replayed): the seated players' commands
+    uint32 g_ScanScanned = 0;                      // ScanCommands: the frame it last looked at
+    uint32 g_ScanLast[c_PlayerLimit] = {};         // ...and each player's last command (one held over frames counts once)
     void ScanCommands(CInstance* self)
     {
-        static uint32 scanned = 0;
-        static uint32 last[c_PlayerLimit] = {};
+        auto& scanned = g_ScanScanned;
+        auto& last = g_ScanLast;
         auto& s = g_Session;
         if (s.m_OnlineState != EOnlineState::Online || s.m_ClientCount <= 1)
         {
@@ -2154,7 +2355,7 @@ namespace pfo_android
 
     struct Rejoin
     {
-        int phase = 0;            // 1 asking for the match, 3 replaying it, 4 telling the others we're back
+        int phase = 0;            // 1 asking for the match, 2 putting its state back, 3 replaying it, 4 telling the others we're back
         MatchFile m;
         int source = -1;          // the player we asked
         HSteamNetConnection conn = k_HSteamNetConnection_Invalid;
@@ -2179,6 +2380,427 @@ namespace pfo_android
         if (inSession) g_Session.Disconnect();
         g_RejoinResult = -1;
         SetResult(-4);
+    }
+
+    // ---- fast rejoin: the match as it is, instead of its replay ----------------------------------
+    // A rejoiner used to replay the whole match from its start, flat out (minutes, for a long one).
+    // Now the player it asks sends the game as it is at R, the frame everyone's waiting at: the
+    // snapshot of a save, taken there and then (in the input wait), PFO's session as every device has
+    // it (players, inputs, delays; not the network's bookkeeping, which is each device's own), the
+    // save files as the others have them, GameMaker's random generator and the match's own records
+    // (online saves, commands, touches). The rejoiner puts it back like an online load, works out
+    // PFO's checksum for R+1 from it and compares it with the sender's: the same, and it carries on
+    // from R as a replayed rejoiner would; anything else, and it replays the match after all (the
+    // replay comes in the same message). Android and Windows alike: the bytes say the same on both.
+    // Only between two players for now: a capture changes the game a little (it switches every
+    // instance on and off again and rebuilds the collision tree: SnapCapture), which the rejoiner's
+    // restore repeats, and a third player would have to repeat at R too.
+    constexpr uint8 c_RejoinStateVersion = 1;            // the hello's second byte: "I can take the state"
+    constexpr uint32 c_RejoinStateMagic = 0x31524650u;   // PFR1
+    bool RejoinByReplayOnly() { return access("/sdcard/Android/data/" PFO_PACKAGE "/files/rejoinreplay", F_OK) == 0; }   // testing: the old way
+    uint32 g_RejoinTouchAt = 0;        // a replayed rejoin whose sender captured at R: touch there too
+    void ResyncClient(ClientData& cd, uint32 r, bool theyRestarted);
+    void RejoinAfterReplay(CInstance* self);
+
+    struct RejoinClient
+    {
+        uint64 id = 0; int inputDelay = 0, autoDelay = 0, player = -1; uint32 lastInput = 0, tail = 0;
+        std::vector<uint32> inputs; std::vector<std::pair<uint32, int>> delays;
+    };
+    struct RejoinPkg
+    {
+        // the replay, for falling back to it
+        uint32 r = 0, sumAtR = 0, lastWritten = 0;
+        std::vector<uint8> replay;
+        std::vector<uint32> touches;
+        bool captured = false;
+        int64 startMs = 0;
+        // the state
+        uint32 sumNext = 0;
+        int clients = 0, assigned = 0, prevAssigned = 0, delayMode = 0, favored = -1, minAuto = 0, maxAuto = 0;
+        int map[c_PlayerLimit] = {};
+        std::vector<RejoinClient> cl;
+        std::vector<SnapFile> files;
+        uint32 rng[16] = {}, rndIndex = 0, rndSeed = 0;
+        std::vector<std::pair<uint32, int>> spans;
+        int mpSaveCount = 0; bool autoSaved = false; uint32 scanLast[c_PlayerLimit] = {};
+        Vote vote; uint32 gameStart = 0; int trackedGame = -1;
+    } g_RejoinPkg;
+
+    // PFO's checksum of this frame as its Update makes it (the session's part, then the game's),
+    // for the game as it is now
+    uint32 ChecksumNow(uint32 frame, CInstance* self)
+    {
+        auto& s = g_Session;
+        uint32 was = s.m_Frame;
+        s.m_Frame = frame;
+        std::vector<uint8> all(Session::GetMaxSize());
+        Writer w(all.data(), Session::GetMaxSize());
+        s.Serialize(w);
+        all.resize(w.m_Offset);
+        auto ib = BufferGetFromGML(g_GMLChecksumBuffer1);
+        buffer_seek(self, g_GMLChecksumBuffer1, 0, 0);
+        RValue result = {}; RValue arg; init_buffer(arg, g_GMLChecksumBuffer1);
+        Script_Perform(g_gml_Script_getChecksumCallback, self, self, 1, &result, &arg);
+        int n = BufferTELL(ib);
+        const uint8* d = BufferGet(ib);
+        size_t at = all.size();
+        if (d && n > 0) all.insert(all.end(), d, d + n);
+        if (g_ChecksumInstanceFix != 0 && n >= 20)   // (as dllmain does, the frame of a restore)
+        {
+            int32 c; memcpy(&c, all.data() + at + 16, 4); c -= g_ChecksumInstanceFix; memcpy(all.data() + at + 16, &c, 4);
+        }
+        s.m_Frame = was;
+        return hash_fnv1a32(all.data(), static_cast<int>(all.size()));
+    }
+
+    // the sender, in the input wait at R: the snapshot (captured: the capture's touch happened here)
+    std::vector<uint8> PackRejoinState(uint32 r, CInstance* self, bool& captured, std::string& why)
+    {
+        auto& s = g_Session;
+        auto& me = s.m_ClientData[s.m_ClientIndex];
+        auto& next = me.m_ChecksumData[(r + 1) & (countof(me.m_ChecksumData) - 1)];
+        if (next.m_Frame != r + 1) { why = "no checksum for the frame after"; return {}; }
+        int64 t0 = fakesteam::NowMs();
+        SnapErase(c_RejoinSnapId, self);
+        captured = SnapCapture(c_RejoinSnapId, self, true);
+        if (!captured) { why = "the capture failed"; return {}; }
+        // the timeline's touches: this capture's (replays of the match from here on repeat it)
+        if (g_TouchFrames.empty() || g_TouchFrames.back() != r) g_TouchFrames.push_back(r);
+        auto it = g_Snaps.find(c_RejoinSnapId);
+        std::vector<uint8> game;
+        if (it == g_Snaps.end() || !SnapGameToBytes(c_RejoinSnapId, self, game, why)) { SnapErase(c_RejoinSnapId, self); if (why.empty()) why = "no snapshot"; return {}; }
+        std::string info = SnapWireInfo(self);
+        const NativeSnap& n = it->second;
+        Bytes o;
+        o.u32(c_RejoinStateMagic); o.u8(c_RejoinStateVersion);
+        o.u32(next.m_Checksum);
+        // the session as every device has it
+        o.u8(static_cast<uint8>(s.m_ClientCount)); o.i32(s.m_AssignedClientsCount); o.i32(s.m_PreviousFrameAssignedClientsCount);
+        o.i32(static_cast<int>(s.m_InputDelayMode)); o.i32(s.m_InputDelayFavoredClientIndex); o.i32(s.m_MinAutomaticInputDelay); o.i32(s.m_MaxAutomaticInputDelay);
+        for (int i = 0; i < c_PlayerLimit; i++) o.i32(s.m_PlayerIndexToClientIndexMap[i]);
+        for (int c = 0; c < s.m_ClientCount; c++)
+        {
+            auto& cd = s.m_ClientData[c];
+            auto& pd = cd.m_PlayerData;
+            o.u64(cd.m_SteamID); o.i32(cd.m_InputDelay); o.i32(cd.m_AutomaticInputDelay); o.u32(cd.m_LastInputFrame);
+            o.i32(pd.m_PlayerIndex); o.u32(pd.m_TailInputFrame);
+            for (auto v : pd.m_InputBuffer) o.u32(static_cast<uint32>(v));
+            for (auto& dc : cd.m_AutomaticInputDelayChanges) { o.u32(dc.m_InputFrame); o.i32(dc.m_InputDelay); }
+        }
+        // the save files as the others have them: ours on disk are in memory there
+        uint32 files = 0;
+        for (auto& fd : s.m_FileData) if (fd.m_Filename) files++;
+        o.u32(files);
+        for (int i = 0; i < countof(s.m_FileData); i++)
+        {
+            auto& fd = s.m_FileData[i];
+            if (!fd.m_Filename) continue;
+            EFileStatus st = fd.m_Status;
+            bool has = fd.m_Data != nullptr;
+            std::vector<uint8> data;
+            if (has) data.assign(static_cast<const uint8*>(fd.m_Data), static_cast<const uint8*>(fd.m_Data) + fd.m_Size);
+            if (st == EFileStatus::Physical && fd.m_OwnerClientIndex == s.m_ClientIndex)
+            {
+                bool exists = false;
+                data = ReadWhole(fd.m_Filename, exists);
+                st = exists ? EFileStatus::VirtualExists : EFileStatus::VirtualDoesNotExist;
+                has = exists;
+            }
+            o.i32(i); o.i32(fd.m_OwnerClientIndex); o.str(fd.m_Filename); o.i32(static_cast<int>(st)); o.u8(has ? 1 : 0); o.blob(data);
+        }
+        for (uint32 v : n.rng) o.u32(v);
+        o.u32(n.rndIndex); o.u32(n.rndSeed);
+        o.u32(static_cast<uint32>(n.spans.size())); for (auto& sp : n.spans) { o.u32(sp.first); o.i32(sp.second); }
+        // the match's own records
+        o.i32(g_MpSaveCount); o.u8(g_AutoSavedThisPause ? 1 : 0);
+        for (uint32 v : g_ScanLast) o.u32(v);
+        o.u8(g_Vote.active ? 1 : 0); o.u8(g_Vote.other ? 1 : 0); o.i32(g_Vote.index); o.i32(g_Vote.proposer);
+        o.u32(g_Vote.accepted); o.u32(g_Vote.required); o.u32(g_Vote.startFrame);
+        o.u32(g_GameStartFrame); o.i32(g_TrackedGameID);
+        PackRunner(o, g_SnapRunner[c_RejoinSnapId]);
+        o.blob(game);
+        SnapErase(c_RejoinSnapId, self);
+        __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: the game at frame %u: %zu bytes (the game's %zu) in %lld ms; %s", r, o.b.size(), game.size(),
+            static_cast<long long>(fakesteam::NowMs() - t0), info.c_str());
+        return std::move(o.b);
+    }
+
+    // RejoinState: like RejoinData (k, R, the checksum at R, the replay's last frame), then the
+    // timeline's touches, whether we captured at R, the replay, and the state (empty: couldn't)
+    std::vector<uint8> RejoinStateBody(int c, uint32 r, CInstance* self)
+    {
+        auto& s = g_Session;
+        auto& me = s.m_ClientData[s.m_ClientIndex];
+        uint32 sum = me.m_ChecksumData[r & (countof(me.m_ChecksumData) - 1)].m_Checksum;
+        bool captured = false;
+        std::string why;
+        std::vector<uint8> state = PackRejoinState(r, self, captured, why);
+        if (state.empty()) __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "rejoin: can't send the game (%s): sending the match to replay", why.c_str());
+        Bytes o;
+        o.u8(static_cast<uint8>(c)); o.u32(r); o.u32(sum); o.u32(s.m_ReplayLastFrameWritten);
+        o.u32(static_cast<uint32>(g_TouchFrames.size())); for (uint32 t : g_TouchFrames) o.u32(t);
+        o.u8(captured ? 1 : 0);
+        o.blob(s.m_ReplayWriter.m_Buffer, static_cast<size_t>(s.m_ReplayWriter.m_Offset));
+        o.blob(state);
+        return std::move(o.b);
+    }
+
+    // the rejoiner: the match so far, played flat out like a load
+    void RejoinByReplay(uint32 frame, uint32 checksum, uint32 lastWritten, std::vector<uint8> replay, const std::vector<uint32>& touches, bool touchAtR, CInstance* self)
+    {
+        if (replay.size() < 10 || replay[8] != g_Rejoin.m.n) { RejoinFail("bad match data"); return; }
+        if (g_Rejoin.conn != k_HSteamNetConnection_Invalid) g_SteamNetworkingSockets->CloseConnection(g_Rejoin.conn, 0, "replaying", false);
+        g_Rejoin.conn = k_HSteamNetConnection_Invalid;
+        g_Rejoin.frame = frame;
+        g_Restore.data = std::move(replay);
+        g_Restore.header = StateHeader();
+        g_Restore.header.frame = frame;
+        g_Restore.header.checksum = checksum;
+        g_Restore.header.lastFrameWritten = lastWritten;
+        g_Restore.header.replaySize = static_cast<uint32>(g_Restore.data.size());
+        g_Restore.slot = -1;
+        g_Restore.startMs = fakesteam::NowMs();
+        g_Restore.active = true;
+        PreloadLibrary(self);
+        g_ReplayChecksumsChecked = 0; g_ReplayFirstMismatchFrame = 0;
+        // the timeline's touches (a match started from a load has them, a fast rejoin's capture adds one)
+        g_ReplayTouch = touches; g_ReplayTouchNext = 0; g_TouchFrames = touches;
+        g_RejoinTouchAt = touchAtR ? frame : 0;   // (R itself: the replay ends there, StateBeforeUpdate does it)
+        g_Session.PlayReplay(g_Restore.data.data(), static_cast<int>(g_Restore.data.size()), g_Rejoin.m.k, self);
+        SetFastForward(true, self);
+        g_Rejoin.phase = 3;
+        __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: got the match (%zu bytes), replaying %u frames", g_Restore.data.size(), frame);
+    }
+
+    bool UnpackRejoinState(const std::vector<uint8>& b, CInstance* self, std::string& why)
+    {
+        auto& p = g_RejoinPkg;
+        auto& m = g_Rejoin.m;
+        Unbytes in(b.data(), b.size());
+        if (in.u32() != c_RejoinStateMagic || in.u8() != c_RejoinStateVersion) { why = "another version's state"; return false; }
+        p.sumNext = in.u32();
+        p.clients = in.u8(); p.assigned = in.i32(); p.prevAssigned = in.i32();
+        p.delayMode = in.i32(); p.favored = in.i32(); p.minAuto = in.i32(); p.maxAuto = in.i32();
+        for (int i = 0; i < c_PlayerLimit; i++) p.map[i] = in.i32();
+        if (!in.ok || p.clients != m.n || m.k >= p.clients) { why = "another match's state"; return false; }
+        p.cl.assign(p.clients, RejoinClient());
+        for (int c = 0; c < p.clients; c++)
+        {
+            auto& q = p.cl[c];
+            q.id = in.u64(); q.inputDelay = in.i32(); q.autoDelay = in.i32(); q.lastInput = in.u32();
+            q.player = in.i32(); q.tail = in.u32();
+            q.inputs.resize(countof(PlayerData::m_InputBuffer));
+            for (auto& v : q.inputs) v = in.u32();
+            q.delays.resize(countof(PlayerData::m_InputBuffer));
+            for (auto& d : q.delays) { d.first = in.u32(); d.second = in.i32(); }
+            if (in.ok && c < static_cast<int>(m.ids.size()) && q.id != m.ids[c]) { why = "the players differ"; return false; }
+        }
+        size_t files = in.count(14);
+        p.files.clear();
+        for (size_t f = 0; f < files && in.ok; f++)
+        {
+            SnapFile sf;
+            sf.index = in.i32(); sf.owner = in.i32(); sf.name = in.str(); sf.status = static_cast<EFileStatus>(in.i32()); sf.hasData = in.u8() != 0; sf.data = in.blob();
+            if (sf.index < 0 || sf.index >= static_cast<int>(countof(g_Session.m_FileData))) { why = "bad file data"; return false; }
+            p.files.push_back(std::move(sf));
+        }
+        for (auto& v : p.rng) v = in.u32();
+        p.rndIndex = in.u32(); p.rndSeed = in.u32();
+        size_t spans = in.count(8);
+        p.spans.clear();
+        for (size_t k = 0; k < spans && in.ok; k++) { uint32 f = in.u32(); int g = in.i32(); p.spans.push_back({ f, g }); }
+        p.mpSaveCount = in.i32(); p.autoSaved = in.u8() != 0;
+        for (auto& v : p.scanLast) v = in.u32();
+        p.vote = Vote();
+        p.vote.active = in.u8() != 0; p.vote.other = in.u8() != 0; p.vote.index = in.i32(); p.vote.proposer = in.i32();
+        p.vote.accepted = in.u32(); p.vote.required = in.u32(); p.vote.startFrame = in.u32();
+        p.gameStart = in.u32(); p.trackedGame = in.i32();
+        gmi::State st;
+        if (!UnpackRunner(in, st)) { why = "bad runner data"; return false; }
+        std::vector<uint8> game = in.blob();
+        if (!in.ok || game.empty()) { why = "the state is cut short"; return false; }
+        // the game's side, kept under c_RejoinSnapId as the sender's was
+        SnapErase(c_RejoinSnapId, self);
+        if (!SnapGameFromBytes(game, self, why)) return false;
+        NativeSnap n;
+        n.id = c_RejoinSnapId; n.frame = p.r; n.takenMs = fakesteam::NowMs(); n.mp = true; n.ready = true;
+        memcpy(n.rng, p.rng, sizeof(n.rng)); n.rndIndex = p.rndIndex; n.rndSeed = p.rndSeed;
+        n.spans = p.spans; n.touches = p.touches;
+        g_Snaps[c_RejoinSnapId] = std::move(n);
+        g_SnapRunner[c_RejoinSnapId] = std::move(st);
+        __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: the game came (%zu bytes): %s", b.size(), SnapWireInfo(self).c_str());
+        return true;
+    }
+
+    void TakeRejoinState(const std::vector<uint8>& body, CInstance* self)
+    {
+        auto& p = g_RejoinPkg;
+        p = RejoinPkg();
+        Unbytes in(body.data(), body.size());
+        int k = in.u8();
+        p.r = in.u32(); p.sumAtR = in.u32(); p.lastWritten = in.u32();
+        size_t touches = in.count(4);
+        for (size_t t = 0; t < touches && in.ok; t++) p.touches.push_back(in.u32());
+        p.captured = in.u8() != 0;
+        p.replay = in.blob();
+        std::vector<uint8> state = in.blob();
+        if (!in.ok || k != g_Rejoin.m.k) { RejoinFail("bad match data"); return; }
+        p.startMs = g_Rejoin.startMs;
+        std::string why;
+        if (state.empty()) why = "the other player couldn't send it";
+        else if (UnpackRejoinState(state, self, why))
+        {
+            if (g_Rejoin.conn != k_HSteamNetConnection_Invalid) g_SteamNetworkingSockets->CloseConnection(g_Rejoin.conn, 0, "putting the game back", false);
+            g_Rejoin.conn = k_HSteamNetConnection_Invalid;
+            g_Rejoin.frame = p.r;
+            g_Rejoin.phase = 2;
+            // like an online load: the game state back at the start of next step (a room change first, if need be)
+            g_SnapLoad = SnapLoad();
+            g_SnapLoad.phase = 1; g_SnapLoad.id = c_RejoinSnapId; g_SnapLoad.startMs = fakesteam::NowMs(); g_SnapLoad.rejoin = true;
+            g_SnapBetweenRooms = false;
+            g_Restore.active = true;
+            g_Restore.slot = -1;
+            g_Restore.header = StateHeader();
+            g_Restore.header.frame = p.r;
+            g_Restore.startMs = g_SnapLoad.startMs;
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: putting the game back at frame %u", p.r);
+            return;
+        }
+        __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "rejoin: the game didn't come across (%s): replaying the match instead", why.c_str());
+        SnapErase(c_RejoinSnapId, self);
+        uint32 r = p.r, sum = p.sumAtR, lw = p.lastWritten; bool cap = p.captured;
+        std::vector<uint8> replay = std::move(p.replay);
+        std::vector<uint32> t = p.touches;
+        p = RejoinPkg();
+        RejoinByReplay(r, sum, lw, std::move(replay), t, cap, self);
+    }
+
+    // at the restore (SnapLoadBefore): the session from what came, as the replay would have left it
+    void InstallRejoin(CInstance* self)
+    {
+        auto& s = g_Session;
+        auto& p = g_RejoinPkg;
+        int k = g_Rejoin.m.k;
+        s.Reset(self);
+        s.m_ClientIndex = k;
+        s.m_ClientCount = p.clients;
+        s.m_Frame = p.r;
+        s.m_AssignedClientsCount = p.assigned;
+        s.m_PreviousFrameAssignedClientsCount = p.prevAssigned;
+        s.m_InputDelayMode = static_cast<EInputDelayMode>(p.delayMode);
+        s.m_InputDelayFavoredClientIndex = p.favored;
+        s.m_MinAutomaticInputDelay = p.minAuto;
+        s.m_MaxAutomaticInputDelay = p.maxAuto;
+        for (int i = 0; i < c_PlayerLimit; i++) s.m_PlayerIndexToClientIndexMap[i] = p.map[i];
+        for (int c = 0; c < p.clients; c++)
+        {
+            auto& q = p.cl[c];
+            auto& cd = s.m_ClientData[c];
+            auto& pd = cd.m_PlayerData;
+            cd.m_SteamID = q.id;
+            cd.m_InputDelay = q.inputDelay;
+            cd.m_AutomaticInputDelay = q.autoDelay;
+            // inputs up to R: what anyone sent after it comes again (ResyncClient)
+            cd.m_LastInputFrame = std::min(q.lastInput, p.r);
+            pd.m_PlayerIndex = q.player;
+            pd.m_TailInputFrame = std::min(q.tail, p.r);
+            for (size_t j = 0; j < countof(pd.m_InputBuffer); j++) pd.m_InputBuffer[j] = static_cast<InputFlags_t>(q.inputs[j]);
+            for (size_t j = 0; j < countof(cd.m_AutomaticInputDelayChanges); j++) { cd.m_AutomaticInputDelayChanges[j].m_InputFrame = q.delays[j].first; cd.m_AutomaticInputDelayChanges[j].m_InputDelay = q.delays[j].second; }
+        }
+        s.m_RequestedAutomaticInputDelay = p.cl[k].autoDelay;
+        s.m_RequestedAutomaticInputDelayFrame = 0;
+        {
+            // our checksum for R (each input message carries the one of the frame before): the
+            // sender's, the same everywhere
+            auto& mine = s.m_ClientData[k].m_ChecksumData[p.r & (countof(s.m_ClientData[k].m_ChecksumData) - 1)];
+            mine = ChecksumBuffer();
+            mine.m_Frame = p.r;
+            mine.m_Checksum = p.sumAtR;
+        }
+        for (auto& f : p.files)
+        {
+            auto& fd = s.m_FileData[f.index];
+            fd.m_Filename = YYStrDup(f.name.c_str());
+            fd.m_OwnerClientIndex = f.owner;
+            fd.m_Status = f.status;
+            if (f.hasData)
+            {
+                void* d = YYAlloc(static_cast<int>(std::max<size_t>(1, f.data.size())));
+                memcpy(d, f.data.data(), f.data.size());
+                fd.m_Data = d;
+                fd.m_Size = static_cast<int>(f.data.size());
+            }
+        }
+        // the match's recording so far, recorded on from here
+        reset(s.m_ReplayReader, nullptr, 0);
+        reset(s.m_ReplayWriter, g_ReplayBuffer, narrow_cast<int>(c_ReplayBufferSize - 1u));
+        size_t rs = std::min<size_t>(p.replay.size(), c_ReplayBufferSize - 1u);
+        memcpy(g_ReplayBuffer, p.replay.data(), rs);
+        s.m_ReplayWriter.m_Offset = static_cast<int>(rs);
+        s.m_ReplayLastFrameWritten = p.lastWritten;
+        s.m_OnlineState = EOnlineState::Online;
+        SetPowersaveEnabled(false);
+        if (RngPointers()) { memcpy(g_RngState, p.rng, sizeof(p.rng)); *g_RngIndex = p.rndIndex; *g_RngSeed = p.rndSeed; }
+        g_GameSpans = p.spans;
+        g_TouchFrames = p.touches;
+        g_ReplayTouch.clear(); g_ReplayTouchNext = 0;
+        s.m_SpeedMultiplier = 1.0;
+        g_FinalGameSpeedFPS = 0;
+        s.UpdateGameSpeed(self);
+        // the match's own records
+        g_MpSaveCount = p.mpSaveCount;
+        g_AutoSavedThisPause = p.autoSaved;
+        memcpy(g_ScanLast, p.scanLast, sizeof(g_ScanLast));
+        g_ScanScanned = p.r;
+        g_MpSlots.clear(); g_MpFileSlot.clear();
+        for (int i = 1; i <= g_MpSaveCount; i++) { int f = FindMatchSaveFile(MatchId(), i); if (f >= 0) g_MpFileSlot[i] = f; }
+        g_Vote = p.vote;
+        if (g_Vote.active) g_Vote.startMs = fakesteam::NowMs();
+        g_VoteAnswered = false;
+        g_MatchNoSnap = false; g_MpCaptures = 0;
+        g_GameStartFrame = p.gameStart;
+        g_TrackedGameID = p.trackedGame;
+    }
+
+    void RejoinStateRestored(CInstance* self)
+    {
+        auto& p = g_RejoinPkg;
+        g_SnapLoad = SnapLoad();
+        uint32 sum = ChecksumNow(p.r + 1, self);
+        if (sum != p.sumNext)
+        {
+            char why[96]; snprintf(why, sizeof(why), "PFO's checksum for frame %u came out %08x here, %08x there", p.r + 1, sum, p.sumNext);
+            RejoinStateFailed(why, self);
+            return;
+        }
+        WriteBackOurFiles(self);
+        SnapErase(c_RejoinSnapId, self);
+        SetFastForward(false, self);
+        SetDraw(true, self);
+        g_Restore.active = false;
+        g_Restore.data.clear();
+        int64 ms = fakesteam::NowMs() - p.startMs;
+        __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: the game put back at frame %u, %lld ms after asking (checksum %08x: verified)", p.r, static_cast<long long>(ms), sum);
+        SetResult(3);
+        g_Rejoin.phase = 3;
+        g_Rejoin.frame = p.r;
+        p = RejoinPkg();
+        RejoinAfterReplay(self);
+    }
+
+    void RejoinStateFailed(const char* why, CInstance* self)
+    {
+        __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "rejoin: the game from the other player didn't work here (%s): replaying the match instead", why);
+        g_SnapLoad = SnapLoad();
+        g_SnapBetweenRooms = false;
+        SnapErase(c_RejoinSnapId, self);
+        auto& p = g_RejoinPkg;
+        uint32 r = p.r, sum = p.sumAtR, lw = p.lastWritten; bool cap = p.captured;
+        std::vector<uint8> replay = std::move(p.replay);
+        std::vector<uint32> t = p.touches;
+        p = RejoinPkg();
+        RejoinByReplay(r, sum, lw, std::move(replay), t, cap, self);
     }
 
     void StartRejoin(CInstance* self)
@@ -2226,7 +2848,7 @@ namespace pfo_android
         // or left), so has the rejoin
         if (g_Rejoin.phase == 4 && g_Session.m_OnlineState != EOnlineState::Online) { RejoinFail("the match ended before we were back in it"); return; }
         if (g_Rejoin.phase != 1) return;
-        if (fakesteam::NowMs() - g_Rejoin.startMs > 25000)
+        if (fakesteam::NowMs() - g_Rejoin.startMs > 40000)
         {
             RejoinFail(!g_Rejoin.helloSent ? "no answer (never connected)" : "no answer (connected, but the match wasn't sent)");
             return;
@@ -2236,38 +2858,25 @@ namespace pfo_android
             && st.m_eState == k_ESteamNetworkingConnectionState_Connected)
         {
             std::vector<uint8> b = { static_cast<uint8>(g_Rejoin.m.k) };
+            // (the second byte: send the match as it is; builds without fast rejoins read the first only)
+            if (NativeSnapshots() && gmi::Pointers() && !g_TestNoSnap && !RejoinByReplayOnly()) b.push_back(c_RejoinStateVersion);
             g_Rejoin.helloSent = fakesteam::SendRejoin(g_Rejoin.m.ids[g_Rejoin.source], fakesteam::Msg::RejoinHello, b);
         }
         auto& inbox = fakesteam::g_RejoinInbox;
         for (auto it = inbox.begin(); it != inbox.end(); ++it)
         {
-            if (it->type != static_cast<uint8>(fakesteam::Msg::RejoinData)) continue;
+            bool byState = it->type == static_cast<uint8>(fakesteam::Msg::RejoinState);
+            if (it->type != static_cast<uint8>(fakesteam::Msg::RejoinData) && !byState) continue;
             if (it->from != g_Rejoin.m.ids[g_Rejoin.source]) continue;   // only from the player we asked
             std::vector<uint8> body = std::move(it->body);
             inbox.erase(it);
+            if (byState) { TakeRejoinState(body, self); return; }
             fakesteam::In in(body.data(), body.size());
             int k = in.u8();
             uint32 frame = in.u32(), checksum = in.u32(), lastWritten = in.u32();
-            if (!in.ok || k != g_Rejoin.m.k || in.o >= body.size() || body.size() - in.o < 10 || body[in.o + 8] != g_Rejoin.m.n) { RejoinFail("bad match data"); return; }
-            g_SteamNetworkingSockets->CloseConnection(g_Rejoin.conn, 0, "replaying", false);
-            g_Rejoin.conn = k_HSteamNetConnection_Invalid;
-            g_Rejoin.frame = frame;
+            if (!in.ok || k != g_Rejoin.m.k || in.o >= body.size()) { RejoinFail("bad match data"); return; }
             // like a load: play the match so far flat out
-            g_Restore.data.assign(body.begin() + in.o, body.end());
-            g_Restore.header = StateHeader();
-            g_Restore.header.frame = frame;
-            g_Restore.header.checksum = checksum;
-            g_Restore.header.lastFrameWritten = lastWritten;
-            g_Restore.header.replaySize = static_cast<uint32>(g_Restore.data.size());
-            g_Restore.slot = -1;
-            g_Restore.startMs = fakesteam::NowMs();
-            PreloadLibrary(self);
-            g_ReplayChecksumsChecked = 0; g_ReplayFirstMismatchFrame = 0;
-            g_ReplayTouch.clear(); g_ReplayTouchNext = 0; g_TouchFrames.clear();
-            g_Session.PlayReplay(g_Restore.data.data(), static_cast<int>(g_Restore.data.size()), k, self);
-            SetFastForward(true, self);
-            g_Rejoin.phase = 3;
-            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: got the match (%zu bytes), replaying %u frames", g_Restore.data.size(), frame);
+            RejoinByReplay(frame, checksum, lastWritten, std::vector<uint8>(body.begin() + in.o, body.end()), {}, false, self);
             return;
         }
     }
@@ -2395,8 +3004,26 @@ namespace pfo_android
         fakesteam::g_TimelineNews = fakesteam::TimelineNews();
     }
 
-    void RejoinServe(bool frozen)
+    // Is our connection to this player through the room server's relay? It carries a few kilobytes
+    // well enough (a replay), not the megabytes of a fast rejoin's state.
+    bool ViaRelay(uint64 id)
     {
+        for (auto& kv : fakesteam::g_Conns)
+            if (kv.second.remoteId == id && kv.second.peer) return fakesteam::IsVirtual(kv.second.peer->address);
+        return false;
+    }
+
+    // they replay all of it before they're back (if a fast rejoin doesn't work out, too): wait that
+    // long for them (a slow phone replays some 300 frames a second), on top of what they've been gone
+    void RejoinGrace(int c, uint32 r)
+    {
+        int64 nowMs = AndroidNowMs();
+        g_GraceMs[c] = (g_LostAtMs[c] != 0 ? nowMs - g_LostAtMs[c] : 0) + static_cast<int64>(r) * 1000 / 300 + 30000;
+    }
+
+    void RejoinServe(bool frozen, CInstance* self)
+    {
+        int stateFor = -1; uint64 stateTo = 0; uint32 stateR = 0;   // a fast rejoin to answer (after the inbox)
         auto& s = g_Session;
         if (s.m_OnlineState != EOnlineState::Online || s.m_ClientCount < 2) return;
         if (frozen) ShareLostInputs();
@@ -2458,17 +3085,25 @@ namespace pfo_android
                     auto& me = s.m_ClientData[s.m_ClientIndex];
                     uint32 sum = me.m_ChecksumData[r & (countof(me.m_ChecksumData) - 1)].m_Checksum;
                     uint32 lw = s.m_ReplayLastFrameWritten;
-                    std::vector<uint8> b(13);
-                    b[0] = static_cast<uint8>(c);
-                    memcpy(b.data() + 1, &r, 4); memcpy(b.data() + 5, &sum, 4); memcpy(b.data() + 9, &lw, 4);
-                    b.insert(b.end(), s.m_ReplayWriter.m_Buffer, s.m_ReplayWriter.m_Buffer + s.m_ReplayWriter.m_Offset);
-                    bool ok = fakesteam::SendRejoin(it->from, fakesteam::Msg::RejoinData, b);
-                    // they replay all of it before they're back: wait that long for them (a slow
-                    // phone replays some 300 frames a second), on top of what they've been gone
-                    int64 nowMs = AndroidNowMs();
-                    g_GraceMs[c] = (g_LostAtMs[c] != 0 ? nowMs - g_LostAtMs[c] : 0) + static_cast<int64>(r) * 1000 / 300 + 30000;
-                    __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: client %d asked for the match: sent %d bytes up to frame %u (%s)", c,
-                        s.m_ReplayWriter.m_Offset, r, ok ? "ok" : "FAILED");
+                    // a fast rejoin: the game as it is (between two players, with snapshots at both ends);
+                    // made after this loop (the capture runs the game's code: nothing may hold on to the inbox)
+                    bool asked = it->body.size() >= 2 && it->body[1] >= c_RejoinStateVersion;
+                    bool relayed = asked && ViaRelay(it->from);
+                    bool byState = asked && !relayed && self != nullptr && s.m_ClientCount == 2
+                        && NativeSnapshots() && gmi::Pointers() && !g_MatchNoSnap && !g_TestNoSnap && !RejoinByReplayOnly();
+                    if (relayed) __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: client %d is reached through the relay: sending the match to replay (the game as it is is too big for it)", c);
+                    if (byState) { stateFor = c; stateTo = it->from; stateR = r; }
+                    else
+                    {
+                        std::vector<uint8> b(13);
+                        b[0] = static_cast<uint8>(c);
+                        memcpy(b.data() + 1, &r, 4); memcpy(b.data() + 5, &sum, 4); memcpy(b.data() + 9, &lw, 4);
+                        b.insert(b.end(), s.m_ReplayWriter.m_Buffer, s.m_ReplayWriter.m_Buffer + s.m_ReplayWriter.m_Offset);
+                        bool ok = fakesteam::SendRejoin(it->from, fakesteam::Msg::RejoinData, b);
+                        RejoinGrace(c, r);
+                        __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: client %d asked for the match: sent %zu bytes up to frame %u (%s)", c,
+                            b.size(), r, ok ? "ok" : "FAILED");
+                    }
                 }
                 it = inbox.erase(it);
             }
@@ -2497,6 +3132,14 @@ namespace pfo_android
                 it = inbox.erase(it);
             }
             else ++it;
+        }
+        if (stateFor >= 0)
+        {
+            std::vector<uint8> b = RejoinStateBody(stateFor, stateR, self);
+            bool ok = fakesteam::SendRejoin(stateTo, fakesteam::Msg::RejoinState, b);
+            RejoinGrace(stateFor, stateR);
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: client %d asked for the match: sent %zu bytes up to frame %u, the game as it is and its replay (%s)", stateFor,
+                b.size(), stateR, ok ? "ok" : "FAILED");
         }
     }
 
@@ -2786,6 +3429,13 @@ namespace pfo_android
         BeforeDraw();
         DiffAtFrame(self);
         ReplayTouches(self);
+        if (g_RejoinTouchAt != 0 && g_Session.m_Frame == g_RejoinTouchAt && g_Session.m_ReplayReader.m_Buffer == nullptr)
+        {
+            g_RejoinTouchAt = 0;
+            Snap("touch", 0, self);
+            gmi::ResetCollisionTree();
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: touched frame %u as the other player's capture did", g_Session.m_Frame);
+        }
         SnapLoadBefore(self);
         if (g_SnapLoad.phase != 0) return;
         RejoinTick(self);
@@ -2939,7 +3589,7 @@ namespace pfo_android
             if (now) WriteMatchFile();
             else if (inMatch && g_Session.m_OnlineState != EOnlineState::Online) remove(MatchFilePath().c_str());   // over, and we saw it end
             if (g_Session.m_OnlineState != EOnlineState::Online || now) inMatch = now;
-            RejoinServe(false);
+            RejoinServe(false, self);
         }
         UpdateSeatInfo(self);
         // note when a game starts (also while replaying, so a loaded session knows it too)

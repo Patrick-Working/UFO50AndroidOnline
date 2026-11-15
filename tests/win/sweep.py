@@ -32,6 +32,11 @@ def setup(box):
     d = os.path.join(wingame.home(box), "ufo50_online")
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "okplay.txt"), "w") as f: f.write("off\n")
+    # SNAPWIRE=1: every save's snapshot goes through bytes and back (as a fast rejoin's does), so the
+    # loads check the serializer too
+    wire = os.path.join(d, "snapwire")
+    if os.environ.get("SNAPWIRE"): open(wire, "w").close()
+    elif os.path.exists(wire): os.remove(wire)
     cfg = os.path.join(d, "config.json")
     if not os.path.exists(cfg):
         # the settings another test game wrote (the game writes the file on its first run)

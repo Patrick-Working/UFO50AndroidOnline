@@ -1125,7 +1125,7 @@ namespace pfo_win_ui
             g_LastResultSeq = seq;
             if (result == 1)
             {
-                Say(g_PendingAuto ? L"SAVED BY ITSELF" : g_PendingQuick ? L"QUICK SAVED (F9 LOADS IT)" : L"SAVED", 2000);
+                Say(g_PendingAuto ? L"GAME SAVED ON PAUSE" : g_PendingQuick ? L"QUICK SAVED (F9 LOADS IT)" : L"SAVED", 2000);
                 g_PendingAuto = false;
                 g_SaveCache.erase(pfo_android::g_LastSavedSlot.load());
                 TakePicture(pfo_android::g_LastSavedSlot.load());

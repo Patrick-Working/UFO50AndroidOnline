@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Fast rejoin.** A player whose app closed or crashed used to replay the whole match from its
+  start to get back in (minutes, for a long match, with everyone else waiting). Now the player
+  still in the match sends the game as it is where everyone is waiting: a snapshot of the game,
+  PFO's session (players, inputs, input delay), the save files and the match's records. The
+  rejoining device puts it back like an online load, checks PFO's checksum for the next frame
+  against the sender's, and carries on. Anything wrong, and it replays the match as before (the
+  replay comes along in the same message). Android and Windows alike, and between them. Between
+  two players for now; with three or more the rejoin replays, and so does one through the room
+  server's relay (it carries the replay's kilobytes, not the state's megabytes, in good time). Tests: `tests/win/rejoin.py` (each way,
+  in the library and in a game), `duo.py` and `cross.py` check that a rejoin was fast, and
+  `SNAPWIRE=1` sends every save's snapshot in the sweeps through bytes and back.
+- **Online: your own player chip opens the players panel**, so you can switch your seat between touch
+  and a gamepad during a match. Online a device plays one seat: the panel shows OFF and your seat
+  (P2, say), with the other columns faded.
+- **The online pill stays out of the way**: it shows only while the players' names do (tap the
+  chips) or when something happens, and it says the kind of connection: LAN, ONLINE or RELAY, with
+  the input delay. The names are on a line under the P1 / P2 chips.
+- **☰ again closes TOUCH CONTROLS** (keeping the changes, as ACCEPT does).
+- **The save list's LOAD and DELETE swapped places** on a phone (DELETE left, LOAD right).
+- "SAVED BY ITSELF" is now **GAME SAVED ON PAUSE**.
 - **Fixed: loading a save after DISCONNECT crashed** (an error box, `pfo_set_players` asserting in
   `scrSetOnlinePlayers`). A save made in solo play is kept in memory as a snapshot of the running
   session; after DISCONNECT PFO is shut down, and putting the snapshot back left the game thinking

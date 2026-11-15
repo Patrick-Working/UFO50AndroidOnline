@@ -213,6 +213,32 @@ With three or more players, the ones left may have received different amounts of
 last inputs; while someone is lost, they share those inputs among themselves so they all wait at
 the same frame. (Tested with two players only.)
 
+**A fast rejoin** (between two players, both with snapshots, not through the relay: its mailbox
+carries a replay's few kilobytes in good time, not a state of one to six megabytes): step 3 is skipped. The rejoiner's
+hello says it can take the state; the player it asks takes a snapshot right there in the input
+wait (frame R, as a save's would be) and sends it with the rest of what a replay would have built:
+
+- the game (pfo_snapshot.gml's `export`: every value with its type; refs keep their numbers, as
+  the assets are the same and a restore stands new instances and data structures in for the old
+  ones by their old refs; methods are bound again on the other side: to the global struct, to the
+  struct they're in, or to the instance standing in for theirs);
+- the runner's lists (instances by id, objects by their index rather than their address);
+- PFO's session as every device has it: players and seats, the input buffers up to R, input delays
+  and their scheduled changes. Not the network's bookkeeping (message numbers, round trips), which
+  is each device's own and starts afresh as after a replay;
+- the save files as the others have them (the sender's own, on its disk, go as the in-memory copies
+  everyone else holds), GameMaker's random generator, and the match's records (online saves so far,
+  the last command per player, a vote under way, the game being played);
+- the replay and the touch frames, for falling back.
+
+The rejoiner puts the game back like an online load (a room change first if need be), sets the
+session up from the rest, and works out PFO's checksum for R+1 the way its Update would. Only when
+it equals the sender's does it go on (step 4); else it replays after all. A capture switches every
+instance on and off again and rebuilds the collision tree (see snapshots above): the restore does
+the same, and the sender notes R as a touch frame, so later replays of the match repeat it. That is
+also why it waits for a third player: one that didn't capture would have to repeat it at R.
+`files/rejoinreplay` makes a rejoiner ask for the replay instead (testing).
+
 ## A crash fixed along the way
 
 GameMaker's audio library logs a message for every sound it decodes ("Decoding bgm15_shop..."),

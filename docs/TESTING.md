@@ -73,6 +73,8 @@ Files in `/sdcard/Android/data/com.unofficial.ufo50/files/` that change how the 
 | `forcerelay` (empty) | join through the relay only |
 | `okplay.txt` (a URL) | use another room server |
 | `okplay.txt` (`off`) | no room server at all: what the tests that play alone use (the sweeps, quick slot, rewind write it; `mp_test.py` removes it) |
+| `snapwire` | testing: every save's snapshot goes through bytes and back as a fast rejoin's does (both its halves: the game's values and the runner's lists), so its load's check tests that; the log says what didn't cross exactly (`snapwire N compared: ...`) |
+| `rejoinreplay` | testing: a rejoin asks for the match's replay, as builds before fast rejoins did |
 | `snapfail` | testing: every snapshot load fails its check on purpose, so the replay it falls back to runs (a sweep with it on tests the fallback in every game) |
 | `picdebug` | development: the pictures a load compares are saved as PNGs (`picdbg_<slot><frame>.png` after a save, `picdbg_<slot>5<frame>.png` in the load's check), and a picture that differs is logged with both fingerprints |
 | `snapdebug` | development: a snapshot also remembers the whole game state one frame later, and a load compares against it (logcat `PFOSNAP`) |
@@ -154,8 +156,15 @@ game, so keep them to yourself.
 | `quickslot.py` | **Quick save and quick load** (the twin of `tests/quickslot.py`): F5 before solo play refused, F5 / F9 in Barbuta with the loose block falling in between, the load verified with its pictures, then the controller alone (both sticks in, down to QUICK LOAD (F9), A). Keys go to its own window only. | `quickslot.py [box]` |
 | `rewind.py` | **Rewind and its estimates** (the twin of `tests/rewind_test.py`). | `rewind.py [box]` |
 | `disconnect.py` | **A load after DISCONNECT** (the twin of `tests/disconnect.py`). | `disconnect.py [box]` |
+
+`duo.py` and `cross.py` check that a rejoin takes the match as it is (a fast rejoin: "rejoin: the
+game put back at frame R, N ms after asking"); with `REJOIN_REPLAY=1` (duo.py) the rejoining game
+asks for the replay instead and the check expects that. `SNAPWIRE=1` on `sweep.py` (both) sends
+every save's snapshot through bytes and back (`files/snapwire`), so the loads' checks (120 frames
+and three pictures) test what a fast rejoin's snapshot goes through.
 | `uitest.py` | **The menu, step by step**, by keyboard and by the test controller: every page, the saves list with pictures, the confirm page, the loading screen, with a picture of each step. | `uitest.py <folder for the pictures> [box]` |
 | `duo.py` | **Two Windows games in one match.** A private lobby joined by its code; an online save (the same frame and checksum on both, a snapshot and a picture on both); a two-player game; a save there; a load that is declined (the box asking shows the save's picture); a load that is accepted (both put the snapshot back on the same frame and carry on); a library save loaded from inside the game; the joiner killed, started again and rejoining; no desync lines, no error box, and no save files piling up. With `PFO_NO_SNAPSHOTS=1` set it expects a match of files only (every accepted load restarts the match from the save by replay). | `duo.py all` (or `start`, `test`, `stop`) |
+| `rejoin.py` | **Fast rejoins, each way.** Two Windows games in a match (in the library, or with `game` in a game for two); the joiner's game killed, started again and rejoining by the match's state, then the host's; after each, both in the same place and a save made on the same frame with the same checksum on both; no desync lines, no error box. With `REJOIN_REPLAY=1` the rejoins replay instead. | `rejoin.py [library\|game]` |
 | `cross.py` | **A Windows game and an Android emulator in one match.** Both in the online library; a save asked for by each side (the same frame and checksum on both: the two builds compute the same game); a two-player game; a load asked for by each side and accepted by the other; a minute of play with a save at the end; each side's app killed and rejoining. | `cross.py win [port]` (Windows hosts), `cross.py android [port]` (the emulator hosts) |
 | `vergate.py` | **Two versions of the Windows build can't share a lobby.** The other version hosts and this one joins, then the other way round. Each join must be refused with the log line that names the versions, both games must stay up, and the host must still have its lobby. | `vergate.py <game folder of the other version>` |
 | `xgate.py` | **The same between an emulator (this version) and another version's Windows build**, both ways. The app must still answer afterwards, with no crash or failed assertion in its log. | `xgate.py <game folder of the other version> [port]` |
@@ -203,6 +212,27 @@ Still open:
 - Games 50 and 24 (45 and 46 in the code): a replay-only load sometimes doesn't verify (game 50 in
   about 4 runs of 10, on the build before these changes too; game 24 once in 7).
 - `vergate.py` and `xgate.py` were not run (the version gate wasn't changed).
+
+## Results for fast rejoins (2026-11-15, not yet released)
+
+| test | result |
+|---|---|
+| `tests/win/rejoin.py library` | **pass**: the joiner's game killed and back by state at frame 1211 in 0.7 s, then the host's (frame 1868, 0.8 s, about 1.2 MB sent); after each, a save on the same frame with the same checksum on both |
+| `tests/win/rejoin.py game` | **pass** in a game for two: 2.0 s and 2.1 s (3.1 MB, 2,792 instances), saves matching after each |
+| `RELAY=1 tests/win/rejoin.py game` | **pass**: through the relay the other game sends the replay instead (about 900 bytes) and both rejoins replay; saves matching after each. (Before that rule the 3 MB state didn't arrive in the rejoiner's 40 seconds.) |
+| `tests/win/cross.py win` | the rejoins **pass** both ways by state: the emulator back from the Windows game in 2.6 s, the Windows game back from the emulator in 2.5 s, a save after both with the same frame and checksum. One check failed: the vote box's picture of the save (the PC's display was asleep, so window pictures came out blank; `duo.py` failed its picture checks the same way that night) |
+| `SNAPWIRE=1 tests/win/sweep.py all` | **50 of 50**: every save through bytes and back, its load verified (120 frames, 3 pictures) and the replay through it; every round trip "0 values not sent, 0 sent unbound" (snapshots up to 6.3 MB, about 0.3 s out and 0.2 s back) |
+| `SNAPWIRE=1 sweep4.py` (Android) | games 1 and 8 (40 and 48 in the code) pass. Game 3 (34) failed its picture at frame 61 or 101 in three runs (checksums all matched, the replay fallback verified); run by hand through bytes it verified three times, with the comparison showing the snapshot and its copy identical. The sweep's menu keys were unreliable in this mode (each capture holds the game while its pause menu is up), so it wasn't settled. |
+
+Found and fixed on the way: `handle_parse` gives `noone` for an instance that isn't there, so the
+other device's instances all became one (an error box in `oLibrary`); the game's 1,363 global
+functions are methods bound to the global struct; a rejoined device lacked its own checksum for R
+(an assertion when it sent its inputs); `duo.py` pressed into the code box when its window picture
+came back blank.
+
+Still open:
+- Game 3's picture in the Android sweep with `snapwire` on (above).
+- Three or more players: a rejoin replays (not tried with a third player; only two emulators).
 
 ## Results for v0.4.0
 
