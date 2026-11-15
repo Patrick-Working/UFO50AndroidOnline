@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Fixed: loading a save after DISCONNECT crashed** (an error box, `pfo_set_players` asserting in
+  `scrSetOnlinePlayers`). A save made in solo play is kept in memory as a snapshot of the running
+  session; after DISCONNECT PFO is shut down, and putting the snapshot back left the game thinking
+  it was online. Outside solo play a save now loads as it does after a restart: its recording is
+  replayed, which starts the session properly. Tests: `tests/disconnect.py`,
+  `tests/win/disconnect.py`.
+- **The layout editor is a TOUCH CONTROLS panel** in the middle of the screen instead of a strip of
+  small buttons: a TOUCH OPACITY slider, AUTO HIDE, PLAYER CHIPS horizontal / vertical, D-PAD 8-way /
+  4-way, QUICK SAVE / LOAD on / off, RESET TO DEFAULTS, and a red CANCEL (puts back what you had)
+  and a green ACCEPT. The controls around it are moved and resized as before.
+- **The quick save and quick load buttons are on opposite sides of the screen** (left and right,
+  below the top bar), so a thumb can't bump one for the other. They are touch controls like the
+  rest: moved and resized in the editor, and switched off there if you don't want them.
 - **Quick save and quick load.** One QUICK slot, replaced by each quick save, in solo play: on a
   phone the two new buttons left of the disk, on Windows **F5** and **F9** (also in the F1 menu).
   The save list shows it as QUICK. (Built by `bash build.sh` for now: the quick build uses the

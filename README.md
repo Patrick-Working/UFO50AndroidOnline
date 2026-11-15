@@ -153,8 +153,12 @@ it shows in the session pill after the chips. See *Overlay* in [CHANGELOG.md](CH
 - A classic d-pad (8-way by default, with a 4-way switch), the two action buttons, MENU and BACK.
 - Buttons carry the labels the game itself shows: the keys it has bound (Z / X, or DEL / END on
   player 2's side of the keyboard). They follow your rebinds and use UFO 50's own font and colours.
-- The layout editor (the ☰ button, top right) lets you move, resize and hide controls and change
-  their opacity, and stack the player chips in a column (CHIPS ROW / COLUMN).
+- The layout editor (the ☰ button, top right) opens **TOUCH CONTROLS** in the middle of the
+  screen: drag the controls around it to move them, pinch them (or drag their yellow dot) to
+  resize them. In the panel: **TOUCH OPACITY** (a slider), **AUTO HIDE** (the touch pad hides while
+  a gamepad is connected), **PLAYER CHIPS** horizontal or vertical, the **D-PAD** 8-way or 4-way,
+  **QUICK SAVE / LOAD** buttons on or off, and **RESET TO DEFAULTS**. **ACCEPT** keeps the changes,
+  **CANCEL** puts back what you had.
 - *Settings > Video Settings > Scale* works. 4x leaves room beside the picture for the controls,
   and FILL fills the screen.
 
@@ -164,8 +168,10 @@ it shows in the session pill after the chips. See *Overlay* in [CHANGELOG.md](CH
   the game, who was playing and how far into the game. Saves are kept until you delete them.
 - In single player, saving needs a recorded session: tap **START SOLO PLAY** in the save list once
   (it starts you in the library). The pill then says SOLO: SAVES ON.
-- **Quick save and quick load**: the two buttons left of the disk (an arrow down into a tray, an
-  arrow up out of it) save into one QUICK slot, replaced each time, and load it, in one tap; the
+- **Quick save and quick load**: two buttons on opposite sides of the screen (quick save on the
+  left, an arrow down into a tray; quick load on the right, an arrow up out of it, so one can't be
+  bumped for the other) save into one QUICK slot, replaced each time, and load it, in one tap. Move
+  them, or switch them off, in the layout editor; the
   save list has QUICK SAVE and QUICK LOAD too. With a keyboard: **F5** and **F9** (on Windows as on
   a phone). They work in solo play; in an online match, use SAVE NOW and LOAD.
 - **Keyboard and controller on a phone**, as on Windows: **F1**, or both sticks pressed in, opens
@@ -387,9 +393,9 @@ app id and wire number there, so they never mix with other okplay games.
 
 - **First start**: go to *Settings > Video Settings > Scale*. 4x leaves room for the controls, and
   FILL fills the screen.
-- **Move the controls**: ☰ (top right) opens the layout editor. Drag a control to move it, and
-  pinch it or drag its yellow dot to resize it. The 4-way / 8-way d-pad switch is there too. DONE
-  saves.
+- **Move the controls**: ☰ (top right) opens TOUCH CONTROLS. Drag a control to move it, and
+  pinch it or drag its yellow dot to resize it. Touch opacity, auto hide, the player chips, the
+  4-way / 8-way d-pad and the quick buttons are in the panel. ACCEPT keeps it, CANCEL doesn't.
 - **Gamepads**: connect them, then tap your player chip to open the players panel and give each
   pad a player.
 - **Hot seat**: tap the player chip and turn HOT SEAT on, then pass the phone around.

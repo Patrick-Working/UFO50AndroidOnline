@@ -348,7 +348,7 @@ public class PFO_Android extends ExtensionBase {
     }
 
     static final class Control {
-        static final int DPAD = 0, ROUND = 1, PILL = 2, GEAR = 3, PLAYER = 4;
+        static final int DPAD = 0, ROUND = 1, PILL = 2, GEAR = 3, PLAYER = 4, QUICK = 5;
         final String id, label;
         final int type;
         final int[] keys; // actions (TouchOverlay.ACT_*); DPAD: up, down, left, right
@@ -446,9 +446,11 @@ public class PFO_Android extends ExtensionBase {
         boolean vpadsRegistered = false;
         String banner = null;        // e.g. "P2'S TURN"
         long bannerUntil = 0;
-        static final int TOOLBAR_DONE = 0, TOOLBAR_RESET = 1, TOOLBAR_SMALLER = 2, TOOLBAR_BIGGER = 3,
-                TOOLBAR_FAINTER = 4, TOOLBAR_STRONGER = 5, TOOLBAR_HIDE = 6, TOOLBAR_AUTOHIDE = 7, TOOLBAR_DPAD = 8, TOOLBAR_CHIPS = 9;
-        static final String[] TOOLBAR = { "DONE", "RESET", "SIZE −", "SIZE +", "OPACITY −", "OPACITY +", "HIDE", "AUTO-HIDE", "D-PAD", "CHIPS" };
+        // the layout editor's panel (TOUCH CONTROLS): its parts, as last drawn
+        static final int ED_AUTOHIDE = 0, ED_CHIPS = 1, ED_DPAD = 2, ED_QUICK = 3, ED_RESET = 4, ED_CANCEL = 5, ED_ACCEPT = 6;
+        final RectF edPanel = new RectF(), edTrack = new RectF();
+        final RectF[] edButtons = new RectF[7];
+        boolean sliderDrag = false;
 
         final List<Control> controls = new ArrayList<>();
         final Control gear;
@@ -456,11 +458,11 @@ public class PFO_Android extends ExtensionBase {
         final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), line = new Paint(Paint.ANTI_ALIAS_FLAG), text = new Paint(Paint.ANTI_ALIAS_FLAG);
         final Set<Integer> keysDown = new HashSet<>();   // player * 16 + action
         final RectF tmp = new RectF();
-        final RectF[] toolbarRects = new RectF[TOOLBAR.length];
         final Handler handler = new Handler(Looper.getMainLooper());
 
         float opacity = 0.55f;
         boolean autoHide = false, gamepadConnected = false, editing = false;
+        boolean quickButtons = true;   // the quick save and quick load buttons shown (layout editor)
         boolean dpad4 = false;   // 4-way d-pad: only the strongest direction (else 8-way, diagonals too)
         Control selected;
         // edit gesture state
@@ -484,8 +486,12 @@ public class PFO_Android extends ExtensionBase {
             vInputs = IconStrip.load(c, "pfo_vinputs.png", 16);
             gameIcons = IconStrip.load(c, "pfo_gameicons.png", 24);   // game N's picture: frame (N-1)*2
             statesBtn = new Control("states", Control.GEAR, "", 0.895f, 0.065f, 0.075f);
-            quickSaveBtn = new Control("quicksave", Control.GEAR, "", 0.755f, 0.065f, 0.075f);
-            quickLoadBtn = new Control("quickload", Control.GEAR, "", 0.825f, 0.065f, 0.075f);
+            // quick save and quick load on opposite sides (a thumb resting on one can't bump the other),
+            // touch controls like the rest: moved and resized in the layout editor, both shown or not
+            quickSaveBtn = new Control("quicksave", Control.QUICK, "QUICK SAVE", 0.045f, 0.33f, 0.085f);
+            quickLoadBtn = new Control("quickload", Control.QUICK, "QUICK LOAD", 0.955f, 0.33f, 0.085f);
+            controls.add(quickSaveBtn);
+            controls.add(quickLoadBtn);
             load();
             text.setTextAlign(Paint.Align.CENTER);
             text.setFakeBoldText(true);
@@ -500,6 +506,7 @@ public class PFO_Android extends ExtensionBase {
             hotSeat = prefs.getBoolean("hotseat", hotSeat);
             dpad4 = prefs.getBoolean("dpad4", dpad4);
             chipsColumn = prefs.getBoolean("chips_column", false);
+            quickButtons = prefs.getBoolean("quick_buttons", true);
             playerName = prefs.getString("name", "");
             upnp = prefs.getBoolean("upnp", true);
             autoSavePause = prefs.getBoolean("autosave_pause", false);
@@ -515,7 +522,7 @@ public class PFO_Android extends ExtensionBase {
 
         void save() {
             SharedPreferences.Editor e = prefs.edit();
-            e.putFloat("opacity", opacity).putBoolean("autohide", autoHide).putBoolean("hotseat", hotSeat).putBoolean("dpad4", dpad4).putBoolean("chips_column", chipsColumn).putString("name", playerName).putBoolean("upnp", upnp);
+            e.putFloat("opacity", opacity).putBoolean("autohide", autoHide).putBoolean("hotseat", hotSeat).putBoolean("dpad4", dpad4).putBoolean("chips_column", chipsColumn).putBoolean("quick_buttons", quickButtons).putString("name", playerName).putBoolean("upnp", upnp);
             for (Control c : controls) {
                 e.putFloat(c.id + ".x", c.x).putFloat(c.id + ".y", c.y).putFloat(c.id + ".size", c.size).putBoolean(c.id + ".hidden", c.hidden);
             }
@@ -527,6 +534,40 @@ public class PFO_Android extends ExtensionBase {
             opacity = 0.55f;
             autoHide = false;
             dpad4 = false;
+            chipsColumn = false;
+            quickButtons = true;
+        }
+
+        // the layout as the editor found it, for CANCEL
+        float[] editWas;
+        boolean[] editWasHidden;
+        float editWasOpacity;
+        boolean editWasAutoHide, editWasDpad4, editWasChips, editWasQuick;
+
+        void startEditing() {
+            releaseAll();
+            editing = true;
+            selected = null;
+            editWas = new float[controls.size() * 3];
+            editWasHidden = new boolean[controls.size()];
+            for (int k = 0; k < controls.size(); k++) {
+                Control c = controls.get(k);
+                editWas[k * 3] = c.x; editWas[k * 3 + 1] = c.y; editWas[k * 3 + 2] = c.size; editWasHidden[k] = c.hidden;
+            }
+            editWasOpacity = opacity; editWasAutoHide = autoHide; editWasDpad4 = dpad4; editWasChips = chipsColumn; editWasQuick = quickButtons;
+        }
+
+        void cancelEditing() {
+            if (editWas != null && editWas.length == controls.size() * 3) {
+                for (int k = 0; k < controls.size(); k++) {
+                    Control c = controls.get(k);
+                    c.x = editWas[k * 3]; c.y = editWas[k * 3 + 1]; c.size = editWas[k * 3 + 2]; c.hidden = editWasHidden[k];
+                }
+            }
+            opacity = editWasOpacity; autoHide = editWasAutoHide; dpad4 = editWasDpad4; chipsColumn = editWasChips; quickButtons = editWasQuick;
+            editing = false; selected = null;
+            dragPointer = -1; pinchStartDist = 0; sliderDrag = false;
+            boxGesture = true;
         }
 
         // Hide the pad while a physical gamepad is connected (if enabled).
@@ -554,7 +595,7 @@ public class PFO_Android extends ExtensionBase {
 
         boolean hit(Control c, float px, float py, float slop) {
             float dx = Math.abs(px - cx(c)), dy = Math.abs(py - cy(c));
-            if (c.type == Control.ROUND || c.type == Control.GEAR) return Math.hypot(dx, dy) <= radius(c) * slop;
+            if (c.type == Control.ROUND || c.type == Control.GEAR || c.type == Control.QUICK) return Math.hypot(dx, dy) <= radius(c) * slop;
             return dx <= halfW(c) * slop && dy <= halfH(c) * slop;
         }
 
@@ -599,12 +640,12 @@ public class PFO_Android extends ExtensionBase {
                     performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
                     return true;
                 }
-                if (!panelOpen && !naming && !inviting && hit(quickSaveBtn, e.getX(i), e.getY(i), 1.15f)) {
+                if (quickButtons && !quickSaveBtn.hidden && !panelOpen && !naming && !inviting && hit(quickSaveBtn, e.getX(i), e.getY(i), 1.15f)) {
                     quickSave();
                     performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
                     return true;
                 }
-                if (!panelOpen && !naming && !inviting && hit(quickLoadBtn, e.getX(i), e.getY(i), 1.15f)) {
+                if (quickButtons && !quickLoadBtn.hidden && !panelOpen && !naming && !inviting && hit(quickLoadBtn, e.getX(i), e.getY(i), 1.15f)) {
                     quickLoad();
                     performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
                     return true;
@@ -615,9 +656,7 @@ public class PFO_Android extends ExtensionBase {
                     return true;
                 }
                 if (hit(gear, e.getX(i), e.getY(i), 1.3f)) {
-                    releaseAll();
-                    editing = true;
-                    selected = null;
+                    startEditing();
                     performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
                     invalidate();
                     return true;
@@ -1478,7 +1517,7 @@ public class PFO_Android extends ExtensionBase {
                     float px = e.getX(i), py = e.getY(i);
                     Control best = null;
                     for (Control c : controls) {
-                        if (c.hidden || c.type == Control.PLAYER) continue;
+                        if (c.hidden || c.type == Control.PLAYER || c.type == Control.QUICK) continue;
                         // generous slop so thumbs that slide slightly off a button keep it held
                         if (hit(c, px, py, c.type == Control.DPAD ? 1.35f : 1.15f)) { best = c; break; }
                     }
@@ -1742,9 +1781,15 @@ public class PFO_Android extends ExtensionBase {
             float px = e.getX(i), py = e.getY(i);
             switch (action) {
                 case MotionEvent.ACTION_DOWN: {
-                    int t = toolbarHit(px, py);
-                    if (t >= 0) { toolbar(t); dragPointer = -1; break; }
                     dragPointer = -1;
+                    if (edPanel.contains(px, py)) {
+                        RectF grab = new RectF(edTrack);
+                        grab.inset(-unit() * 0.03f, -unit() * 0.04f);
+                        if (grab.contains(px, py)) { sliderDrag = true; slideTo(px); break; }
+                        for (int b = 0; b < edButtons.length; b++)
+                            if (edButtons[b] != null && edButtons[b].contains(px, py)) { editorButton(b); break; }
+                        break;
+                    }
                     if (selected != null) {
                         float[] h = handlePos(selected);
                         if (Math.hypot(px - h[0], py - h[1]) < unit() * 0.06f) {
@@ -1767,6 +1812,7 @@ public class PFO_Android extends ExtensionBase {
                     }
                     break;
                 case MotionEvent.ACTION_MOVE:
+                    if (sliderDrag) { slideTo(e.getX(0)); break; }
                     if (selected == null) break;
                     if (e.getPointerCount() >= 2 && pinchStartDist > 0) {
                         selected.size = clamp(pinchStartSize * pinchDistance(e) / pinchStartDist, 0.05f, 0.8f);
@@ -1789,14 +1835,38 @@ public class PFO_Android extends ExtensionBase {
                     break;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
-                    dragPointer = -1; pinchStartDist = 0;
+                    dragPointer = -1; pinchStartDist = 0; sliderDrag = false;
                     break;
             }
+            if (editing) invalidate();
+        }
+
+        void slideTo(float px) {
+            if (edTrack.width() <= 0) return;
+            opacity = clamp(Math.round(clamp((px - edTrack.left) / edTrack.width(), 0f, 1f) * 18f) / 20f + 0.1f, 0.1f, 1f);   // 10% to 100%, in 5% steps
+            invalidate();
+        }
+
+        void editorButton(int b) {
+            switch (b) {
+                case ED_AUTOHIDE: autoHide = !autoHide; break;
+                case ED_CHIPS: chipsColumn = !chipsColumn; break;
+                case ED_DPAD: dpad4 = !dpad4; break;
+                case ED_QUICK: quickButtons = !quickButtons; break;
+                case ED_RESET: reset(); selected = null; break;
+                case ED_CANCEL: cancelEditing(); break;
+                case ED_ACCEPT: stopEditing(); break;
+            }
+            performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
             invalidate();
         }
 
         Control controlAt(float px, float py) {
-            for (int k = controls.size() - 1; k >= 0; k--) if (hit(controls.get(k), px, py, 1.1f)) return controls.get(k);
+            for (int k = controls.size() - 1; k >= 0; k--) {
+                Control c = controls.get(k);
+                if (c.type == Control.QUICK && !quickButtons) continue;
+                if (hit(c, px, py, 1.1f)) return c;
+            }
             return null;
         }
 
@@ -1804,33 +1874,12 @@ public class PFO_Android extends ExtensionBase {
 
         static float pinchDistance(MotionEvent e) { return (float) Math.hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1)); }
 
-        int toolbarHit(float px, float py) {
-            for (int t = 0; t < toolbarRects.length; t++) if (toolbarRects[t] != null && toolbarRects[t].contains(px, py)) return t;
-            return -1;
-        }
-
         // leave the layout editor and keep the changes (DONE, or a question that needs an answer)
         void stopEditing() {
             editing = false; selected = null;
-            dragPointer = -1; pinchStartDist = 0;
+            dragPointer = -1; pinchStartDist = 0; sliderDrag = false;
             boxGesture = true;   // a finger still down doesn't press the control under it
             save();
-        }
-
-        void toolbar(int t) {
-            switch (t) {
-                case TOOLBAR_DONE: stopEditing(); break;
-                case TOOLBAR_RESET: reset(); selected = null; break;
-                case TOOLBAR_SMALLER: if (selected != null) selected.size = clamp(selected.size / 1.1f, 0.05f, 0.8f); break;
-                case TOOLBAR_BIGGER: if (selected != null) selected.size = clamp(selected.size * 1.1f, 0.05f, 0.8f); break;
-                case TOOLBAR_FAINTER: opacity = clamp(opacity - 0.1f, 0.1f, 1f); break;
-                case TOOLBAR_STRONGER: opacity = clamp(opacity + 0.1f, 0.1f, 1f); break;
-                case TOOLBAR_HIDE: if (selected != null) selected.hidden = !selected.hidden; break;
-                case TOOLBAR_AUTOHIDE: autoHide = !autoHide; break;
-                case TOOLBAR_DPAD: dpad4 = !dpad4; break;
-                case TOOLBAR_CHIPS: chipsColumn = !chipsColumn; break;
-            }
-            performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
         }
 
         // ---- drawing ----
@@ -1846,6 +1895,7 @@ public class PFO_Android extends ExtensionBase {
             if (padVisible()) {
                 for (Control c : controls) {
                     if (c.hidden && !editing) continue;
+                    if (c.type == Control.QUICK) continue;   // (drawn below, with the top bar)
                     if (statesOpen && !editing && c.type == Control.PLAYER) continue;   // would peek out past the save list
                     drawControl(canvas, c, c.hidden);
                 }
@@ -1855,7 +1905,7 @@ public class PFO_Android extends ExtensionBase {
             boolean behindStates = statesOpen && !editing;
             if (!behindStates) drawGear(canvas);
             if (!editing && !behindStates) drawStatesButton(canvas);
-            if (!editing && !behindStates) { drawQuickButton(canvas, quickSaveBtn, true); drawQuickButton(canvas, quickLoadBtn, false); }
+            if (!behindStates && quickButtons) { drawQuickButton(canvas, quickSaveBtn, true); drawQuickButton(canvas, quickLoadBtn, false); }
             if (!editing && !behindStates) drawBadges(canvas, u);
             if (!editing && !behindStates) drawPill(canvas, u);
             if (!editing && panelOpen) drawPanel(canvas, u);
@@ -3177,6 +3227,7 @@ public class PFO_Android extends ExtensionBase {
             cv.drawRect(0, 0, getWidth(), getHeight(), fill);
             // outline every control, highlight the selected one with a resize handle
             for (Control c : controls) {
+                if (c.type == Control.QUICK && !quickButtons) continue;
                 float hw = halfW(c), hh = halfH(c);
                 line.setColor(c == selected ? 0xFFE8EA4A : 0xFFFFFFFF); line.setAlpha(c == selected ? 255 : 120);
                 tmp.set(cx(c) - hw, cy(c) - hh, cx(c) + hw, cy(c) + hh);
@@ -3187,42 +3238,74 @@ public class PFO_Android extends ExtensionBase {
                 fill.setColor(0xFFE8EA4A); fill.setAlpha(255);
                 cv.drawCircle(h[0], h[1], u * 0.025f, fill);
             }
-            // toolbar: sized to fit between the left edge and the menu button
-            float maxW = cx(gear) - radius(gear) - u * 0.04f;
-            float bh = u * 0.075f, gap = u * 0.01f;
-            float[] widths = new float[TOOLBAR.length];
-            float tw;
-            while (true) {
-                tw = 0;
-                for (int t = 0; t < TOOLBAR.length; t++) { widths[t] = font_w(label(t), bh * 0.42f) + bh * 0.6f; tw += widths[t] + gap; }
-                if (tw - gap <= maxW || bh < u * 0.04f) break;
-                bh *= 0.92f; gap *= 0.92f;
-            }
-            float left = Math.max(u * 0.02f, (maxW - tw + gap) / 2f), top = u * 0.03f;
-            text.setAlpha(255);
-            for (int t = 0; t < TOOLBAR.length; t++) {
-                RectF r = new RectF(left, top, left + widths[t], top + bh);
-                toolbarRects[t] = r;
-                boolean needsSel = t == TOOLBAR_SMALLER || t == TOOLBAR_BIGGER || t == TOOLBAR_HIDE;
-                fill.setColor(BTN_NEUTRAL); fill.setAlpha(needsSel && selected == null ? 120 : 235);
-                cv.drawRoundRect(r, bh * 0.2f, bh * 0.2f, fill);
-                txt(cv, label(t), r.centerX(), r.centerY(), bh * 0.42f, 0xFFFFFFFF, needsSel && selected == null ? 120 : 255);
-                left += widths[t] + gap;
-            }
-            String hint = selected == null ? "TAP A CONTROL TO SELECT IT. DRAG TO MOVE. PINCH OR DRAG THE YELLOW DOT TO RESIZE."
-                    : "SELECTED: " + (selected.label.isEmpty() ? "D-PAD" : selected.type == Control.PLAYER ? "PLAYER SWITCH" : selected.label) + (selected.hidden ? " (HIDDEN)" : "");
-            hint += "  -  OPACITY " + Math.round(opacity * 100) + "%";
-            float hh = u * 0.032f;
-            while (font_w(hint, hh) > getWidth() * 0.96f && hh > u * 0.012f) hh *= 0.9f;
-            txt(cv, hint, getWidth() / 2f, top + bh + u * 0.045f, hh, 0xFFFFFFFF, 220);
+            drawEditorPanel(cv, u);
         }
 
-        String label(int t) {
-            if (t == TOOLBAR_HIDE) return selected != null && selected.hidden ? "SHOW" : "HIDE";
-            if (t == TOOLBAR_AUTOHIDE) return "AUTO-HIDE " + (autoHide ? "ON" : "OFF");
-            if (t == TOOLBAR_DPAD) return "D-PAD " + (dpad4 ? "4-WAY" : "8-WAY");
-            if (t == TOOLBAR_CHIPS) return "CHIPS " + (chipsColumn ? "COLUMN" : "ROW");
-            return TOOLBAR[t];
+        // TOUCH CONTROLS: in the middle of the screen, the controls around it stay free to drag
+        void drawEditorPanel(Canvas cv, float u) {
+            float W = getWidth(), H = getHeight();
+            float pw = Math.min(W * 0.46f, u * 0.95f), ph = H * 0.80f;
+            float left = (W - pw) / 2f, top = H * 0.04f, gap = u * 0.022f;
+            edPanel.set(left, top, left + pw, top + ph);
+            solid(fill, 0xFF000000, 0.92f); cv.drawRoundRect(edPanel, u * 0.025f, u * 0.025f, fill);
+            Paint border = new Paint(line); border.setColor(0xFFFFFFFF); border.setAlpha(255); border.setStrokeWidth(Math.max(3f, u * 0.006f));
+            cv.drawRoundRect(edPanel, u * 0.025f, u * 0.025f, border);
+            float inL = left + gap * 1.2f, inR = left + pw - gap * 1.2f, inW = inR - inL;
+            // title, and how to move things
+            float y = top + ph * 0.085f;
+            float ts = u * 0.055f;
+            while (font_w("TOUCH CONTROLS", ts) > inW && ts > u * 0.03f) ts *= 0.92f;
+            txt(cv, "TOUCH CONTROLS", W / 2f, y, ts, 0xFFFFFFFF, 255);
+            String[] hint = selected == null ? new String[] { "DRAG A CONTROL TO MOVE IT.", "PINCH OR DRAG ITS YELLOW DOT TO RESIZE IT." }
+                    : new String[] { "SELECTED: " + (selected.label.isEmpty() ? "D-PAD" : selected.type == Control.PLAYER ? "PLAYER SWITCH" : selected.label), "DRAG IT, OR ITS YELLOW DOT TO RESIZE IT." };
+            float hs = u * 0.028f;
+            while ((font_w(hint[0], hs) > inW * 0.96f || font_w(hint[1], hs) > inW * 0.96f) && hs > u * 0.012f) hs *= 0.92f;
+            y += ph * 0.07f;
+            txt(cv, hint[0], W / 2f, y, hs, 0xFFC8C8C8, 255);
+            y += hs * 1.5f;
+            txt(cv, hint[1], W / 2f, y, hs, 0xFFC8C8C8, 255);
+            // TOUCH OPACITY: a slider
+            y += ph * 0.085f;
+            float ls = u * 0.034f;
+            String pct = Math.round(opacity * 100) + "%";
+            txt(cv, "TOUCH OPACITY", inL + font_w("TOUCH OPACITY", ls) / 2f, y, ls, 0xFFFFFFFF, 255);
+            txt(cv, pct, inR - font_w(pct, ls) / 2f, y, ls, 0xFFFFFFFF, 255);
+            y += ph * 0.085f;
+            float th = Math.max(4f, u * 0.012f);
+            edTrack.set(inL + u * 0.02f, y - th / 2f, inR - u * 0.02f, y + th / 2f);
+            float k = edTrack.left + edTrack.width() * (opacity - 0.1f) / 0.9f;
+            solid(fill, 0xFF3A3A55, 1f); cv.drawRoundRect(edTrack, th, th, fill);
+            solid(fill, 0xFFFFFFFF, 1f); cv.drawRoundRect(new RectF(edTrack.left, edTrack.top, k, edTrack.bottom), th, th, fill);
+            cv.drawCircle(k, y, u * 0.03f, fill);
+            // the switches, two by two (a toggle: neutral, outlined in yellow when on)
+            float bh = Math.min(u * 0.09f, ph * 0.12f), bw = (inW - gap) / 2f;
+            y += ph * 0.08f;
+            String[] names = { "AUTO HIDE: " + (autoHide ? "ON" : "OFF"), "PLAYER CHIPS: " + (chipsColumn ? "VERTICAL" : "HORIZONTAL"),
+                    "D-PAD: " + (dpad4 ? "4-WAY" : "8-WAY"), "QUICK SAVE / LOAD: " + (quickButtons ? "ON" : "OFF") };
+            boolean[] on = { autoHide, chipsColumn, dpad4, quickButtons };
+            for (int b = 0; b < 4; b++) {
+                float bx = inL + (b % 2) * (bw + gap), by = y + (b / 2) * (bh + gap);
+                edButtons[b] = new RectF(bx, by, bx + bw, by + bh);
+                editorButtonDraw(cv, edButtons[b], names[b], BTN_NEUTRAL, on[b] ? 0xFFE8EA4A : 0xFFFFFFFF, bh);
+            }
+            y += 2 * (bh + gap);
+            edButtons[ED_RESET] = new RectF(inL, y, inR, y + bh);
+            editorButtonDraw(cv, edButtons[ED_RESET], "RESET TO DEFAULTS", BTN_NEUTRAL, 0x99FFFFFF, bh);
+            // CANCEL and ACCEPT at the bottom
+            float fy = top + ph - gap * 1.2f - bh * 1.15f;
+            edButtons[ED_CANCEL] = new RectF(inL, fy, inL + bw, fy + bh * 1.15f);
+            edButtons[ED_ACCEPT] = new RectF(inL + bw + gap, fy, inR, fy + bh * 1.15f);
+            editorButtonDraw(cv, edButtons[ED_CANCEL], "CANCEL", 0xFFB3261E, 0xFFFFFFFF, bh * 1.15f);
+            editorButtonDraw(cv, edButtons[ED_ACCEPT], "ACCEPT", 0xFF1E8A4C, 0xFFFFFFFF, bh * 1.15f);
+        }
+
+        void editorButtonDraw(Canvas cv, RectF r, String label, int color, int outline, float h) {
+            solid(fill, color, 1f); cv.drawRoundRect(r, h * 0.2f, h * 0.2f, fill);
+            Paint o = new Paint(line); o.setColor(outline); o.setAlpha(outline >>> 24); o.setStrokeWidth(Math.max(3f, h * 0.05f));
+            cv.drawRoundRect(r, h * 0.2f, h * 0.2f, o);
+            float sz = h * 0.4f;
+            while (font_w(label, sz) > r.width() * 0.9f && sz > h * 0.2f) sz *= 0.9f;
+            txt(cv, label, r.centerX(), r.centerY(), sz, 0xFFFFFFFF, 255);
         }
     }
 }

@@ -621,7 +621,13 @@ namespace pfo_android
     {
         if (g_Restore.active) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: refused, a load is already under way", slot); return false; }
         if (g_Session.m_OnlineState != EOnlineState::Offline && !InSoloSession()) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: refused, not in solo play", slot); SetResult(-1); return false; }
-        if (!g_ForceReplay && SnapLoadBegin(slot, self)) return true;
+        // A snapshot is a running session's state: only inside the solo session it puts back. Outside
+        // one (after DISCONNECT in the library, at the title screen) PFO's side of the game is shut
+        // down while the snapshot's game state says it's online, and the first thing to look
+        // (scrSetOnlinePlayers -> pfo_set_players) asserted. There the save loads as it does after a
+        // restart: its recording is replayed, which starts the session properly.
+        if (!g_ForceReplay && InSoloSession() && SnapLoadBegin(slot, self)) return true;
+        if (!InSoloSession()) __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "load slot %d: not in solo play, so by replay", slot);
         g_ForceReplay = false;   // instant, if this run of the app has its snapshot
         FILE* f = fopen(StatePath(slot).c_str(), "rb");
         if (!f) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: no such save", slot); SetResult(-2); return false; }
