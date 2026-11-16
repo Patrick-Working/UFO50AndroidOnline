@@ -452,6 +452,16 @@ namespace pfo_android
         return true;
     }
 
+    int g_FnGlobalSet = -1;
+    void GlobalSetReal(const char* name, double value, CInstance* self)
+    {
+        if (g_FnGlobalSet < 0) Code_Function_Find("variable_global_set", &g_FnGlobalSet);
+        if (g_FnGlobalSet < 0) return;
+        RValue args[2] = {}; YYCreateString(&args[0], name); init_real(args[1], value);
+        RValue out = {};
+        Script_Perform(g_FnGlobalSet, self, self, 2, &out, args);
+    }
+
     std::string JsonStr(const char* s)
     {
         std::string r = "\"";
@@ -1296,11 +1306,13 @@ namespace pfo_android
         if (!SnapGameToBytes(id, self, game, why)) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "snapwire %d: export: %s", id, why.c_str()); return; }
         std::string out = SnapWireInfo(self);
         int64 t1 = fakesteam::NowMs();
+        GlobalSetReal("pfo_snap_wire_keep", SnapDebug() ? 1 : 0, self);   // (the import keeps the original for "wirecmp")
         if (!SnapGameFromBytes(game, self, why)) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "snapwire %d: import: %s", id, why.c_str()); return; }
         Bytes o; PackRunner(o, g_SnapRunner[id]);
         Unbytes in(o.b.data(), o.b.size());
         gmi::State st;
         if (!UnpackRunner(in, st)) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "snapwire %d: the runner's side didn't read back", id); return; }
+        if (SnapDebug())
         {
             // development: do the objects come back as the same objects? (indexes must name them uniquely)
             gmi::State chk = st;
@@ -1323,7 +1335,7 @@ namespace pfo_android
         g_SnapRunner[id] = std::move(st);
         __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "snapwire %d: %zu bytes (runner %zu) out in %lld ms, back in %lld ms; out: %s; back: %s", id, game.size(), o.b.size(),
             static_cast<long long>(t1 - t0), static_cast<long long>(fakesteam::NowMs() - t1), out.c_str(), SnapWireInfo(self).c_str());
-        std::string cmp = Snap("wirecmp", id, self);
+        std::string cmp = SnapDebug() ? Snap("wirecmp", id, self) : std::string();   // (development: value by value)
         for (size_t at = 0; at < cmp.size(); at += 900)   // (the log cuts long lines)
             __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "snapwire %d compared%s %s", id, at ? " (more)" : ":", cmp.substr(at, 900).c_str());
     }
@@ -1940,6 +1952,8 @@ namespace pfo_android
 
     bool HaveOffer(int tag) { auto it = g_Offers.find(tag); return it != g_Offers.end() && access(StatePath(it->second).c_str(), F_OK) == 0; }
 
+    void MpFetchStart(int index, int proposer);   // online saves after a fast rejoin (below)
+    struct MpFetch { int index = -1; int64 startMs = 0; int answer = -1; } g_MpFetch;   // answer: the vote's, held back (1: accept)
     bool HaveSnapshotFor(int index)
     {
         auto it = g_MpSlots.find(index);
@@ -2012,6 +2026,8 @@ namespace pfo_android
             g_Vote.active = true; g_Vote.other = cmd == c_CmdProposeOther; g_Vote.index = param; g_Vote.proposer = player;
             g_Vote.accepted = 1u << player; g_Vote.required = SeatedMask(); g_Vote.startFrame = g_Session.m_Frame; g_Vote.startMs = fakesteam::NowMs();
             g_VoteAnswered = player == (HaveSeat() ? g_Session.m_ClientData[g_Session.m_ClientIndex].m_PlayerData.m_PlayerIndex : -9);
+            if (!g_Vote.other && !HaveSnapshotFor(param) && g_Session.m_ReplayReader.m_Buffer == nullptr && !g_MatchNoSnap && NativeSnapshots() && gmi::Pointers())
+                MpFetchStart(param, player);   // (back by a fast rejoin: we never made that one)
         }
         else if (!g_Vote.active || param != g_Vote.index) return;
         else if (cmd == c_CmdAccept) g_Vote.accepted |= 1u << player;
@@ -2223,6 +2239,13 @@ namespace pfo_android
         if (!g_Vote.active || !HaveSeat()) return;
         g_VoteAnswered = true;
         bool can = g_Vote.other ? HaveOffer(g_Vote.index) && CanReplayOffer(g_Vote.index) : HaveSnapshotFor(g_Vote.index);
+        // the snapshot is on its way from another player: answer once it's here
+        if (accept && !can && !g_Vote.other && g_MpFetch.index == g_Vote.index)
+        {
+            g_MpFetch.answer = 1;
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "online load %d: accepted, the answer waits for the snapshot", g_Vote.index);
+            return;
+        }
         int cmd = accept ? (can ? c_CmdAccept : c_CmdCannot) : c_CmdDecline;
         g_PendingCmd = cmd | (g_Vote.index << 8);
     }
@@ -2528,7 +2551,14 @@ namespace pfo_android
 
     // RejoinState: like RejoinData (k, R, the checksum at R, the replay's last frame), then the
     // timeline's touches, whether we captured at R, the replay, and the state (empty: couldn't)
-    std::vector<uint8> RejoinStateBody(int c, uint32 r, CInstance* self)
+    int PeerKind(uint64 id)   // how we reach this player: 1 LAN, 2 straight over the internet, 3 relay (0: not connected)
+    {
+        for (auto& kv : fakesteam::g_Conns)
+            if (kv.second.remoteId == id && kv.second.peer) return fakesteam::KindOf(kv.second.peer->address);
+        return 0;
+    }
+
+    std::vector<uint8> RejoinStateBody(int c, uint32 r, uint64 to, CInstance* self)
     {
         auto& s = g_Session;
         auto& me = s.m_ClientData[s.m_ClientIndex];
@@ -2537,6 +2567,22 @@ namespace pfo_android
         std::string why;
         std::vector<uint8> state = PackRejoinState(r, self, captured, why);
         if (state.empty()) __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "rejoin: can't send the game (%s): sending the match to replay", why.c_str());
+        else
+        {
+            // Which gets them back sooner: the state (megabytes, put back in a second or so) or the
+            // replay (kilobytes, then played flat out)? Early in a match over a slow link, the replay.
+            // Counted on: 4 MB/s on the local network, 0.4 MB/s over the internet (a phone's upload),
+            // and a slow phone replaying some 300 frames a second.
+            int kind = PeerKind(to);
+            double rate = kind == 1 ? 4e6 : 4e5;
+            double stateMs = state.size() * 1000.0 / rate + 1500;
+            double replayMs = s.m_ReplayWriter.m_Offset * 1000.0 / rate + r * 1000.0 / 300;
+            if (replayMs < stateMs)
+            {
+                __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: the replay is quicker here (about %.0f ms against %.0f ms for the game as it is): sending that", replayMs, stateMs);
+                state.clear();
+            }
+        }
         Bytes o;
         o.u8(static_cast<uint8>(c)); o.u32(r); o.u32(sum); o.u32(s.m_ReplayLastFrameWritten);
         o.u32(static_cast<uint32>(g_TouchFrames.size())); for (uint32 t : g_TouchFrames) o.u32(t);
@@ -2648,7 +2694,7 @@ namespace pfo_android
         if (!in.ok || k != g_Rejoin.m.k) { RejoinFail("bad match data"); return; }
         p.startMs = g_Rejoin.startMs;
         std::string why;
-        if (state.empty()) why = "the other player couldn't send it";
+        if (state.empty()) why = "the other player sent the match to replay (quicker, or the game couldn't be sent)";
         else if (UnpackRejoinState(state, self, why))
         {
             if (g_Rejoin.conn != k_HSteamNetConnection_Invalid) g_SteamNetworkingSockets->CloseConnection(g_Rejoin.conn, 0, "putting the game back", false);
@@ -2801,6 +2847,111 @@ namespace pfo_android
         std::vector<uint32> t = p.touches;
         p = RejoinPkg();
         RejoinByReplay(r, sum, lw, std::move(replay), t, cap, self);
+    }
+
+    // ---- online saves after a fast rejoin ----
+    // A device back by a fast rejoin has no snapshots of the match's earlier online saves (a
+    // replayed rejoin made them on the way). When a load of one is put to the vote, it asks a player
+    // for theirs (SnapAsk: the proposer first, they made it at the same frame); that player exports
+    // it (SnapGive), and the vote is answered once it's here (accept, if that was the answer), or
+    // with "can't" after 20 s. The save files in it are as the sender had them: theirs on their disk
+    // go as the copies everyone else holds, ours (copies there) become ours on disk again.
+    constexpr int c_MpFetchSnapBase = 2000000;
+    constexpr int64 c_MpFetchMs = 20000;
+
+    void MpFetchStart(int index, int proposer)
+    {
+        auto& s = g_Session;
+        int c = proposer >= 0 && proposer < c_PlayerLimit ? s.m_PlayerIndexToClientIndexMap[proposer] : -1;
+        std::vector<int> order;
+        if (c >= 0 && c != s.m_ClientIndex) order.push_back(c);
+        for (int i = 0; i < s.m_ClientCount; i++) if (i != s.m_ClientIndex && i != c) order.push_back(i);
+        Bytes o; o.u32(static_cast<uint32>(index));
+        for (int i : order)
+        {
+            if (s.m_ClientData[i].m_ConnectSocket == k_HSteamNetConnection_Invalid) continue;
+            if (!fakesteam::SendRejoin(s.m_ClientData[i].m_SteamID, fakesteam::Msg::SnapAsk, o.b)) continue;
+            g_MpFetch = MpFetch();
+            g_MpFetch.index = index; g_MpFetch.startMs = fakesteam::NowMs();
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "online load %d: no snapshot here, asking client %d for theirs", index, i);
+            return;
+        }
+        __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "online load %d: no snapshot here and nobody to ask", index);
+    }
+
+    void MpFetchDone(int index, bool ok)
+    {
+        int answer = g_MpFetch.answer;
+        int64 ms = fakesteam::NowMs() - g_MpFetch.startMs;
+        g_MpFetch = MpFetch();
+        __android_log_print(ok ? ANDROID_LOG_INFO : ANDROID_LOG_WARN, "PFOSTATE", "online load %d: the snapshot %s (%lld ms)", index, ok ? "came" : "didn't come", static_cast<long long>(ms));
+        if (answer == 1 && g_Vote.active && !g_Vote.other && g_Vote.index == index)
+            g_PendingCmd = (ok ? c_CmdAccept : c_CmdCannot) | (index << 8);
+    }
+
+    // the sender: one of our online saves' snapshots, files as everyone else has them
+    std::vector<uint8> PackMpSnap(int index, CInstance* self)
+    {
+        Bytes o; o.u32(static_cast<uint32>(index));
+        auto sl = g_MpSlots.find(index);
+        auto it = sl == g_MpSlots.end() ? g_Snaps.end() : g_Snaps.find(sl->second);
+        if (it == g_Snaps.end() || !it->second.mp) return std::move(o.b);   // (just the index: don't have it)
+        std::vector<uint8> game; std::string why;
+        if (!SnapGameToBytes(it->first, self, game, why)) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "online save %d: can't send its snapshot (%s)", index, why.c_str()); return std::move(o.b); }
+        const NativeSnap& n = it->second;
+        o.u32(n.frame);
+        for (uint32 v : n.rng) o.u32(v);
+        o.u32(n.rndIndex); o.u32(n.rndSeed);
+        o.u32(static_cast<uint32>(n.files.size()));
+        for (auto& f : n.files)
+        {
+            o.i32(f.index); o.i32(f.owner); o.str(f.name);
+            if (f.ours) { o.i32(static_cast<int>(f.onDisk ? EFileStatus::VirtualExists : EFileStatus::VirtualDoesNotExist)); o.u8(f.onDisk ? 1 : 0); o.blob(f.disk); }
+            else { o.i32(static_cast<int>(f.status)); o.u8(f.hasData ? 1 : 0); o.blob(f.data); }
+        }
+        PackRunner(o, g_SnapRunner[it->first]);
+        o.blob(game);
+        return std::move(o.b);
+    }
+
+    void TakeMpSnap(const std::vector<uint8>& b, CInstance* self)
+    {
+        auto& s = g_Session;
+        Unbytes in(b.data(), b.size());
+        int index = static_cast<int>(in.u32());
+        if (!in.ok || index != g_MpFetch.index) return;
+        if (in.o == b.size()) { MpFetchDone(index, false); return; }   // they don't have it either
+        NativeSnap n;
+        n.frame = in.u32();
+        for (auto& v : n.rng) v = in.u32();
+        n.rndIndex = in.u32(); n.rndSeed = in.u32();
+        size_t files = in.count(14);
+        for (size_t k = 0; k < files && in.ok; k++)
+        {
+            SnapFile f;
+            f.index = in.i32(); f.owner = in.i32(); f.name = in.str(); f.status = static_cast<EFileStatus>(in.i32()); f.hasData = in.u8() != 0; f.data = in.blob();
+            if (f.index < 0 || f.index >= static_cast<int>(countof(s.m_FileData))) { in.ok = false; break; }
+            if (f.owner == s.m_ClientIndex)   // ours: a copy there, ours on disk here
+            {
+                f.ours = true; f.onDisk = f.status == EFileStatus::VirtualExists; f.disk = std::move(f.data);
+                f.status = EFileStatus::Physical; f.hasData = false; f.data.clear();
+            }
+            n.files.push_back(std::move(f));
+        }
+        gmi::State st;
+        if (!in.ok || !UnpackRunner(in, st)) { MpFetchDone(index, false); return; }
+        std::vector<uint8> game = in.blob();
+        if (!in.ok || game.empty()) { MpFetchDone(index, false); return; }
+        int id = c_MpFetchSnapBase + index;
+        SnapErase(id, self);
+        GlobalSetReal("pfo_snap_import_as", id, self);
+        std::string why;
+        if (!SnapGameFromBytes(game, self, why)) { __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "online load %d: the snapshot didn't read (%s)", index, why.c_str()); MpFetchDone(index, false); return; }
+        n.id = id; n.mp = true; n.ready = true; n.takenMs = fakesteam::NowMs();
+        g_Snaps[id] = std::move(n);
+        g_SnapRunner[id] = std::move(st);
+        g_MpSlots[index] = id;
+        MpFetchDone(index, true);
     }
 
     void StartRejoin(CInstance* self)
@@ -3024,6 +3175,9 @@ namespace pfo_android
     void RejoinServe(bool frozen, CInstance* self)
     {
         int stateFor = -1; uint64 stateTo = 0; uint32 stateR = 0;   // a fast rejoin to answer (after the inbox)
+        std::vector<std::pair<uint64, int>> snapAsks;                  // online saves' snapshots asked for (after the inbox)
+        std::vector<std::vector<uint8>> snapGives;                     // ...and come
+        if (g_MpFetch.index >= 0 && fakesteam::NowMs() - g_MpFetch.startMs > c_MpFetchMs) MpFetchDone(g_MpFetch.index, false);
         auto& s = g_Session;
         if (s.m_OnlineState != EOnlineState::Online || s.m_ClientCount < 2) return;
         if (frozen) ShareLostInputs();
@@ -3107,6 +3261,17 @@ namespace pfo_android
                 }
                 it = inbox.erase(it);
             }
+            else if (it->type == static_cast<uint8>(fakesteam::Msg::SnapAsk) || it->type == static_cast<uint8>(fakesteam::Msg::SnapGive))
+            {
+                // (made and read in the game's step, not in the input wait)
+                if (frozen || !self) { ++it; continue; }
+                if (c >= 0 && c != s.m_ClientIndex && it->body.size() >= 4)
+                {
+                    if (it->type == static_cast<uint8>(fakesteam::Msg::SnapGive)) snapGives.push_back(std::move(it->body));
+                    else { uint32 index; memcpy(&index, it->body.data(), 4); snapAsks.push_back({ it->from, static_cast<int>(index) }); }
+                }
+                it = inbox.erase(it);
+            }
             else if (it->type == static_cast<uint8>(fakesteam::Msg::LostInputs))
             {
                 if (c >= 0 && c != s.m_ClientIndex) TakeLostInputs(it->body);   // from a player of this match
@@ -3133,9 +3298,18 @@ namespace pfo_android
             }
             else ++it;
         }
+        for (auto& [to, index] : snapAsks)
+        {
+            int64 t0 = fakesteam::NowMs();
+            std::vector<uint8> b = PackMpSnap(index, self);
+            bool ok = fakesteam::SendRejoin(to, fakesteam::Msg::SnapGive, b);
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "online save %d: snapshot asked for: sent %zu bytes in %lld ms (%s)", index, b.size(),
+                static_cast<long long>(fakesteam::NowMs() - t0), ok ? "ok" : "FAILED");
+        }
+        for (auto& b : snapGives) TakeMpSnap(b, self);
         if (stateFor >= 0)
         {
-            std::vector<uint8> b = RejoinStateBody(stateFor, stateR, self);
+            std::vector<uint8> b = RejoinStateBody(stateFor, stateR, stateTo, self);
             bool ok = fakesteam::SendRejoin(stateTo, fakesteam::Msg::RejoinState, b);
             RejoinGrace(stateFor, stateR);
             __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: client %d asked for the match: sent %zu bytes up to frame %u, the game as it is and its replay (%s)", stateFor,

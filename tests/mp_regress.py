@@ -122,7 +122,7 @@ def s3():
     m.key(m.H, 'DPAD_DOWN'); time.sleep(1)
     m.cmd(m.H, f'load {hs[-1][1]}'); time.sleep(3); m.cmd(m.J, 'accept'); time.sleep(5)
     r, before = kill_and_rejoin()
-    verified = any('verified' in x for x in re.findall(r'load slot -1: reached.*', m.log(m.J)))
+    verified = any('verified' in x for x in re.findall(r'load slot -1: reached.*|rejoin: the game put back at frame.*', m.log(m.J)))
     ok, why = in_sync()
     bad = before or clean(m.H) or clean(m.J)
     say(3, any('back in the match' in x for x in r) and verified and ok and not bad, f'{r[-1:] }, replay verified {verified}; {why} {bad}')

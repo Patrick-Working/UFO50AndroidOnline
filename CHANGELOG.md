@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **Online saves made before a fast rejoin load again.** A device back by a fast rejoin had no
+  snapshots of the match's earlier online saves, so it couldn't take part in loading one. When a
+  load of such a save is put to the vote, it now asks a player for their snapshot of it (about half
+  a second on a local network) and answers the vote once it's there.
+- **A rejoin sends the replay when that's quicker**: early in a match over a slow connection, the
+  replay (kilobytes) beats the game as it is (megabytes).
+- **A dropped player waited for keeps their seat.** The game's pause menu, online, removes the seats
+  of players who aren't connected. A player PFO is still waiting for (their connection dropped, they
+  may reconnect or rejoin) now counts as connected until they've left or the match went on without
+  them.
+- **Tests:** `tests/win/pauseseat.py` (who controls which player through a pause save and rejoins
+  during a pause, both kinds of rejoin), `tests/win/trio.py` (three players: a Windows game and both
+  emulators), `tests/regress.py` (every test in a row, one table at the end). Checks of a save's
+  picture are skipped when the Windows game's window comes back blank (the display asleep).
+- **Hot seat for up to 8 players.** The touch pad now follows the turn to any of P1-P8 (it stopped
+  at P4: P5-P8 needed a gamepad). Four more touch pads are registered for P5-P8 the first time a
+  game needs them. Fixed: the seat row and the turn count came from the library's player count,
+  so a Party House party of 6 set up in the game's own settings showed two seats; it's the game's
+  own count now.
+- **Hot seat holds the turn while the game is paused** or shows a box. The game only reports turns
+  while it reads the player's controls, so pausing dropped out of hot seat (the pad went back to
+  P1, the seats vanished) and back in on resuming. It ends when the game is left, or after 20 s
+  without a turn.
 - **Fast rejoin.** A player whose app closed or crashed used to replay the whole match from its
   start to get back in (minutes, for a long match, with everyone else waiting). Now the player
   still in the match sends the game as it is where everyone is waiting: a snapshot of the game,

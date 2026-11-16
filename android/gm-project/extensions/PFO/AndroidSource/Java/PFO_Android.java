@@ -377,7 +377,8 @@ public class PFO_Android extends ExtensionBase {
         static final int[] GAMEPAD = { KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT,
             KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_X, KeyEvent.KEYCODE_BUTTON_START, 0 };
         // all overlay colours come from UFO 50's palette (read from the game's textures, build/ufo_palette.png)
-        static final int[] PLAYER_COLOR = { 0xFFE03C32, 0xFF006AB4, 0xFF63B31D, 0xFFE8EA4A };
+        // P1-P8 (hot seat games go up to 8; the players panel shows P1-P4)
+        static final int[] PLAYER_COLOR = { 0xFFE03C32, 0xFF006AB4, 0xFF63B31D, 0xFFE8EA4A, 0xFFFE7000, 0xFF9600DC, 0xFF27BADB, 0xFFFE48DE };
         static final int VPAD_BASE = 0x7F5F0000;  // device ids of the virtual gamepads (slots 0..3)
         static TouchOverlay sInstance;
 
@@ -1590,6 +1591,7 @@ public class PFO_Android extends ExtensionBase {
                     RunnerJNILib.KeyEvent(type, code, 0, InputDevice.SOURCE_KEYBOARD, 0);
                 } else {
                     registerVirtualPads();
+                    if (p >= 4) registerMorePads();
                     // touch pad N always plays player N; libPFO points that player at its slot.
                     // Release on the device the press went to.
                     Integer heldDev = type == 0 ? null : downDevice.remove(key);
@@ -1641,7 +1643,7 @@ public class PFO_Android extends ExtensionBase {
             if (changed) invalidate();
         }
 
-        final int[][] hat = new int[4][2];
+        final int[][] hat = new int[8][2];
         final java.util.HashMap<Integer, Integer> downDevice = new java.util.HashMap<>();
 
         // P3 and P4 have no keyboard keys in UFO 50, only gamepad slots 2 and 3. Register four
@@ -1656,6 +1658,20 @@ public class PFO_Android extends ExtensionBase {
             }
             try { RunnerJNILib.onGamepadChange(); } catch (Throwable t) { }
             Log.i("yoyo", "PFO: virtual gamepads registered");
+        }
+
+        // P5-P8 (hot seat games for up to 8): four more, the first time one of them is used. They
+        // come after any real pad; libPFO finds each by its name, whatever slot it got.
+        boolean morePadsRegistered = false;
+        void registerMorePads() {
+            if (morePadsRegistered) return;
+            registerVirtualPads();
+            morePadsRegistered = true;
+            int mask = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 6) | (1 << 9) | (1 << 10);
+            for (int i = 4; i < 8; i++)
+                RunnerJNILib.onGPDeviceAdded(VPAD_BASE + i, "PFO Touch Pad " + (i + 1), "pfo-touch-pad-" + (i + 1), 0, 0, 0, 1, mask);
+            try { RunnerJNILib.onGamepadChange(); } catch (Throwable t) { }
+            Log.i("yoyo", "PFO: virtual gamepads 5-8 registered");
         }
 
         Control control(String id) {
@@ -1733,12 +1749,16 @@ public class PFO_Android extends ExtensionBase {
             if (onlineSeat != -1 || !hotSeat) { following = false; followedTurn = -1; return; }
             if (turn >= 0) {
                 if (!following) { following = true; playerBeforeFollow = player; followedTurn = -1; invalidate(); }
+                // the touch pads the game will need, as soon as it says how many play (Party House's
+                // settings change it while hot seat already follows), not at P3's or P5's first turn
+                if (count >= 3) registerVirtualPads();
+                if (count >= 5) registerMorePads();
                 if (turn != followedTurn) {
                     followedTurn = turn;
                     hsFlashUntil = android.os.SystemClock.uptimeMillis() + 2000;
                     invalidate();
                     Pad own = padOn(turn);
-                    if (own == null && turn > 3) showBanner("P" + (turn + 1) + "'S TURN: USE A GAMEPAD", 2200);
+                    if (own == null && turn > 7) showBanner("P" + (turn + 1) + "'S TURN: USE A GAMEPAD", 2200);
                     else if (own == null && turn != player) setPlayer(turn, "");   // the seat's chip pulses
                 }
             } else if (following) {   // the game stopped reporting turns: back to the earlier pick
@@ -1770,8 +1790,9 @@ public class PFO_Android extends ExtensionBase {
             }
             if (p == player && bannerText == null) return;
             releaseAll();
-            player = Math.max(0, Math.min(3, p));
+            player = Math.max(0, Math.min(7, p));
             if (player >= 2) registerVirtualPads();   // early, so the slot map is ready before the first press
+            if (player >= 4) registerMorePads();
             pushBindings();
             Control chip = control("player");
             if (chip != null) chip.pressed = false;

@@ -265,13 +265,14 @@ namespace pfo_android
 {
     // Which virtual touch pad (1-4) GameMaker put in each gamepad slot; the overlay asks so player N
     // always drives slot N (GameMaker hands out slots in its own order). Refreshed on the game thread.
-    volatile int g_SlotPad[8] = { -1, -1, -1, -1, -1, -1, -1, -1 };
+    // (16: eight touch pads for a hot seat game of eight, after any real pads)
+    volatile int g_SlotPad[16] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 
     // Real (non-touch) pads, for the overlay's players panel: name and buttons held per slot.
     std::mutex g_PadMutex;
-    std::string g_SlotName[8];
-    bool g_SlotReal[8] = {};
-    uint32 g_SlotButtons[8] = {};
+    std::string g_SlotName[16];
+    bool g_SlotReal[16] = {};
+    uint32 g_SlotButtons[16] = {};
 
     // Who reads which slot, set by the overlay (nativeSetPlayerSlots): >= 0 a real pad's slot,
     // -3 = the touch pad for that player (virtual pad "PFO Touch Pad <p+1>"), -1 = no gamepad.
@@ -295,7 +296,7 @@ namespace pfo_android
         {
             lastMs = now;
             auto getString = g_Interface.YYGetString;
-            for (int slot = 0; slot < 8; slot++)
+            for (int slot = 0; slot < 16; slot++)
             {
                 RValue arg = {}; arg.kind = VALUE_REAL; arg.val = slot;
                 RValue c = {}; connected(c, nullptr, nullptr, 1, &arg);
@@ -315,7 +316,7 @@ namespace pfo_android
         if (check && now - lastButtonsMs >= 30)
         {
             lastButtonsMs = now;
-            for (int slot = 0; slot < 8; slot++)
+            for (int slot = 0; slot < 16; slot++)
             {
                 if (!g_SlotReal[slot]) continue;
                 uint32 mask = 0;
@@ -333,14 +334,14 @@ namespace pfo_android
 
     int TouchPadSlot(int player)
     {
-        for (int slot = 0; slot < 8; slot++) if (g_SlotPad[slot] == player + 1) return slot;
+        for (int slot = 0; slot < 16; slot++) if (g_SlotPad[slot] == player + 1) return slot;
         return -1;
     }
 }
 
 extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativePadForSlot(JNIEnv*, jclass, jint slot)
 {
-    return slot >= 0 && slot < 8 ? pfo_android::g_SlotPad[slot] : -1;
+    return slot >= 0 && slot < 16 ? pfo_android::g_SlotPad[slot] : -1;
 }
 
 // Private lobbies: our lobby's invite code ("" if public / not hosting), INVITE FRIENDS presses,
@@ -428,7 +429,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_unofficial_ufo50_PFO_1Android_nati
     std::string out;
     {
         std::lock_guard<std::mutex> lock(g_PadMutex);
-        for (int slot = 0; slot < 8; slot++)
+        for (int slot = 0; slot < 16; slot++)
         {
             if (!g_SlotReal[slot]) continue;
             char head[32];
@@ -565,6 +566,9 @@ namespace pfo_android
     volatile int g_TurnPlayer = -1;
     volatile int g_TurnCount = 0;   // players in the game (global.numPlayers), 0 = unknown
     volatile int64 g_TurnMs = 0;
+    volatile int g_TurnGame = -1;   // the game reporting (global.currGameID)
+    volatile int g_CurGame = -1;    // the game running now (HotSeatDev looks every half second)
+    bool GlobalGet(const char* name, RValue& out, CInstance* self);   // (savestate.inc)
 }
 
 static void pfo_android_turn(RValue& r, CInstance*, CInstance*, int argc, RValue* arg)
@@ -575,7 +579,48 @@ static void pfo_android_turn(RValue& r, CInstance*, CInstance*, int argc, RValue
     int p = k == VALUE_REAL ? static_cast<int>(arg[0].val) : k == VALUE_INT32 ? arg[0].v32 : k == VALUE_INT64 ? static_cast<int>(arg[0].v64) : -1;
     pfo_android::g_TurnPlayer = p;
     pfo_android::g_TurnCount = argc > 1 ? static_cast<int>(pfo_android::Real(&arg[1])) : 0;
+    pfo_android::g_TurnGame = argc > 2 ? static_cast<int>(pfo_android::Real(&arg[2])) : -1;
     pfo_android::g_TurnMs = fakesteam::NowMs();
+}
+
+// Development, once a game step:
+//  files/turntest holding "<players>": as if a turn-based game of that many players reported its
+//    turns, a new one every 2.5 s (the overlay's hot seat follows), until the file goes
+//  files/hitchlog: a game step that comes more than 50 ms after the one before is logged (logcat
+//    PFOHITCH), to find stutters
+namespace pfo_android
+{
+    void HotSeatDev(CInstance* self)
+    {
+        static int64 checkedMs = 0, startMs = 0, lastStepMs = 0, gameMs = 0;
+        static int players = 0;
+        static bool hitchLog = false;
+        int64 now = fakesteam::NowMs();
+        if (now - gameMs >= 500)   // which game is running (hot seat holds the turn while it's the same one)
+        {
+            gameMs = now;
+            RValue v;
+            if (self && GlobalGet("currGameID", v, self)) g_CurGame = static_cast<int>(Real(&v));
+        }
+        if (now - checkedMs >= 1000)
+        {
+            checkedMs = now;
+            int n = 0;
+            if (FILE* f = fopen("/sdcard/Android/data/" PFO_PACKAGE "/files/turntest", "r")) { if (fscanf(f, "%d", &n) != 1) n = 0; fclose(f); }
+            if (n != players) { players = n; startMs = now; __android_log_print(ANDROID_LOG_INFO, "PFOHITCH", "turn test: %d players", n); }
+            hitchLog = access("/sdcard/Android/data/" PFO_PACKAGE "/files/hitchlog", F_OK) == 0;
+        }
+        if (players > 0)
+        {
+            g_TurnPlayer = static_cast<int>(((now - startMs) / 2500) % players);
+            g_TurnCount = players;
+            g_TurnGame = g_CurGame;
+            g_TurnMs = now;
+        }
+        if (hitchLog && lastStepMs != 0 && now - lastStepMs > 50)
+            __android_log_print(ANDROID_LOG_INFO, "PFOHITCH", "step after %lld ms", static_cast<long long>(now - lastStepMs));
+        lastStepMs = now;
+    }
 }
 
 extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeHotSeatCount(JNIEnv*, jclass)
@@ -585,9 +630,14 @@ extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeH
 
 extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeHotSeatTurn(JNIEnv*, jclass)
 {
+    using namespace pfo_android;
     if (g_Session.m_OnlineState >= EOnlineState::Online) return -1;
-    if (fakesteam::NowMs() - pfo_android::g_TurnMs > 700) return -1;
-    return pfo_android::g_TurnPlayer;
+    // The game reports turns only while it reads the player's controls: not while it's paused or
+    // shows a box. The turn holds through those (dropping out and back in each time switched the
+    // pad back and forth); it ends when that game is left, or after 20 s without a report.
+    int64 quiet = fakesteam::NowMs() - g_TurnMs;
+    if (quiet > 700 && (quiet > 20000 || g_TurnGame < 0 || g_CurGame != g_TurnGame)) return -1;
+    return g_TurnPlayer;
 }
 
 // Speed probe (development): files/speedtest holding "<speed multiplier> <draw 0|1>" sets PFO's
@@ -638,7 +688,7 @@ namespace pfo_android
 #include "savestate.inc"
 
 #define PFO_BUILTIN(name) \
-    static void pfo_builtin_##name(RValue& r, CInstance* s, CInstance* o, int argc, RValue* arg) {         std::lock_guard<std::recursive_mutex> netLock(fakesteam::g_NetMutex);   /* the background pump waits while the game runs */         fakesteam::g_LastGameCallMs = fakesteam::NowMs();         pfo_android::EnsureExtensionInitialised(); pfo_android::InputProbe(); pfo_android::RefreshPadSlots();         const bool isUpdate = reinterpret_cast<void*>(&name) == reinterpret_cast<void*>(&pfo_update);   /* once per game step */         if (isUpdate) { pfo_android::g_LastAdvanceArg = argc > 0 ? YYGetBool(arg, 0) : true; pfo_android::SpeedProbe(s); pfo_android::StateBeforeUpdate(s); }         if (isUpdate && pfo_android::g_SnapSkipUpdate) { r.kind = VALUE_UNDEFINED; return; }   /* a snapshot load is changing room */         name(r, s, o, argc, arg);         if (isUpdate) pfo_android::StateAfterUpdate(s); }
+    static void pfo_builtin_##name(RValue& r, CInstance* s, CInstance* o, int argc, RValue* arg) {         std::lock_guard<std::recursive_mutex> netLock(fakesteam::g_NetMutex);   /* the background pump waits while the game runs */         fakesteam::g_LastGameCallMs = fakesteam::NowMs();         pfo_android::EnsureExtensionInitialised(); pfo_android::InputProbe(); pfo_android::RefreshPadSlots();         const bool isUpdate = reinterpret_cast<void*>(&name) == reinterpret_cast<void*>(&pfo_update);   /* once per game step */         if (isUpdate) { pfo_android::HotSeatDev(s); pfo_android::g_LastAdvanceArg = argc > 0 ? YYGetBool(arg, 0) : true; pfo_android::SpeedProbe(s); pfo_android::StateBeforeUpdate(s); }         if (isUpdate && pfo_android::g_SnapSkipUpdate) { r.kind = VALUE_UNDEFINED; return; }   /* a snapshot load is changing room */         name(r, s, o, argc, arg);         if (isUpdate) pfo_android::StateAfterUpdate(s); }
 #include "builtins.inc"
 #undef PFO_BUILTIN
 

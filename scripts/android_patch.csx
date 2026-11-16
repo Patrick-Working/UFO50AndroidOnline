@@ -73,7 +73,8 @@ Console.WriteLine("Steam lobby/user functions now resolve to libPFO.so built-ins
 
 // ---- hot seat ----
 // Turn-based games read one player's controls at a time. Report that player (and the game's
-// player count) to the touch overlay (pfo_android_turn, a libPFO.so built-in) right where the
+// own player count, numPlayers in each of these objects: Party House's settings change it, so the
+// library's global.numPlayers can say 2 for a party of 8) to the touch overlay (pfo_android_turn, a libPFO.so built-in) right where the
 // game reads them, so the pad can follow the turn in pass-and-play. Online, libPFO ignores it.
 {
     if (Data.Functions.ByName("pfo_android_turn") == null)
@@ -98,7 +99,7 @@ Console.WriteLine("Steam lobby/user functions now resolve to libPFO.so built-ins
         int at = text.IndexOf(read);
         if (at < 0 || text.Contains("pfo_android_turn(")) { Console.WriteLine($"hot seat: {name} not patched"); continue; }
         string arg = read.Substring("scrGetInput(".Length, read.Length - "scrGetInput(".Length - 2);
-        group.QueueReplace(name, text.Substring(0, at) + "pfo_android_turn(" + arg + ", global.numPlayers); " + text.Substring(at));
+        group.QueueReplace(name, text.Substring(0, at) + "pfo_android_turn(" + arg + ", numPlayers, global.currGameID); " + text.Substring(at));
         n++;
     }
     group.Import();

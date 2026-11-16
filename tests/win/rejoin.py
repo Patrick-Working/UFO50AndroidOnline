@@ -71,8 +71,27 @@ def test(a, b):
     wa, wb = duo.both_where(a, b)
     check(bool(wa and wb and wa[0] == wb[0] and (wa[0] > 0) == (WHERE == "game")), "both in the " + WHERE, "%s / %s" % (wa, wb))
     a.keys("right", 0.5, "left", 0.5, "down", 0.5, "up", 6)
+    # an online save before the joiner goes: loaded after its fast rejoin, the joiner has no
+    # snapshot of it and asks the host for theirs
+    ma, mb = a.mark(), b.mark()
+    a.cmd("save 1")
+    a.wait_log(r"online save \d+: slot", ma, 8); b.wait_log(r"online save \d+: slot", mb, 8)
+    early = duo.save_lines(a, ma)
+    a.keys("right", 0.5, "left", 0.5, 4)
     b = rejoin(b, a, check, "the joiner's game killed")
     together(a, b, check, "after the joiner's rejoin")
+    if early:
+        ma, mb = a.mark(), b.mark()
+        a.cmd("load %d" % early[0][1])
+        if b.wait_log(duo.PROPOSE, mb, 6):
+            time.sleep(1)
+            b.cmd("accept")
+        la, lb = duo.loaded(a, b, ma, mb, 60)
+        fetched = b.wait_log(r"online load \d+: the snapshot came \((\d+) ms\)", mb, 2)
+        if duo.SNAPS and not duo.REJOIN_REPLAY and not RELAY: check(bool(fetched), "the rejoined game got the host's snapshot of the earlier save", fetched.group(0) if fetched else "")
+        check(len(la) == 1 and len(lb) == 1 and la[0] == lb[0] and la[0][1], "the earlier online save loaded after the rejoin: back on the same frame on both", "%s / %s" % (la, lb))
+        time.sleep(3)
+        together(a, b, check, "after that load")
     a.keys("right", 0.5, "left", 0.5, 4)
     a = rejoin(a, b, check, "the host's game killed")
     together(a, b, check, "after the host's rejoin")

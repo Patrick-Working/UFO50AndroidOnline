@@ -76,7 +76,7 @@ class Droid:
 
     def launch(self):
         m.adb(self.port, "shell", "am", "force-stop", PKG)
-        m.adb(self.port, "shell", "rm -f %s/rejoin.txt %s/ss_cmd" % (m.D, m.D))
+        m.adb(self.port, "shell", "rm -f %s/rejoin.txt %s/ss_cmd %s/rejoinreplay" % (m.D, m.D, m.D))
         m.adb(self.port, "logcat", "-G", "16M"); m.adb(self.port, "logcat", "-c")
         m.adb(self.port, "shell", "monkey", "-p", PKG, "-c", "android.intent.category.LAUNCHER", "1")
 
@@ -107,7 +107,7 @@ def both_where(a, b):
 
 def start_windows():
     if w.game_pids(): w.stop()
-    for f in ("rejoin.txt", "ss_cmd", "okplay.txt"):   # (okplay.txt: the tests that play alone switch the room server off)
+    for f in ("rejoin.txt", "ss_cmd", "okplay.txt", "rejoinreplay", "forcerelay"):   # (okplay.txt: the tests that play alone switch the room server off; the others: test switches a run left)
         try: os.remove(os.path.join(duo.folder(1), f))
         except OSError: pass
     return w.start(1)    # the pid (its window comes a few seconds later)
@@ -179,7 +179,7 @@ def load_by(asker, other, slot, frame, check, what):
     check(bool(got), "%s: the load is put to the other side" % what)
     if isinstance(other, duo.Game):
         box = other.wait_log(r"vote box: shown \(slot (\d+), picture (yes|no)\)", mo, 5)
-        check(bool(box and box.group(2) == "yes"), "%s: the Windows game asks in a box with the save's picture" % what, box.group(0) if box else "no box")
+        duo.picture_check(check, bool(box and box.group(2) == "yes"), "%s: the Windows game asks in a box with the save's picture" % what, box.group(0) if box else "no box", other if other.n != "android" else asker)
         time.sleep(0.4); other.shot("cross_vote")
     time.sleep(1.0)
     if isinstance(other, duo.Game): other.keys("f2")

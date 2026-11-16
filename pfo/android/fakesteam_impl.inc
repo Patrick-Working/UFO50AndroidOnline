@@ -88,6 +88,8 @@ namespace fakesteam
         LoadOffer,        // a save from another match, sent to everyone before it's proposed (savestate.inc)
         LostInputs,       // a lost player's last inputs, shared among the players still in (savestate.inc)
         RejoinState,      // -> the rejoiner: the match as it is, and its replay (savestate.inc's fast rejoin)
+        SnapAsk,          // a device without an online save's snapshot (back by a fast rejoin) -> a player: send me yours
+        SnapGive,         // -> it: the snapshot (empty: don't have it)
     };
 
     int64 NowMs()
@@ -1133,6 +1135,8 @@ namespace fakesteam
         case Msg::LoadOffer:
         case Msg::LostInputs:
         case Msg::RejoinState:
+        case Msg::SnapAsk:
+        case Msg::SnapGive:
         {
             // only from a player we have a game connection with, and no more than the game
             // thread could be behind on

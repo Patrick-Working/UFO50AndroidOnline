@@ -1,5 +1,5 @@
 diff --git a/PFO/dllmain.cpp b/PFO/dllmain.cpp
-index 7abb85d..9a5bf37 100644
+index 7abb85d..5e87fb3 100644
 --- a/PFO/dllmain.cpp
 +++ b/PFO/dllmain.cpp
 @@ -5,7 +5,14 @@
@@ -508,7 +508,26 @@ index 7abb85d..9a5bf37 100644
  }
  
  YYEXPORT void pfo_is_online(RValue& result, CInstance* selfinst, CInstance* otherinst, int argc, RValue* arg)
-@@ -4021,3 +4314,15 @@ YYEXPORT void pfo_is_playing_replay(RValue& result, CInstance* selfinst, CInstan
+@@ -3963,6 +4256,18 @@ YYEXPORT void pfo_client_is_connected(RValue& result, CInstance* selfinst, CInst
+     int clientIndex = YYGetInt32(arg, 0);
+     assert(clientIndex >= 0 && clientIndex < countof(g_Session.m_ClientData));
+ 
++#if defined(PFO_OURS)
++    // A client whose connection dropped is waited for (it may reconnect, or its app rejoin): it
++    // counts as connected until it left on purpose or the match went on without it. The game's
++    // pause menu removes the seats of clients that aren't connected, by a command everyone runs:
++    // a player who came back found their seat gone, their controls doing nothing.
++    if (clientIndex != g_Session.m_ClientIndex && clientIndex < g_Session.m_ClientCount && g_Session.m_OnlineState == EOnlineState::Online
++        && g_Session.m_ClientData[clientIndex].m_ConnectSocket == k_HSteamNetConnection_Invalid && !g_LeftOnPurpose[clientIndex] && !g_Gone[clientIndex])
++    {
++        init_real(result, 1);
++        return;
++    }
++#endif
+     init_real(result, g_Session.m_ClientData[clientIndex].m_ConnectSocket != k_HSteamNetConnection_Invalid || clientIndex == g_Session.m_ClientIndex);
+ }
+ 
+@@ -4021,3 +4326,15 @@ YYEXPORT void pfo_is_playing_replay(RValue& result, CInstance* selfinst, CInstan
  
      init_bool(result, g_Session.m_ReplayReader.m_Buffer != nullptr);
  }

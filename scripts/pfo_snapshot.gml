@@ -1319,6 +1319,12 @@ function pfo_snap_import(_b)
     buffer_seek(_b, buffer_seek_start, 0);
     if (buffer_read(_b, buffer_string) != "PFOSNAP1") return "not a snapshot";
     var _id = buffer_read(_b, buffer_f64);
+    // (libPFO can have it kept under another id: another device's ids can be ours too)
+    if (variable_global_exists("pfo_snap_import_as") && is_numeric(global.pfo_snap_import_as) && global.pfo_snap_import_as >= 0)
+    {
+        _id = global.pfo_snap_import_as;
+        global.pfo_snap_import_as = -1;
+    }
     var _st = { odd: 0, refs: 0 };
     var _root = pfo_snap_r(_b, undefined, _st);
     if (!is_struct(_root) || !variable_struct_exists(_root, "ctx") || !variable_struct_exists(_root, "globals") || !variable_struct_exists(_root, "insts")) return "not a whole snapshot";
@@ -1346,7 +1352,8 @@ function pfo_snap_import(_b)
         variable_struct_set(_root.globals, _gn[i], _mine);
         _kept++;
     }
-    global.pfo_snap_wire_orig = variable_struct_get(global.pfo_snaps, string(_id));   // (for "wirecmp")
+    // (development, for "wirecmp": the snapshot this replaces, when libPFO asks for it)
+    global.pfo_snap_wire_orig = variable_global_exists("pfo_snap_wire_keep") && global.pfo_snap_wire_keep ? variable_struct_get(global.pfo_snaps, string(_id)) : undefined;
     variable_struct_set(global.pfo_snaps, string(_id), _root);
     global.pfo_snap_wire_info = string(buffer_tell(_b)) + " bytes read, " + string(_st.odd) + " odd values, "
         + string(_st.refs) + " refs kept as numbers, " + string(_kept) + " globals kept ours";

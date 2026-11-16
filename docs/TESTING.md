@@ -83,6 +83,8 @@ Files in `/sdcard/Android/data/com.unofficial.ufo50/files/` that change how the 
 | `inputlog` | development: while a session runs, every frame's input and random-generator position go to `inputlog_live.txt` (live play), `inputlog_replay.txt` (a replay) and `inputlog_check.txt` (the 120-frame check after a snapshot load), to compare them |
 | `inputprobe` | development: logs every change in which player keys and gamepad buttons the engine sees held (logcat `PFOPROBE`). The app looks for the file once, when it starts. |
 | `speedtest` (`<speed multiplier> <draw 0 or 1>`) | development: sets PFO's game speed multiplier and turns drawing on or off, and logs the game steps per second (logcat `PFOSPEED`). The file must be there when the app starts; its contents are read again every second. |
+| `turntest` (`<players>`) | development: as if a turn-based game of that many players reported its turns, a new one every 2.5 s (the hot seat follows); remove the file to stop |
+| `hitchlog` | development: a game step more than 50 ms after the one before is logged (logcat `PFOHITCH`) |
 | `testpad` | development: adds a stand-in gamepad called "Test Pad (debug)" (the emulator has no gamepads). While a file `testpress` is there too, its A button is held down. |
 
 Remove the development switches after use: they slow saves and loads down.
@@ -157,6 +159,9 @@ game, so keep them to yourself.
 | `rewind.py` | **Rewind and its estimates** (the twin of `tests/rewind_test.py`). | `rewind.py [box]` |
 | `disconnect.py` | **A load after DISCONNECT** (the twin of `tests/disconnect.py`). | `disconnect.py [box]` |
 
+`tests/regress.py [quick|full]` runs them all one after another (both sweeps on a 5-game sample, or
+all 50 with `full`) and ends with one table (`work/regress/summary.txt`).
+
 `duo.py` and `cross.py` check that a rejoin takes the match as it is (a fast rejoin: "rejoin: the
 game put back at frame R, N ms after asking"); with `REJOIN_REPLAY=1` (duo.py) the rejoining game
 asks for the replay instead and the check expects that. `SNAPWIRE=1` on `sweep.py` (both) sends
@@ -164,6 +169,8 @@ every save's snapshot through bytes and back (`files/snapwire`), so the loads' c
 and three pictures) test what a fast rejoin's snapshot goes through.
 | `uitest.py` | **The menu, step by step**, by keyboard and by the test controller: every page, the saves list with pictures, the confirm page, the loading screen, with a picture of each step. | `uitest.py <folder for the pictures> [box]` |
 | `duo.py` | **Two Windows games in one match.** A private lobby joined by its code; an online save (the same frame and checksum on both, a snapshot and a picture on both); a two-player game; a save there; a load that is declined (the box asking shows the save's picture); a load that is accepted (both put the snapshot back on the same frame and carry on); a library save loaded from inside the game; the joiner killed, started again and rejoining; no desync lines, no error box, and no save files piling up. With `PFO_NO_SNAPSHOTS=1` set it expects a match of files only (every accepted load restarts the match from the save by replay). | `duo.py all` (or `start`, `test`, `stop`) |
+| `pauseseat.py` | **Who controls which player** in a Windows + emulator match: before and after the emulator's pause auto save, after the emulator is killed and rejoins while the Windows game is paused, and after it is killed in its own pause menu and rejoins (the input traces on the Windows game). `REJOIN_REPLAY=1` makes the rejoins replay. | `pauseseat.py [port]` |
+| `trio.py` | **Three players**: the Windows game hosts, both emulators join; saves, an emulator and then the Windows game killed and rejoining. Not passing yet: the two emulators can't reach each other directly, and through the relay a player can reach the host but not another player (okplay's relay; see below). | `trio.py` |
 | `rejoin.py` | **Fast rejoins, each way.** Two Windows games in a match (in the library, or with `game` in a game for two); the joiner's game killed, started again and rejoining by the match's state, then the host's; after each, both in the same place and a save made on the same frame with the same checksum on both; no desync lines, no error box. With `REJOIN_REPLAY=1` the rejoins replay instead. | `rejoin.py [library\|game]` |
 | `cross.py` | **A Windows game and an Android emulator in one match.** Both in the online library; a save asked for by each side (the same frame and checksum on both: the two builds compute the same game); a two-player game; a load asked for by each side and accepted by the other; a minute of play with a save at the end; each side's app killed and rejoining. | `cross.py win [port]` (Windows hosts), `cross.py android [port]` (the emulator hosts) |
 | `vergate.py` | **Two versions of the Windows build can't share a lobby.** The other version hosts and this one joins, then the other way round. Each join must be refused with the log line that names the versions, both games must stay up, and the host must still have its lobby. | `vergate.py <game folder of the other version>` |
@@ -230,8 +237,23 @@ functions are methods bound to the global struct; a rejoined device lacked its o
 (an assertion when it sent its inputs); `duo.py` pressed into the code box when its window picture
 came back blank.
 
+`tests/regress.py quick` on the final sources (the PC locked, so window pictures couldn't be taken
+and those checks were noted, not counted): every test passed (the rejoin tests in all four modes,
+pauseseat, duo, cross-play with the Windows game hosting, quick save, DISCONNECT and rewind on both,
+all six mp_regress scenarios, and both 5-game sweeps through bytes and back) except cross-play with
+the emulator hosting, which needs a picture of the Windows game's window to join (no session).
+
+`rejoin.py library` also loads an online save made before the joiner was killed: the rejoined game
+fetched the host's snapshot of it in 438 ms and both came back on the same frame. `pauseseat.py`
+passed with both kinds of rejoin; the controls mix-up seen in a phone + PC match (after a pause
+save, the phone's app crashing) didn't happen in it.
+
 Still open:
 - Game 3's picture in the Android sweep with `snapwire` on (above).
+- Three players through the relay: a player reaches the host but not another player (the relay's
+  mailboxes are made for joiners reaching the host), so a match of three where two players can't
+  reach each other directly ends as it starts. Two BlueStacks instances never reach each other
+  directly, so `trio.py` can't pass on one PC until the relay handles that.
 - Three or more players: a rejoin replays (not tried with a third player; only two emulators).
 
 ## Results for v0.4.0
