@@ -809,6 +809,7 @@ public class PFO_Android extends ExtensionBase {
             nameField = null;
             View content = ((Activity) getContext()).findViewById(android.R.id.content);
             if (content instanceof ViewGroup && ((ViewGroup) content).getChildCount() > 0) ((ViewGroup) content).getChildAt(0).requestFocus();
+            noFocusHighlight(getRootView());
             if (entryMode == ENTRY_CODE) {
                 String c = nameDraft.trim();
                 if (save && c.length() > 0) {
@@ -1424,6 +1425,106 @@ public class PFO_Android extends ExtensionBase {
         // After the chips: what kind of session this is and what just happened. It says it in words
         // for a few seconds when something changes (or when tapped), then settles: a dot in solo play,
         // the dot and ONLINE online, nothing offline. Catching up is the one thing it keeps saying.
+        // ---- save and load feedback ----
+        // A tap on save or load has to feel like something happened (motion: just changed). The tap:
+        // a light tick, a ring on the button and SAVING / LOADING in the pill at once. Done: a firmer
+        // tick; a save flashes like a camera shutter and its picture flies into the button it's kept
+        // under (the disk, or quick save); a load's picture opens out of its button over the game and
+        // fades. An auto save on pause only rings the disk (it comes with every pause). Refused or
+        // failed: the error tick, with the banner saying why.
+        static final long FX_MS = 560, RING_MS = 420;
+        long fxStart = 0; int fxKind = 0; Bitmap fxPic; Control fxBtn;   // fxKind 1 save, 2 load
+        long ringStart = 0; Control ringBtn;
+
+        void tick(int kind) {   // 0 light, 1 done, 2 refused / failed
+            int c = kind == 0 ? HapticFeedbackConstants.KEYBOARD_TAP
+                    : android.os.Build.VERSION.SDK_INT >= 30 ? (kind == 1 ? HapticFeedbackConstants.CONFIRM : HapticFeedbackConstants.REJECT)
+                    : HapticFeedbackConstants.LONG_PRESS;
+            performHapticFeedback(c);
+        }
+
+        void ring(Control b) {
+            if (b == null) return;
+            ringBtn = b; ringStart = android.os.SystemClock.uptimeMillis();
+            postInvalidateOnAnimation();
+        }
+
+        void fxPressed(boolean save, Control b) {
+            tick(0);
+            ring(b);
+            notePill(save ? "SAVING" : "LOADING", 6000);
+        }
+
+        void fxDone(boolean save, Bitmap pic, Control b) {
+            tick(1);
+            fxKind = save ? 1 : 2; fxPic = pic; fxBtn = b;
+            fxStart = android.os.SystemClock.uptimeMillis();
+            if (save) { ringBtn = b; ringStart = fxStart + FX_MS * 3 / 4; }   // the ring as the picture lands
+            postInvalidateOnAnimation();
+        }
+
+        // where the game draws, in this view's pixels
+        final RectF fxGame = new RectF();
+        void gameRect(RectF out) {
+            int[] r = null;
+            try { r = nativeScreenRect(); } catch (Throwable t) { }
+            if (r == null || r[2] <= 0 || r[3] <= 0 || r[4] <= 0 || r[5] <= 0) { out.set(0, 0, getWidth(), getHeight()); return; }
+            float kx = getWidth() / (float) r[4], ky = getHeight() / (float) r[5];
+            out.set(r[0] * kx, r[1] * ky, (r[0] + r[2]) * kx, (r[1] + r[3]) * ky);
+        }
+
+        static float ease(float t) { return t < 0.5f ? 4 * t * t * t : 1 - (float) Math.pow(-2 * t + 2, 3) / 2; }
+
+        void drawFx(Canvas cv) {
+            long now = android.os.SystemClock.uptimeMillis();
+            boolean more = false;
+            if (fxKind != 0) {
+                float t = (now - fxStart) / (float) FX_MS;
+                if (t >= 1) { fxKind = 0; fxPic = null; }
+                else {
+                    more = true;
+                    gameRect(fxGame);
+                    float bx = fxBtn != null ? cx(fxBtn) : getWidth() / 2f, by = fxBtn != null ? cy(fxBtn) : 0, br = fxBtn != null ? radius(fxBtn) : 20;
+                    // the small end: a 16:9 card a little wider than the button, centred on it
+                    float sw = br * 2.2f, sh = sw * 9 / 16;
+                    if (fxKind == 1 && t < 0.3f) {   // the shutter
+                        solid(fill, 0xFFFFFFFF, 0.55f * (1 - t / 0.3f));
+                        cv.drawRect(fxGame, fill);
+                    }
+                    float k = fxKind == 1 ? ease(Math.max(0, (t - 0.12f) / 0.88f)) : 1 - ease(t);   // 0: the game's size, 1: the button's
+                    float cx0 = fxGame.centerX(), cy0 = fxGame.centerY();
+                    float w = fxGame.width() * (fxKind == 1 ? 0.86f : 1f) + (sw - fxGame.width() * (fxKind == 1 ? 0.86f : 1f)) * k;
+                    float h = fxGame.height() * (fxKind == 1 ? 0.86f : 1f) + (sh - fxGame.height() * (fxKind == 1 ? 0.86f : 1f)) * k;
+                    float x = cx0 + (bx - cx0) * k, y = cy0 + (by - cy0) * k;
+                    RectF card = new RectF(x - w / 2, y - h / 2, x + w / 2, y + h / 2);
+                    float alpha = fxKind == 1 ? (t < 0.12f ? t / 0.12f : 1f) : 1 - t * t;
+                    if (fxPic != null) {
+                        Paint bp = new Paint(Paint.FILTER_BITMAP_FLAG);
+                        bp.setAlpha((int) (255 * alpha));
+                        cv.drawBitmap(fxPic, null, card, bp);
+                    } else {
+                        solid(fill, 0xFF000000, 0.5f * alpha);
+                        cv.drawRect(card, fill);
+                    }
+                    line.setColor(0xFFFFFFFF); line.setAlpha((int) (255 * alpha));
+                    cv.drawRect(card, line);
+                }
+            }
+            if (ringBtn != null && ringStart > 0) {
+                float t = (now - ringStart) / (float) RING_MS;
+                if (t >= 1) { ringBtn = null; ringStart = 0; }
+                else {
+                    more = true;
+                    if (t >= 0) {
+                        float r = radius(ringBtn) * (1 + 0.8f * ease(t));
+                        line.setColor(0xFFFFFFFF); line.setAlpha((int) (220 * (1 - t)));
+                        cv.drawCircle(cx(ringBtn), cy(ringBtn), r, line);
+                    }
+                }
+            }
+            if (more) postInvalidateOnAnimation();
+        }
+
         void notePill(String t, long ms) {
             Log.i("PFOKEYS", "pill: " + t);
             pillText = t;
@@ -1769,7 +1870,28 @@ public class PFO_Android extends ExtensionBase {
             }
         }
 
-        @Override protected void onAttachedToWindow() { super.onAttachedToWindow(); removeCallbacks(seatPoll); post(seatPoll); }
+        @Override protected void onAttachedToWindow() {
+            super.onAttachedToWindow(); removeCallbacks(seatPoll); post(seatPoll);
+            // No focus highlight: after any key or controller input Android is in keyboard navigation
+            // and outlines the focused view, the game's, which is the whole screen (a green frame).
+            // Again a little later, for views the game adds after us.
+            noFocusHighlight(getRootView());
+            postDelayed(new Runnable() { @Override public void run() { noFocusHighlight(getRootView()); } }, 3000);
+            // and on any view the game makes later (changing the picture mode can), as it takes focus
+            // or the layout changes
+            getViewTreeObserver().addOnGlobalFocusChangeListener(new android.view.ViewTreeObserver.OnGlobalFocusChangeListener() {
+                @Override public void onGlobalFocusChanged(View oldFocus, View newFocus) { noFocusHighlight(newFocus); }
+            });
+            getViewTreeObserver().addOnGlobalLayoutListener(new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+                @Override public void onGlobalLayout() { noFocusHighlight(getRootView()); }
+            });
+        }
+
+        static void noFocusHighlight(View v) {
+            if (v == null || android.os.Build.VERSION.SDK_INT < 26) return;
+            v.setDefaultFocusHighlightEnabled(false);
+            if (v instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++) noFocusHighlight(((ViewGroup) v).getChildAt(i));
+        }
 
         void showBanner(String t, long ms) { showBanner(t, ms, 0); }
 
@@ -1960,6 +2082,7 @@ public class PFO_Android extends ExtensionBase {
             if (!editing && panelOpen) drawPanel(canvas, u);
             if (naming) drawNameBox(canvas, u);
             if (inviting) drawInviteBox(canvas, u);
+            if (!editing) drawFx(canvas);
             if (!editing && banner != null && android.os.SystemClock.uptimeMillis() < bannerUntil) drawBanner(canvas, u);
             if (editing) drawEditor(canvas);
             if (!editing && statesOpen) drawStates(canvas, u);
@@ -2474,6 +2597,7 @@ public class PFO_Android extends ExtensionBase {
 
         void startLoad(final int slot) {
             statesOpen = false;
+            fxPressed(false, slot == QUICK_SLOT ? quickLoadBtn : statesBtn);
             pendingSlot = slot; pendingWhat = 3; pendingAuto = false; pendingQuick = slot == QUICK_SLOT;
             nativeStateRequest(3, slot);
         }
@@ -2483,17 +2607,18 @@ public class PFO_Android extends ExtensionBase {
 
         void quickSave() {
             if (restoring()) return;
-            if (onlineGame()) { showBanner("QUICK SAVE IS FOR SOLO PLAY (THE DISK SAVES FOR EVERYONE)", 2200); return; }
-            if (!soloSession()) { showBanner("START SOLO PLAY TO SAVE (THE DISK BUTTON)", 2200); return; }
-            if (!canSaveState()) { showBanner("CAN'T SAVE RIGHT NOW", 1500); return; }
+            if (onlineGame()) { tick(2); showBanner("QUICK SAVE IS FOR SOLO PLAY (THE DISK SAVES FOR EVERYONE)", 2200); return; }
+            if (!soloSession()) { tick(2); showBanner("START SOLO PLAY TO SAVE (THE DISK BUTTON)", 2200); return; }
+            if (!canSaveState()) { tick(2); showBanner("CAN'T SAVE RIGHT NOW", 1500); return; }
             pendingAuto = false; pendingQuick = true;
+            fxPressed(true, quickSaveBtn);
             saveState(QUICK_SLOT);
         }
 
         void quickLoad() {
             if (restoring()) return;
-            if (onlineGame()) { showBanner("QUICK LOAD IS FOR SOLO PLAY (THE DISK HAS THE SAVES)", 2200); return; }
-            if (!haveQuickSave()) { showBanner("NO QUICK SAVE YET", 1800); return; }
+            if (onlineGame()) { tick(2); showBanner("QUICK LOAD IS FOR SOLO PLAY (THE DISK HAS THE SAVES)", 2200); return; }
+            if (!haveQuickSave()) { tick(2); showBanner("NO QUICK SAVE YET", 1800); return; }
             int est = loadEstimateMs(QUICK_SLOT);
             if (est >= CONFIRM_FROM_MS)
                 ask("LOAD THE QUICK SAVE?", aboutSeconds(est) + " TO LOAD (IT REPLAYS THE SESSION)", "LOAD", new Runnable() { @Override public void run() { startLoad(QUICK_SLOT); } });
@@ -2691,11 +2816,21 @@ public class PFO_Android extends ExtensionBase {
                 if (id == selectedSave) deleteArmedUntil = 0;
                 refreshSaves();
                 notePill(pendingAuto ? "GAME SAVED ON PAUSE" : pendingQuick ? "QUICK SAVED" : "SAVED", 2000);
+                if (pendingAuto) ring(statesBtn);                                   // (every pause: just the ring)
+                else if (asked || pendingQuick) fxDone(true, thumbOf(id), pendingQuick ? quickSaveBtn : statesBtn);
+                else ring(statesBtn);                                               // another player's online save
                 pendingAuto = false; pendingQuick = false;
             } else {
                 fresh.delete();
                 if (pendingAuto && pendingWhat == 2) { pendingAuto = false; return; }   // an auto save that couldn't happen: say nothing
-                if (result == 3) notePill(pendingWhat == 4 ? "REWOUND" : pendingQuick ? "QUICK LOADED" : "LOADED", 2000);
+                if (result < 0 && result != -4) {   // refused or failed (the banner says why)
+                    tick(2);
+                    if ("SAVING".equals(pillText) || "LOADING".equals(pillText)) pillUntil = 0;
+                }
+                if (result == 3) {
+                    notePill(pendingWhat == 4 ? "REWOUND" : pendingQuick ? "QUICK LOADED" : "LOADED", 2000);
+                    fxDone(false, pendingWhat == 3 && pendingSlot >= 0 ? thumbOf(pendingSlot) : null, pendingQuick ? quickLoadBtn : statesBtn);
+                }
                 else if (result == -6) showBanner("NOTHING TO REWIND THAT FAR YET", 1500);
                 else if (result == -3) showBanner("LOADED - BUT IT DIDN'T CHECK OUT", 3000, ATTN);
                 else if (result == -2) showBanner("THAT SAVE CAN'T BE READ", 1800);
@@ -2780,6 +2915,7 @@ public class PFO_Android extends ExtensionBase {
                 statesOpen = false;
                 pendingAuto = false; pendingQuick = false;
                 saveAsked = true;
+                fxPressed(true, statesBtn);
                 if (onlineNow) {
                     // online every device saves on the same frame (libPFO sends a command and picks the
                     // slot); the picture is taken when the save is done

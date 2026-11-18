@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Saving and loading feel like something happened.** The tap: a light buzz, a ring on the button
+  and SAVING / LOADING at once. A save then flashes like a camera shutter and its picture flies into
+  the button it's kept under (the disk, or quick save); a load's picture opens out of its button
+  over the game. A firmer buzz when it's done, an error buzz when it's refused. An auto save on
+  pause just rings the disk.
+- **Fixed: a green frame around the screen** after any key or controller input (Android's focus
+  highlight on the game's view, which fills the screen), or after changing the picture mode in the
+  game's Video Settings. Turned off, also on views the game makes later.
 - **Online saves made before a fast rejoin load again.** A device back by a fast rejoin had no
   snapshots of the match's earlier online saves, so it couldn't take part in loading one. When a
   load of such a save is put to the vote, it now asks a player for their snapshot of it (about half
