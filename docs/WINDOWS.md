@@ -61,7 +61,9 @@ with the one it compiled).
 ## Playing
 
 Keyboard as in the Steam game (Z, X, arrows, Esc pauses) and gamepads as GameMaker finds them.
-What the touch overlay is on a phone is here a menu made for a keyboard and a controller:
+What the touch overlay is on a phone is here a menu made for a keyboard and a controller, in UFO
+50's own menu font (the build exports it from your copy into the game folder as `pfo_font.png`;
+without it the menu uses Consolas):
 
 ![The menu](screenshots/windows_menu.png)
 
@@ -92,8 +94,8 @@ The **menu** has, depending on where you are:
   30 S / 60 S with the time each will take
 - when another player asks to load a save: ACCEPT / DECLINE; after a crash or a closed game:
   REJOIN YOUR MATCH / FORGET THAT MATCH
-- SAVE WHEN THE GAME IS PAUSED (one AUTO save, replaced each time)
-- ENTER A JOIN CODE, PLAYER NAME (empty: this computer's name)
+- AUTO SAVE WHEN I PAUSE (one AUTO save, replaced each time)
+- ENTER AN INVITE CODE, PLAYER NAME (empty: this computer's name)
 - UPNP: whether hosting asks your router to open the port. The forward is taken back when the game
   closes.
 
@@ -105,7 +107,8 @@ Outside the menu the game shows, as the overlay does on a phone:
   the seconds left to answer (F2 / F3, or the menu)
 - **a loading screen** over the game while a save loads or a rewind runs, with the save's picture
   and how far along it is
-- short messages (SAVED, LOADED, P2 SAID NO, YOU ARE P2, WAITING FOR P2 ...)
+- short messages (SAVED, LOADED, P2 SAID NO, YOU ARE P2, WAITING FOR P2, CATCHING UP ...);
+  problems in orange. A controller gives a short rumble when a save or load is done.
 
 The first time you host or join, Windows Firewall may ask whether to let `ufo50.exe` through.
 Without that, players outside your network reach you through the relay only.

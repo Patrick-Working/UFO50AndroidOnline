@@ -164,9 +164,10 @@ if (pfoFile == null) throw new ScriptException("the PFO extension has no PFO.dll
         // seconds; the game's 6 s join timeout is too short for that, so allow 20 s
         ("gml_GlobalScript_oLibrary_Online", "requestTimeoutTime = current_time + 6000;\n        steam_lobby_join_id(arg0.lobbyId);",
             "requestTimeoutTime = current_time + 20000;\n        steam_lobby_join_id(arg0.lobbyId);"),
-        // PFO's "Delay: Nf" text means nothing in solo play (a session of one, there for saves and rewinds)
+        // PFO's "Delay: Nf" / catch-up text over the game: the online menu says those instead (the
+        // delay on its session line, CATCHING UP as a message), as the phones' overlay does
         ("gml_Object_oController_Draw_64", "if (showDelay && (pfo_get_frame() > 4 || playingReplay))",
-            "if (showDelay && pfo_get_client_count() > 1 && (pfo_get_frame() > 4 || playingReplay))"),
+            "if (false && showDelay && (pfo_get_frame() > 4 || playingReplay))"),
     };
     var texts = new Dictionary<string, string>();   // several edits to one script build on each other
     foreach (var (name, find, replace) in edits)
@@ -184,7 +185,7 @@ if (pfoFile == null) throw new ScriptException("the PFO extension has no PFO.dll
     }
     foreach (var kv in texts) if (kv.Value != null) group.QueueReplace(kv.Key, kv.Value);
     group.Import();
-    Console.WriteLine($"lobby menu: applied {n} of {edits.Length} edits (HOST PUBLIC / HOST PRIVATE / JOIN BY CODE, SHARE CODE, 20 s join timeout, no delay text in solo play)");
+    Console.WriteLine($"lobby menu: applied {n} of {edits.Length} edits (HOST PUBLIC / HOST PRIVATE / JOIN BY CODE, SHARE CODE, 20 s join timeout, no delay text over the game)");
 }
 
 // ---- save states: where the picture is ----

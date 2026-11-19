@@ -346,6 +346,7 @@ function pfo_snap_capture()
     {
         var _name = _gn[i];
         if (string_copy(_name, 1, 8) == "pfo_snap" || string_char_at(_name, 1) == "@") continue;   // @@...: the runtime's own
+        if (pfo_snap_device_global(_name)) continue;
         var _v = variable_global_get(_name);
         if (pfo_snap_is_function(_v)) continue;
         variable_struct_set(_snap.globals, _name, pfo_snap_copy(_v, _ctx, 0));
@@ -807,7 +808,7 @@ function pfo_snap_restore(_snap)
         pfo_snap_fill_ds(_snap.ctx, _map0);
         for (var n = 0; n < array_length(_carried); n++) pfo_snap_set_vars(_carried[n][0], _carried[n][1], _map0, _bi0);
         var _gn0 = variable_struct_get_names(_g);
-        for (var i = 0; i < array_length(_gn0); i++) variable_global_set(_gn0[i], pfo_snap_remap(variable_struct_get(_g, _gn0[i]), _map0, 0));
+        for (var i = 0; i < array_length(_gn0); i++) if (!pfo_snap_device_global(_gn0[i])) variable_global_set(_gn0[i], pfo_snap_remap(variable_struct_get(_g, _gn0[i]), _map0, 0));
         global.pfo_snap_room_map = _map0;
         global.pfo_snap_room_for = _snap;   // only this load reuses them
         room_goto(_snap.rm);
@@ -861,7 +862,7 @@ function pfo_snap_restore(_snap)
     // globals
     var _gn = variable_struct_get_names(_snap.globals);
     for (var i = 0; i < array_length(_gn); i++)
-        variable_global_set(_gn[i], pfo_snap_remap(variable_struct_get(_snap.globals, _gn[i]), _map, 0));
+        if (!pfo_snap_device_global(_gn[i])) variable_global_set(_gn[i], pfo_snap_remap(variable_struct_get(_snap.globals, _gn[i]), _map, 0));
     pfo_snap_count("globals");
     // instance variables
     var _bi = pfo_snap_builtins();
@@ -1265,6 +1266,21 @@ function pfo_snap_here(_v)
     if (!_there) return _n;
     var _h = handle_parse(_v.pfo_wref);
     return typeof(_h) == "ref" && real(_h) == _n ? _h : _n;
+}
+
+// globals that are this device's settings and screen, not the game's state (scrInitDisplay,
+// scrSetDisplayDefaults): a load keeps ours, so it never changes the picture mode, and a
+// snapshot from another device (a fast rejoin) doesn't bring that device's (it drew the game at
+// the other device's window size)
+function pfo_snap_device_global(_name)
+{
+    switch (_name)
+    {
+        case "scale": case "scaleMax": case "scaleFill": case "DEFAULT_SCALE": case "fullscreen":
+        case "dispBordered": case "scanlines": case "windowHasFocus": case "canDoShaders":
+            return true;
+    }
+    return false;
 }
 
 // what a global of this kind of ref holds is this device's own (made at run time, numbered by it):

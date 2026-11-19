@@ -28,8 +28,13 @@ def save(im, name, folder=None):
     return folder / name
 
 
+def serial(port):
+    """a BlueStacks port (5555) is 127.0.0.1:5555; anything else is a device's own serial (a phone on USB)"""
+    return f"127.0.0.1:{port}" if str(port).isdigit() else str(port)
+
+
 def adb(port, *args, capture=False):
-    cmd = [ADB, "-s", f"127.0.0.1:{port}", *args]
+    cmd = [ADB, "-s", serial(port), *args]
     if capture:
         return subprocess.run(cmd, capture_output=True).stdout
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -40,6 +45,12 @@ def shot(port):
 
 
 def key(port, name):
+    # a real phone: keys only while the game has the screen (another app can come to the front by itself)
+    if not str(port).isdigit():
+        for _ in range(10):
+            if PKG in subprocess.run([ADB, "-s", serial(port), "shell", "dumpsys window | grep -m1 mCurrentFocus"], capture_output=True, text=True, errors="replace").stdout: break
+            time.sleep(1)
+        else: raise RuntimeError(f"{port}: the game is not in front (another app has the screen): no keys sent")
     adb(port, "shell", "input", "keyevent", f"KEYCODE_{name}")
     time.sleep(0.5)
 

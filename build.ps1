@@ -350,6 +350,10 @@ if ($Windows) {
         Remove-Item -Force (Join-Path $win "data.win") -ErrorAction SilentlyContinue
         Die "the Windows version couldn't be put together (the game data patch didn't go in whole)"
     }
+    # UFO 50's own menu font for the online menu (and the art the phone overlay uses), from your copy
+    $out = Utmt @("load", (Join-Path $win "data.win"), "-s", (Join-Path $Root "scripts\export_overlay_art.csx")) @{ OUT_DIR = $win }
+    if (Test-Path (Join-Path $win "pfo_font.png")) { Write-Host "   menu font: UFO 50's" }
+    else { Write-Host "   menu font: couldn't be exported, the menu uses Consolas" -ForegroundColor Yellow }
     Write-Host ""
     Write-Host "Done: $win" -ForegroundColor Green
     Write-Host "Start ufo50.exe in that folder (F1 opens the online menu). It contains your copy of the game: keep it to yourself."

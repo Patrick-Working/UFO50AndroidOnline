@@ -1199,7 +1199,7 @@ public class PFO_Android extends ExtensionBase {
             float nh = rowH * 0.34f;
             while (font_w(shown, nh) > third - gap * 2 && nh > rowH * 0.12f) nh *= 0.9f;
             txt(cv, shown, nm.centerX(), nm.centerY(), nh, 0xFFFFFFFF, locked ? 110 : 255);
-            txt(cv, "JOIN CODE", jc.centerX(), jc.centerY(), rowH * 0.34f, 0xFFFFFFFF, locked ? 110 : 255);
+            txt(cv, "INVITE CODE", jc.centerX(), jc.centerY(), rowH * 0.34f, 0xFFFFFFFF, locked ? 110 : 255);
             hitRects.add(nm); hitCodes.add(HIT_NAME);
             hitRects.add(jc); hitCodes.add(HIT_JOINCODE);
             toggle(cv, up, upnp ? "UPNP: ON" : "UPNP: OFF", upnp, rowH);
@@ -1429,10 +1429,11 @@ public class PFO_Android extends ExtensionBase {
         // A tap on save or load has to feel like something happened (motion: just changed). The tap:
         // a light tick, a ring on the button and SAVING / LOADING in the pill at once. Done: a firmer
         // tick; a save flashes like a camera shutter and its picture flies into the button it's kept
-        // under (the disk, or quick save); a load's picture opens out of its button over the game and
-        // fades. An auto save on pause only rings the disk (it comes with every pause). Refused or
+        // under (the disk, or quick save); a load's picture opens out of its button onto the game,
+        // solid, and fades into it once it lies exactly over it. An auto save on pause only rings the disk (it comes with every pause). Refused or
         // failed: the error tick, with the banner saying why.
         static final long FX_MS = 560, RING_MS = 420;
+        static final float LOAD_OPEN = 0.7f;
         long fxStart = 0; int fxKind = 0; Bitmap fxPic; Control fxBtn;   // fxKind 1 save, 2 load
         long ringStart = 0; Control ringBtn;
 
@@ -1457,6 +1458,9 @@ public class PFO_Android extends ExtensionBase {
 
         void fxDone(boolean save, Bitmap pic, Control b) {
             tick(1);
+            // testing: files/nofx leaves the picture out (the tests' screenshots see the game alone)
+            java.io.File dir = getContext().getExternalFilesDir(null);
+            if (dir != null && new java.io.File(dir, "nofx").exists()) return;
             fxKind = save ? 1 : 2; fxPic = pic; fxBtn = b;
             fxStart = android.os.SystemClock.uptimeMillis();
             if (save) { ringBtn = b; ringStart = fxStart + FX_MS * 3 / 4; }   // the ring as the picture lands
@@ -1491,13 +1495,16 @@ public class PFO_Android extends ExtensionBase {
                         solid(fill, 0xFFFFFFFF, 0.55f * (1 - t / 0.3f));
                         cv.drawRect(fxGame, fill);
                     }
-                    float k = fxKind == 1 ? ease(Math.max(0, (t - 0.12f) / 0.88f)) : 1 - ease(t);   // 0: the game's size, 1: the button's
+                    // A load's picture is solid while it opens out (a see-through one off the game's own
+                    // place doubles everything under it: it looked like broken graphics), lands exactly on
+                    // the game, and only then fades into it (LOAD_OPEN of the time to open, the rest to fade).
+                    float k = fxKind == 1 ? ease(Math.max(0, (t - 0.12f) / 0.88f)) : 1 - ease(Math.min(1f, t / LOAD_OPEN));   // 0: the game's size, 1: the button's
                     float cx0 = fxGame.centerX(), cy0 = fxGame.centerY();
                     float w = fxGame.width() * (fxKind == 1 ? 0.86f : 1f) + (sw - fxGame.width() * (fxKind == 1 ? 0.86f : 1f)) * k;
                     float h = fxGame.height() * (fxKind == 1 ? 0.86f : 1f) + (sh - fxGame.height() * (fxKind == 1 ? 0.86f : 1f)) * k;
                     float x = cx0 + (bx - cx0) * k, y = cy0 + (by - cy0) * k;
                     RectF card = new RectF(x - w / 2, y - h / 2, x + w / 2, y + h / 2);
-                    float alpha = fxKind == 1 ? (t < 0.12f ? t / 0.12f : 1f) : 1 - t * t;
+                    float alpha = fxKind == 1 ? (t < 0.12f ? t / 0.12f : 1f) : t < LOAD_OPEN ? 1f : 1 - (t - LOAD_OPEN) / (1 - LOAD_OPEN);
                     if (fxPic != null) {
                         Paint bp = new Paint(Paint.FILTER_BITMAP_FLAG);
                         bp.setAlpha((int) (255 * alpha));
@@ -2369,7 +2376,7 @@ public class PFO_Android extends ExtensionBase {
             rejoinNo.set(left + gap, by, left + gap + bw, by + btnH);
             rejoinYes.set(rejoinNo.right + gap, by, left + pw - gap, by + btnH);
             stateHits.clear(); stateCodes.clear();
-            button(cv, rejoinNo, "NO", BTN_NEUTRAL, true, btnH, ST_CLOSE);
+            button(cv, rejoinNo, "FORGET IT", BTN_NEUTRAL, true, btnH, ST_CLOSE);
             button(cv, rejoinYes, "REJOIN", BTN_PRIMARY, true, btnH, ST_CLOSE);
         }
 

@@ -85,6 +85,7 @@ Files in `/sdcard/Android/data/com.unofficial.ufo50/files/` that change how the 
 | `speedtest` (`<speed multiplier> <draw 0 or 1>`) | development: sets PFO's game speed multiplier and turns drawing on or off, and logs the game steps per second (logcat `PFOSPEED`). The file must be there when the app starts; its contents are read again every second. |
 | `turntest` (`<players>`) | development: as if a turn-based game of that many players reported its turns, a new one every 2.5 s (the hot seat follows); remove the file to stop |
 | `hitchlog` | development: a game step more than 50 ms after the one before is logged (logcat `PFOHITCH`) |
+| `nofx` | testing: a save or load gives its tick but no picture flying over the game, so screenshots show the game alone. `mp_test.py` and `cross.py` set it when they start the app. |
 | `testpad` | development: adds a stand-in gamepad called "Test Pad (debug)" (the emulator has no gamepads). While a file `testpress` is there too, its A button is held down. |
 
 Remove the development switches after use: they slow saves and loads down.
@@ -181,6 +182,15 @@ and three pictures) test what a fast rejoin's snapshot goes through.
 needs the Android build installed, the scale at 4x and a profile in file 1, as above. The tests end
 with `PASSED` or `FAILED` (the sweep with a count) and exit code 0 or 1.
 
+A real phone on USB works in place of the emulator: give its adb serial instead of the port
+(`cross.py win <serial>`; `adb devices` lists it). The reference pictures are matched with the game
+at scale 4 in the middle of the screen, or drawn at the screen's full height (a 2260x1080 phone at
+scale 5) shrunk to that size, so the phone's own scale can stay. A phone has other apps that can
+come to the front on their own (a sign-in screen after it has been offline, say): on a phone every
+key press first checks that the game has the screen, and the test stops rather than press keys into
+another app. A phone that has just come back online is busy for a while with updates, backups and
+downloads; let it settle (or close those apps) before a timed test.
+
 A test game that stops answering without a crash line in its log is most often showing GameMaker's
 "Code Error" box: a failed assertion in `PFO.dll` ends up there, and the game waits for the box to
 be closed. `wingame.state_of(pid)` prints the box's text, and `duo.py` checks for it at the end.
@@ -228,6 +238,7 @@ Still open:
 | `tests/win/rejoin.py game` | **pass** in a game for two: 2.0 s and 2.1 s (3.1 MB, 2,792 instances), saves matching after each |
 | `RELAY=1 tests/win/rejoin.py game` | **pass**: through the relay the other game sends the replay instead (about 900 bytes) and both rejoins replay; saves matching after each. (Before that rule the 3 MB state didn't arrive in the rejoiner's 40 seconds.) |
 | `tests/win/cross.py win` | the rejoins **pass** both ways by state: the emulator back from the Windows game in 2.6 s, the Windows game back from the emulator in 2.5 s, a save after both with the same frame and checksum. One check failed: the vote box's picture of the save (the PC's display was asleep, so window pictures came out blank; `duo.py` failed its picture checks the same way that night) |
+| `tests/win/cross.py win <phone>` (a OnePlus 6T, arm64, Android 11, on Wi-Fi; the room on oldkid.net) | **pass**, every check: the phone found the Windows game's public room through the real room server and joined it over the home network (direct, not the relay); saves with the same frame and checksum on both, loads asked for by each side put back on the same frame on both, verified; the phone's app killed and back by state in 2.9 s, the Windows game killed and back from the phone's state in 3.9 s; no desync, crash or failed assertion. `cross.py android <phone>` (the phone hosting, the Windows game joining; the PC must be unlocked, as the Windows game picks the room by its window's picture) **passes** too, 25 checks: the phone back by state in 2.6 s, the Windows game in 3.3 s. Seen on the way: on the phone a load's picture, opening out see-through over Ninpek, doubled everything under it and looked like broken graphics (the game itself was right, checksums equal); it now stays solid until it lands. Run again on the builds with the Windows menu's game font, the device-only display settings and the rest of the style guide's phase 1: **pass**, 25 checks (rejoins 2.7 s and 6.1 s). |
 | `SNAPWIRE=1 tests/win/sweep.py all` | **50 of 50**: every save through bytes and back, its load verified (120 frames, 3 pictures) and the replay through it; every round trip "0 values not sent, 0 sent unbound" (snapshots up to 6.3 MB, about 0.3 s out and 0.2 s back) |
 | `SNAPWIRE=1 sweep4.py` (Android) | games 1 and 8 (40 and 48 in the code) pass. Game 3 (34) failed its picture at frame 61 or 101 in three runs (checksums all matched, the replay fallback verified); run by hand through bytes it verified three times, with the comparison showing the snapshot and its copy identical. The sweep's menu keys were unreliable in this mode (each capture holds the game while its pause menu is up), so it wasn't settled. |
 
@@ -305,9 +316,11 @@ of play.
   (`input keyevent`, `input gamepad keyevent`): the D-pad given as keys, not as a hat axis, and
   both sticks as two presses in a row rather than held together.
 
-- **A real phone, and arm64.** The kit builds `libPFO.so` for arm64-v8a and x86_64, but all testing
-  above ran on x86_64 BlueStacks. Save states read the GameMaker runner's internal structures, and
-  those were worked out and checked on x86_64 only.
+- **Real phones beyond one.** One arm64 phone was tested (a OnePlus 6T, Android 11): snapshot saves
+  and loads (a save 0.3 s, a load 1.8 s, verified), and a cross-play match with the Windows build
+  over Wi-Fi through the real room server, rejoins by state included (above). The sweeps of all 50
+  games ran on x86_64 BlueStacks only, and the internet relay was not used with the phone (it
+  reached the PC directly on the home network).
 - **Three or more players online**: with two BlueStacks instances only, rejoining and the shared
   inputs of a dropped player were tested with two players. That includes a player watching a game
   they have no player in: the waiting for them when they drop, and the match going on without

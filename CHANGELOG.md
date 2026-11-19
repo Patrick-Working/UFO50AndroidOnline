@@ -2,10 +2,24 @@
 
 ## Unreleased
 
+- **Windows: the online menu in UFO 50's own font.** The build exports the game's menu font from
+  your copy into the game folder (as the phone build does for its overlay; nothing is shipped) and
+  the menu draws it at whole-pixel sizes. Without the file it falls back to Consolas.
+- **One look and one wording on both versions** (the style guide): the attention colour is the
+  phones' orange on Windows too (its amber read as P4's yellow); PFO's "Delay: Nf" text over the
+  game is gone on Windows as on the phones (the delay is on the menu's session line, catching up
+  is a CATCHING UP message); AUTO SAVE WHEN I PAUSE, ENTER AN INVITE CODE and FORGET IT on both.
+- **Windows: a short controller rumble when a save or load is done**, as the phones' haptic tick
+  (not on an auto save, as on the phones).
+- **Fixed: a fast rejoin brought the other device's picture mode along.** A rejoined phone drew the
+  game at the Windows window's size. Display settings (scale, fullscreen, borders, scanlines) are
+  this device's own: snapshots leave them out, and a load never changes your picture mode either.
+
 - **Saving and loading feel like something happened.** The tap: a light buzz, a ring on the button
   and SAVING / LOADING at once. A save then flashes like a camera shutter and its picture flies into
-  the button it's kept under (the disk, or quick save); a load's picture opens out of its button
-  over the game. A firmer buzz when it's done, an error buzz when it's refused. An auto save on
+  the button it's kept under (the disk, or quick save); a load's picture opens out of its button,
+  solid, lands on the game and fades into it (a see-through picture on the way doubled everything
+  under it, which looked like broken graphics). A firmer buzz when it's done, an error buzz when it's refused. An auto save on
   pause just rings the disk.
 - **Fixed: a green frame around the screen** after any key or controller input (Android's focus
   highlight on the game's view, which fills the screen), or after changing the picture mode in the
@@ -20,6 +34,11 @@
   of players who aren't connected. A player PFO is still waiting for (their connection dropped, they
   may reconnect or rejoin) now counts as connected until they've left or the match went on without
   them.
+- **Tests on a real phone over Wi-Fi.** The online tests take a phone's adb serial in place of an
+  emulator port (`cross.py win <serial>`, `SWEEP_PORT=<serial> sweep4.py`), match its screen at the
+  game's full-height scale, and press keys only while the game has the screen. `cross.py` passed
+  both ways between a OnePlus 6T and the Windows build through the real room server. A file `nofx`
+  in the app's files folder turns the save and load pictures off; the tests set it.
 - **Tests:** `tests/win/pauseseat.py` (who controls which player through a pause save and rejoins
   during a pause, both kinds of rejoin), `tests/win/trio.py` (three players: a Windows game and both
   emulators), `tests/regress.py` (every test in a row, one table at the end). Checks of a save's

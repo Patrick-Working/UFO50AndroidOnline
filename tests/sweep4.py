@@ -8,7 +8,7 @@
 # a run (the runner's "ERROR in action", FATAL, SIGSEGV, a failed assertion) is a result, GAME ERROR,
 # not something to retry. The last line counts the games that are not good; the exit code is 1 when
 # there is one, else 0.
-# Usage: sweep4.py <games, e.g. 1,2,3> <out.txt> [library|other|same]   (SWEEP_PORT=5565: the other instance)
+# Usage: sweep4.py <games, e.g. 1,2,3> <out.txt> [library|other|same]   (SWEEP_PORT=5565: the other instance; SWEEP_PORT=<serial>: a phone on USB)
 import os, sys, time, subprocess, re, random; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import nav
 P = os.environ.get('SWEEP_PORT', '5555'); D = '/sdcard/Android/data/com.unofficial.ufo50/files'; ENV = {**os.environ, 'MSYS_NO_PATHCONV': '1'}
 games = [int(x) for x in sys.argv[1].split(',') if x]; out = open(sys.argv[2], 'a', buffering=1)
@@ -16,14 +16,14 @@ MODE = sys.argv[3] if len(sys.argv) > 3 else 'library'
 # game number in the library -> the game's internal id (from earlier sweeps)
 ID = {1:40,2:20,3:34,4:49,5:27,6:29,7:15,8:48,9:2,10:5,11:26,12:50,13:11,14:22,15:18,16:4,17:3,18:6,19:28,20:16,21:21,22:10,23:32,24:46,25:36,26:43,27:19,28:13,29:7,30:44,31:23,32:1,33:9,34:30,35:38,36:42,37:35,38:24,39:17,40:12,41:33,42:39,43:31,44:37,45:41,46:25,47:14,48:47,49:8,50:45}
 rnd = random.Random(50)
-def cmd(c): subprocess.run([nav.ADB, '-s', '127.0.0.1:' + P, 'shell', f'echo {c} > {D}/ss_cmd'], env=ENV)
-def log(): return subprocess.run([nav.ADB, '-s', '127.0.0.1:' + P, 'logcat', '-d', '-s', 'PFOSTATE:*'], capture_output=True, text=True, errors='replace').stdout
+def cmd(c): subprocess.run([nav.ADB, '-s', nav.serial(P), 'shell', f'echo {c} > {D}/ss_cmd'], env=ENV)
+def log(): return subprocess.run([nav.ADB, '-s', nav.serial(P), 'logcat', '-d', '-s', 'PFOSTATE:*'], capture_output=True, text=True, errors='replace').stdout
 def say(s): print(s, flush=True); out.write(s + '\n')
 # game-code errors and crashes, from the whole log (all tags), noted before every clear
 PROBLEM = r'FATAL|SIGSEGV|Assertion failed|ERROR in action'
 ERRS = []
 def note_errors():
-    full = subprocess.run([nav.ADB, '-s', '127.0.0.1:' + P, 'logcat', '-d'], capture_output=True, text=True, errors='replace').stdout
+    full = subprocess.run([nav.ADB, '-s', nav.serial(P), 'logcat', '-d'], capture_output=True, text=True, errors='replace').stdout
     for x in full.splitlines():
         if re.search(PROBLEM, x) and x.strip() not in ERRS: ERRS.append(x.strip())
 def clear():
@@ -60,9 +60,9 @@ def diag(n, what):
     # everything about a run that gave no result: the app's logs, the screen, the command file
     stamp = time.strftime('%H%M%S')
     base = os.path.join(os.path.dirname(os.path.abspath(sys.argv[2])), f'noresult_{n}_{what}_{stamp}')
-    full = subprocess.run([nav.ADB, '-s', '127.0.0.1:' + P, 'logcat', '-d'], capture_output=True, text=True, errors='replace').stdout
+    full = subprocess.run([nav.ADB, '-s', nav.serial(P), 'logcat', '-d'], capture_output=True, text=True, errors='replace').stdout
     open(base + '_logcat.txt', 'w', encoding='utf-8').write(full)
-    left = subprocess.run([nav.ADB, '-s', '127.0.0.1:' + P, 'shell', f'cat {D}/ss_cmd 2>/dev/null; ls {D}/savestates | tail -5'], env=ENV, capture_output=True, text=True, errors='replace').stdout
+    left = subprocess.run([nav.ADB, '-s', nav.serial(P), 'shell', f'cat {D}/ss_cmd 2>/dev/null; ls {D}/savestates | tail -5'], env=ENV, capture_output=True, text=True, errors='replace').stdout
     open(base + '_files.txt', 'w', encoding='utf-8').write(left)
     try: nav.shot(P).save(base + '_screen.png')
     except Exception: pass
@@ -70,7 +70,7 @@ def diag(n, what):
 
 def run_once(n):
     nav.adb(P, 'shell', 'am', 'force-stop', nav.PKG)
-    if subprocess.run([nav.ADB, '-s', '127.0.0.1:' + P, 'shell', 'pidof', nav.PKG], capture_output=True, text=True).stdout.strip():
+    if subprocess.run([nav.ADB, '-s', nav.serial(P), 'shell', 'pidof', nav.PKG], capture_output=True, text=True).stdout.strip():
         return None, 'app did not stop'
     nav.adb(P, 'logcat', '-c'); ERRS.clear()
     nav.adb(P, 'shell', 'monkey', '-p', nav.PKG, '-c', 'android.intent.category.LAUNCHER', '1')
@@ -144,13 +144,13 @@ def run_once(n):
     if ERRS: return 'GAME ERROR: ' + ERRS[0][-200:], None
     return f'snapshot {snap} | replay through it {rep}' + ('  | ' + ' / '.join(warns[:1]) if warns else ''), None
 
-subprocess.run([nav.ADB, '-s', '127.0.0.1:' + P, 'shell', f'rm -f {D}/snapdebug {D}/snapdiffat {D}/testpad'], env=ENV)
+subprocess.run([nav.ADB, '-s', nav.serial(P), 'shell', f'rm -f {D}/snapdebug {D}/snapdiffat {D}/testpad'], env=ENV)
 # no room server: this test plays alone (hundreds of app starts asking oldkid.net for lobbies would
 # only load it). mp_test.py takes the file away again.
-subprocess.run([nav.ADB, '-s', '127.0.0.1:' + P, 'shell', f'echo off > {D}/okplay.txt'], env=ENV)
+subprocess.run([nav.ADB, '-s', nav.serial(P), 'shell', f'echo off > {D}/okplay.txt; touch {D}/nofx'], env=ENV)
 # SNAPWIRE=1: every save's snapshot goes through bytes and back (as a fast rejoin's does), so the
 # loads check the serializer too
-subprocess.run([nav.ADB, '-s', '127.0.0.1:' + P, 'shell', (f'touch {D}/snapwire' if os.environ.get('SNAPWIRE') else f'rm -f {D}/snapwire')], env=ENV)
+subprocess.run([nav.ADB, '-s', nav.serial(P), 'shell', (f'touch {D}/snapwire' if os.environ.get('SNAPWIRE') else f'rm -f {D}/snapwire')], env=ENV)
 not_good = []
 for n in games:
     why = []

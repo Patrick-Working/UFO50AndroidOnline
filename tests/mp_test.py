@@ -16,8 +16,38 @@ OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'out')
 os.makedirs(OUT, exist_ok=True)
 ENV = {**os.environ, 'MSYS_NO_PATHCONV': '1'}
 
-def adb(p, *a, **k): return subprocess.run([ADB, '-s', '127.0.0.1:' + p, *a], env=ENV, capture_output=True, text=True, errors='replace', **k).stdout
-def key(p, k): adb(p, 'shell', 'input', 'keyevent', 'KEYCODE_' + k)
+def serial(p):
+    # a BlueStacks port (5555) is 127.0.0.1:5555; anything else is a device's own serial (a phone on USB)
+    return '127.0.0.1:' + p if p.isdigit() else p
+def adb(p, *a, **k): return subprocess.run([ADB, '-s', serial(p), *a], env=ENV, capture_output=True, text=True, errors='replace', **k).stdout
+def screens(p):
+    # the screen as 1920x1080 pictures laid out like the reference pictures (taken on the emulators:
+    # the game at video scale 4, 1536x864 in the middle of 1920x1080). Two readings, as the device's
+    # own scale isn't known: the middle 1920x1080 as it is (scale 4 on any screen), and the game at
+    # the screen's full height (a phone at scale 5, or "fit") shrunk to scale 4's size.
+    from PIL import Image
+    import io
+    im = Image.open(io.BytesIO(subprocess.run([ADB, '-s', serial(p), 'exec-out', 'screencap', '-p'], capture_output=True).stdout)).convert('RGB')
+    x, y = (im.width - 1920) // 2, (im.height - 1080) // 2
+    out = [im if im.size == (1920, 1080) else im.crop((x, y, x + 1920, y + 1080))]
+    gw = im.height * 16 // 9
+    if gw <= im.width:
+        game = im.crop(((im.width - gw) // 2, 0, (im.width - gw) // 2 + gw, im.height)).resize((1536, 864), Image.BILINEAR)
+        full = Image.new('RGB', (1920, 1080)); full.paste(game, (192, 108))
+        out.append(full)
+    return out
+def screen(p): return screens(p)[0]
+def game_in_front(p):
+    return 'com.unofficial.ufo50' in adb(p, 'shell', 'dumpsys window | grep -m1 mCurrentFocus')
+def key(p, k):
+    # A real phone has other apps that can come to the front by themselves (a sign-in screen, a
+    # call): a key goes only to the game, and the test stops when something else has the screen.
+    if not p.isdigit():
+        for _ in range(10):
+            if game_in_front(p): break
+            time.sleep(1)
+        else: raise RuntimeError(f'{p}: the game is not in front (another app has the screen): no keys sent')
+    adb(p, 'shell', 'input', 'keyevent', 'KEYCODE_' + k)
 def keys(p, *seq):
     for k in seq:
         if isinstance(k, (int, float)): time.sleep(k)
@@ -25,14 +55,14 @@ def keys(p, *seq):
 def cmd(p, c): adb(p, 'shell', f'echo {c} > {D}/ss_cmd')
 def shot(p, name):
     with open(os.path.join(OUT, name + '.png'), 'wb') as f:
-        f.write(subprocess.run([ADB, '-s', '127.0.0.1:' + p, 'exec-out', 'screencap', '-p'], capture_output=True).stdout)
+        f.write(subprocess.run([ADB, '-s', serial(p), 'exec-out', 'screencap', '-p'], capture_output=True).stdout)
 def log(p): return adb(p, 'logcat', '-d', '-s', 'PFOSTATE:*')
 def full(p): return adb(p, 'logcat', '-d')
 
 def start_once():
     for p in (H, J):
         adb(p, 'shell', 'am', 'force-stop', 'com.unofficial.ufo50')
-        adb(p, 'shell', f'rm -f {D}/rejoin.txt {D}/okplay.txt')   # no "rejoin your match?" over the menus; the room server on (the offline tests switch it off)
+        adb(p, 'shell', f'rm -f {D}/rejoin.txt {D}/okplay.txt; touch {D}/nofx')   # no "rejoin your match?" over the menus; the room server on (the offline tests switch it off); no save/load picture over the screenshots
         adb(p, 'logcat', '-c')
         adb(p, 'shell', 'monkey', '-p', 'com.unofficial.ufo50', '-c', 'android.intent.category.LAUNCHER', '1')
     time.sleep(24)
@@ -75,10 +105,9 @@ def start(tries=3):
 def looks(p, ref, box, limit=18):
     # does the screen match a reference screenshot in this box (mean colour difference)?
     from PIL import Image, ImageChops, ImageStat
-    import io
-    cur = Image.open(io.BytesIO(subprocess.run([ADB, '-s', '127.0.0.1:' + p, 'exec-out', 'screencap', '-p'], capture_output=True).stdout)).convert('RGB').crop(box)
     r = Image.open(os.path.join(HERE, ref)).convert('RGB').crop(box)
-    d = sum(ImageStat.Stat(ImageChops.difference(cur, r)).mean) / 3
+    d = min(sum(ImageStat.Stat(ImageChops.difference(cur.crop(box), r)).mean) / 3 for cur in screens(p))
+    if os.environ.get('LOOKS_DEBUG'): print('looks', ref, box, round(d, 1), flush=True)
     return d < limit
 
 def last(text, pat):

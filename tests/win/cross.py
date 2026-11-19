@@ -47,7 +47,7 @@ class Droid:
     def shot(self, name):
         import subprocess
         with open(os.path.join(duo.OUT, "%s_android.png" % name), "wb") as f:
-            f.write(subprocess.run([m.ADB, "-s", "127.0.0.1:" + self.port, "exec-out", "screencap", "-p"], capture_output=True).stdout)
+            f.write(subprocess.run([m.ADB, "-s", m.serial(self.port), "exec-out", "screencap", "-p"], capture_output=True).stdout)
 
     def log(self, since=0):
         text = m.log(self.port)[since:]
@@ -76,7 +76,7 @@ class Droid:
 
     def launch(self):
         m.adb(self.port, "shell", "am", "force-stop", PKG)
-        m.adb(self.port, "shell", "rm -f %s/rejoin.txt %s/ss_cmd %s/rejoinreplay" % (m.D, m.D, m.D))
+        m.adb(self.port, "shell", "rm -f %s/rejoin.txt %s/ss_cmd %s/rejoinreplay; touch %s/nofx" % (m.D, m.D, m.D, m.D))   # (nofx: no save/load picture over the screenshots)
         m.adb(self.port, "logcat", "-G", "16M"); m.adb(self.port, "logcat", "-c")
         m.adb(self.port, "shell", "monkey", "-p", PKG, "-c", "android.intent.category.LAUNCHER", "1")
 

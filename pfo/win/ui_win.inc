@@ -171,7 +171,7 @@ namespace pfo_win_ui
     RECT g_Place = {};
 
     constexpr COLORREF c_Key = RGB(255, 0, 255);   // not drawn: the game shows through
-    constexpr COLORREF c_Back = RGB(12, 12, 20), c_Text = RGB(255, 255, 255), c_Dim = RGB(150, 150, 160), c_Off = RGB(96, 96, 104), c_Attention = RGB(255, 190, 40);
+    constexpr COLORREF c_Back = RGB(12, 12, 20), c_Text = RGB(255, 255, 255), c_Dim = RGB(150, 150, 160), c_Off = RGB(96, 96, 104), c_Attention = RGB(0xE0, 0x6A, 0x10);   // (attention: the overlay's orange; amber read as P4's yellow)
     constexpr COLORREF c_Progress = RGB(0x00, 0x84, 0x56);
     // the players' colours, as the game's and the overlay's
     constexpr COLORREF c_Seat[4] = { RGB(0xE0, 0x3C, 0x32), RGB(0x00, 0x6A, 0xB4), RGB(0x63, 0xB3, 0x1D), RGB(0xE8, 0xEA, 0x4A) };
@@ -462,8 +462,8 @@ namespace pfo_win_ui
             return ok;
         }
 
-        // a picture file's pixels (0x00RRGGBB, top row first)
-        bool Load(const std::wstring& path, int& w, int& h, std::vector<uint32>& px)
+        // a picture file's pixels (0x00RRGGBB, top row first; with alpha: 0xAARRGGBB)
+        bool Load(const std::wstring& path, int& w, int& h, std::vector<uint32>& px, bool alpha = false)
         {
             if (!Ready()) return false;
             // read whole first, and shared: nobody writing or replacing the file is in our way, nor we in theirs
@@ -492,7 +492,7 @@ namespace pfo_win_ui
             {
                 RectI all = { 0, 0, static_cast<INT>(bw), static_cast<INT>(bh) };
                 BitmapData d = {};
-                ok = LockBits(bmp, &all, 1 /* to read */, c_Rgb32, &d) == 0 && d.scan0;
+                ok = LockBits(bmp, &all, 1 /* to read */, alpha ? 0x0026200A /* PixelFormat32bppARGB */ : c_Rgb32, &d) == 0 && d.scan0;
                 if (ok)
                 {
                     px.resize(static_cast<size_t>(bw) * bh);
@@ -515,6 +515,108 @@ namespace pfo_win_ui
             bool ok = SaveToFile(bmp, path.c_str(), &c_Png, nullptr) == 0;
             Dispose(bmp);
             return ok;
+        }
+    }
+
+    // ---- UFO 50's own menu font ----
+    // pfo_font.png next to PFO.dll: sFontDefault from your copy of the game, which the build exports
+    // as the phone build does for its overlay (nothing is shipped). 95 cells, ASCII 32-126, white
+    // letters with a black shadow, drawn at whole-pixel scales. Without the file: Consolas.
+    namespace pixfont
+    {
+        int g_State = 0;   // 1 ready, -1 not to be had
+        int g_Cw = 0, g_Ch = 0, g_W = 0, g_Scale = 1;
+        std::vector<uint32> g_Px;   // 0xAARRGGBB
+        constexpr COLORREF c_Clear = RGB(1, 254, 1);   // not drawn: GdiTransparentBlt's key
+        BOOL (WINAPI* g_Blt)(HDC, int, int, int, int, HDC, int, int, int, int, UINT) = nullptr;
+        struct Tinted { HDC dc = nullptr; HBITMAP bmp = nullptr; };
+        std::map<COLORREF, Tinted> g_Tinted;   // the strip in each colour used (a few)
+
+        std::wstring Folder()
+        {
+            HMODULE me = nullptr;
+            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&Folder), &me);
+            wchar_t path[MAX_PATH] = {};
+            GetModuleFileNameW(me, path, MAX_PATH);
+            std::wstring s = path;
+            return s.substr(0, s.find_last_of(L"\\/") + 1);
+        }
+
+        bool Ready()
+        {
+            if (g_State != 0) return g_State > 0;
+            g_State = -1;
+            HMODULE gdi = GetModuleHandleW(L"gdi32.dll");
+            if (gdi) g_Blt = reinterpret_cast<decltype(g_Blt)>(reinterpret_cast<void*>(GetProcAddress(gdi, "GdiTransparentBlt")));
+            int w = 0, h = 0;
+            std::vector<uint32> px;
+            if (!g_Blt || !gdip::Load(Folder() + L"pfo_font.png", w, h, px, true) || w % 95 != 0 || h < 4)
+            {
+                __android_log_print(ANDROID_LOG_INFO, "PFOMENU", "font: pfo_font.png not found or not usable: Consolas");
+                return false;
+            }
+            g_Cw = w / 95; g_Ch = h; g_W = w; g_Px.swap(px);
+            g_State = 1;
+            __android_log_print(ANDROID_LOG_INFO, "PFOMENU", "font: UFO 50's (%dx%d cells)", g_Cw, g_Ch);
+            return true;
+        }
+
+        int Glyph(wchar_t c)
+        {
+            if (c == 0x2212 || c == 0x2022 || c == 0x00B7) c = L'-';
+            int k = static_cast<int>(c) - 32;
+            return k >= 0 && k < 95 ? k : '?' - 32;
+        }
+
+        const Tinted& Tint(HDC like, COLORREF color)
+        {
+            auto it = g_Tinted.find(color);
+            if (it != g_Tinted.end()) return it->second;
+            Tinted t;
+            BITMAPINFO bi = {};
+            bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+            bi.bmiHeader.biWidth = g_W;
+            bi.bmiHeader.biHeight = -g_Ch;
+            bi.bmiHeader.biPlanes = 1;
+            bi.bmiHeader.biBitCount = 32;
+            bi.bmiHeader.biCompression = BI_RGB;
+            void* bits = nullptr;
+            t.bmp = CreateDIBSection(like, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+            if (t.bmp && bits)
+            {
+                // a DIB's pixel is 0x00RRGGBB, a COLORREF 0x00BBGGRR
+                auto dib = [](COLORREF c) { return static_cast<uint32>((GetRValue(c) << 16) | (GetGValue(c) << 8) | GetBValue(c)); };
+                uint32* out = static_cast<uint32*>(bits);
+                // dark letters (on the chosen row's white bar) go without the shadow: black on
+                // black would thicken them into blobs
+                const bool dark = GetRValue(color) * 299 + GetGValue(color) * 587 + GetBValue(color) * 114 < 128 * 1000;
+                for (size_t i = 0; i < g_Px.size(); i++)
+                {
+                    uint32 p = g_Px[i];
+                    const bool letter = (p >> 24) >= 128 && ((p >> 16) & 255) >= 128, shadow = (p >> 24) >= 128 && !letter;
+                    out[i] = letter ? dib(color) : shadow && !dark ? 0 : dib(c_Clear);   // the letter, its shadow, clear
+                }
+                t.dc = CreateCompatibleDC(like);
+                SelectObject(t.dc, t.bmp);
+            }
+            return g_Tinted[color] = t;
+        }
+
+        int Width(size_t chars) { return static_cast<int>(chars) * g_Cw * g_Scale; }
+
+        // as DrawTextW with DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS, and DT_CENTER / DT_RIGHT / left
+        void Draw(HDC dc, const std::wstring& s, const RECT& r, COLORREF color, UINT how)
+        {
+            const Tinted& t = Tint(dc, color);
+            if (!t.dc) return;
+            const int cell = g_Cw * g_Scale, room = std::max(0, static_cast<int>((r.right - r.left) / std::max(1, cell)));
+            std::wstring shown = s;
+            if (static_cast<int>(shown.size()) > room) shown = room > 3 ? shown.substr(0, room - 3) + L"..." : shown.substr(0, room);
+            const int tw = Width(shown.size());
+            int x = (how & DT_CENTER) ? (r.left + r.right - tw) / 2 : (how & DT_RIGHT) ? r.right - tw : r.left;
+            const int y = (r.top + r.bottom - g_Ch * g_Scale) / 2;
+            for (size_t i = 0; i < shown.size(); i++, x += cell)
+                if (shown[i] != L' ') g_Blt(dc, x, y, cell, g_Ch * g_Scale, t.dc, Glyph(shown[i]) * g_Cw, 0, g_Cw, g_Ch, c_Clear);
         }
     }
 
@@ -795,10 +897,10 @@ namespace pfo_win_ui
                 }
             }
             else if (!OnlineGame()) Add(L"START SOLO PLAY (TURNS SAVES AND REWIND ON)", ActSolo, 0, !inLobby && (g_Net & 64) == 0 && !restoring);
-            Add(std::wstring(L"SAVE WHEN THE GAME IS PAUSED: ") + (g_AutoSavePause ? L"ON" : L"OFF"), ActAutoSave);
+            Add(std::wstring(L"AUTO SAVE WHEN I PAUSE: ") + (g_AutoSavePause ? L"ON" : L"OFF"), ActAutoSave);
             std::string code = LobbyCode();
             if (!code.empty()) Add(L"COPY THE INVITE CODE (" + Wide(code.c_str()) + L")", ActCopyCode);
-            Add(L"ENTER A JOIN CODE...", ActCode, 0, (g_Net & 64) == 0);
+            Add(L"ENTER AN INVITE CODE...", ActCode, 0, (g_Net & 64) == 0);
             Add(L"PLAYER NAME: " + Upper(Wide(ShownName().c_str())), ActName, 0, !OnlineGame());
             Add(std::wstring(L"UPNP (A HOST OPENS ITS ROUTER PORT): ") + (fakesteam::upnp::enabled ? L"ON" : L"OFF"), ActUpnp);
             Add(L"CLOSE", ActClose);
@@ -826,7 +928,7 @@ namespace pfo_win_ui
         }
         else if (g_Page == PageName || g_Page == PageCode)
         {
-            g_Title = g_Page == PageName ? L"PLAYER NAME" : L"JOIN CODE";
+            g_Title = g_Page == PageName ? L"PLAYER NAME" : L"ENTER AN INVITE CODE";
             if (byPad) g_Hint = L"TYPE ON THE KEYBOARD   ENTER OR A: OK   B: BACK";
             else g_Hint = g_Page == PageName ? L"ENTER: OK (EMPTY: THIS COMPUTER'S NAME)   ESC: BACK   CTRL+V: PASTE" : L"TYPE THE HOST'S CODE   ENTER: OK   ESC: BACK   CTRL+V: PASTE";
             Add(L"> " + Wide(g_Typed.c_str()) + L"_", ActNone);
@@ -1107,9 +1209,12 @@ namespace pfo_win_ui
     ULONGLONG g_CoverSince = 0;
     std::string g_VoteBoxLogged;
 
+    namespace pad { void Rumble(int ms); void RumbleTick(ULONGLONG now); }
+
     void Poll()
     {
         ULONGLONG now = GetTickCount64();
+        pad::RumbleTick(now);
         int old = g_Status;
         g_Status = pfo_android::StateStatus();
         g_Net = NetStatus();
@@ -1126,13 +1231,14 @@ namespace pfo_win_ui
             if (result == 1)
             {
                 Say(g_PendingAuto ? L"GAME SAVED ON PAUSE" : g_PendingQuick ? L"QUICK SAVED (F9 LOADS IT)" : L"SAVED", 2000);
+                if (!g_PendingAuto) pad::Rumble(110);
                 g_PendingAuto = false;
                 g_SaveCache.erase(pfo_android::g_LastSavedSlot.load());
                 TakePicture(pfo_android::g_LastSavedSlot.load());
                 g_SavesReadAt = 0;
             }
             else if (g_PendingAuto && g_PendingWhat == 2) g_PendingAuto = false;   // an auto save that couldn't happen: say nothing
-            else if (result == 3) Say(g_PendingWhat == 4 ? L"REWOUND" : g_PendingQuick ? L"QUICK LOADED" : L"LOADED", 2000);
+            else if (result == 3) { Say(g_PendingWhat == 4 ? L"REWOUND" : g_PendingQuick ? L"QUICK LOADED" : L"LOADED", 2000); pad::Rumble(110); }
             else if (result == -6) Say(L"NOTHING TO REWIND THAT FAR YET", 1500);
             else if (result == -3) Say(L"LOADED - BUT IT DIDN'T CHECK OUT", 3000, true);
             else if (result == -2) Say(L"THAT SAVE CAN'T BE READ", 1800);
@@ -1311,7 +1417,13 @@ namespace pfo_win_ui
         }
         else if (!g_RejoinOffer.empty() && g_Page == PageClosed)
         {
-            g_Sticky = L"REJOIN YOUR MATCH? " + RejoinText() + L"   F2: REJOIN   F3: NO";
+            g_Sticky = L"REJOIN YOUR MATCH? " + RejoinText() + L"   F2: REJOIN   F3: FORGET IT";
+            g_StickyAttention = true;
+        }
+        else if ((g_Net & 128) && OnlineGame())
+        {
+            // (PFO's own catch-up text over the game is hidden, as on the phones: windows_patch.csx)
+            g_Sticky = L"CATCHING UP";
             g_StickyAttention = true;
         }
         if (now >= g_BannerUntil) g_Banner.clear();
@@ -1337,6 +1449,7 @@ namespace pfo_win_ui
 
     int Width(HDC dc, const std::wstring& s)
     {
+        if (pixfont::g_State > 0) return pixfont::Width(s.size());
         SIZE size = {};
         GetTextExtentPoint32W(dc, s.c_str(), static_cast<int>(s.size()), &size);
         return size.cx;
@@ -1344,6 +1457,7 @@ namespace pfo_win_ui
 
     void Text(HDC dc, const std::wstring& s, RECT r, COLORREF color, UINT how)
     {
+        if (pixfont::g_State > 0) { pixfont::Draw(dc, s, r, color, how); return; }
         SetTextColor(dc, color);
         DrawTextW(dc, s.c_str(), static_cast<int>(s.size()), &r, how | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
     }
@@ -1544,6 +1658,11 @@ namespace pfo_win_ui
         RECT all = { 0, 0, w, h };
         Fill(dc, all, g_Cover.on ? c_Back : c_Key);
         int fh = std::max(13, h / 30);
+        if (pixfont::Ready())
+        {
+            pixfont::g_Scale = std::max(1, (fh + 3) / pixfont::g_Ch);   // (rounded: 2x in a 432-high window, 4x at 1080)
+            fh = pixfont::g_Ch * pixfont::g_Scale;
+        }
         if (!g_Font || g_FontHeight != fh)
         {
             if (g_Font) DeleteObject(g_Font);
@@ -1714,6 +1833,7 @@ namespace pfo_win_ui
         struct State { DWORD packet; WORD buttons; BYTE lt, rt; SHORT lx, ly, rx, ry; };   // XINPUT_STATE
         constexpr WORD Up = 0x0001, Down = 0x0002, L3 = 0x0040, R3 = 0x0080, A = 0x1000, B = 0x2000, X = 0x4000;
         typedef DWORD (WINAPI* GetStateFn)(DWORD, State*);
+        typedef DWORD (WINAPI* SetStateFn)(DWORD, WORD*);   // XINPUT_VIBRATION: two motor speeds
 
         // ufo50.exe: where it loads XInput (lea rdx, "XInputGetState"; mov rcx, [the module];
         // call GetProcAddress; mov [the pointer], rax), and the two places that code names
@@ -1722,6 +1842,9 @@ namespace pfo_win_ui
                                     0xff, 0x15, 0xa4, 0x72, 0x40, 0x00, 0x48, 0x89, 0x05, 0x8d, 0x26, 0x92, 0x00 };
 
         GetStateFn g_Real = nullptr;
+        SetStateFn g_SetState = nullptr;
+        std::atomic<unsigned> g_Seen{0};   // the controllers that answered the game's last reading
+        ULONGLONG g_RumbleUntil = 0;       // (Poll's thread only)
         void** g_Pointer = nullptr;
         int g_Hooked = 0;                // 1 done, -1 can't be
         std::atomic<bool> g_Called{false};
@@ -1735,6 +1858,7 @@ namespace pfo_win_ui
             GetStateFn real = g_Real;
             DWORD r = real ? real(index, st) : ERROR_DEVICE_NOT_CONNECTED;
             g_Called = true;
+            if (index < 4) { if (r == ERROR_SUCCESS) g_Seen |= 1u << index; else g_Seen &= ~(1u << index); }
             if (r != ERROR_SUCCESS || index >= 4 || !st) return r;
             Filter& f = g_Filter[index];
             const Filter before = f;
@@ -1787,10 +1911,29 @@ namespace pfo_win_ui
                 return;
             }
             g_Real = reinterpret_cast<GetStateFn>(fn);
+            g_SetState = reinterpret_cast<SetStateFn>(reinterpret_cast<void*>(GetProcAddress(xinput, "XInputSetState")));
             g_Pointer = pointer;
             *pointer = reinterpret_cast<void*>(&Hooked);
             g_Hooked = 1;
             __android_log_print(ANDROID_LOG_INFO, "PFOMENU", "controller: ready (both sticks pressed in: menu)");
+        }
+
+        // a short buzz on the controllers in use: a save or load done (the phone's haptic tick)
+        void Rumble(int ms)
+        {
+            if (!g_SetState || g_Hooked != 1) return;
+            WORD on[2] = { 0x6000, 0x3000 };
+            unsigned seen = g_Seen.load();
+            for (DWORD i = 0; i < 4; i++) if (seen & (1u << i)) g_SetState(i, on);
+            g_RumbleUntil = GetTickCount64() + ms;
+        }
+        void RumbleTick(ULONGLONG now)
+        {
+            if (g_RumbleUntil == 0 || now < g_RumbleUntil || !g_SetState) return;
+            g_RumbleUntil = 0;
+            WORD off[2] = { 0, 0 };
+            unsigned seen = g_Seen.load();
+            for (DWORD i = 0; i < 4; i++) if (seen & (1u << i)) g_SetState(i, off);
         }
 
         void Unhook()
