@@ -20,9 +20,9 @@ This is a fork of Skyline969's
 UFO 50 runs on Android's GameMaker runner. The fork rebuilds the runner for UFO 50 1.9.5 and adds
 the mods, the touch overlay and online play.
 
-> **An early release.** So far it has only been tested on emulators (BlueStacks) and on one
-> Windows 10 PC: not yet on a real phone, with a real controller on Windows, on a second PC, or
-> with more than two players online. Expect rough edges, and please
+> **An early release.** So far it has been tested on emulators (BlueStacks), on one Windows 10 PC
+> and on one real phone (an arm64 OnePlus, over Wi-Fi): not yet with a real controller on Windows,
+> on a second PC, or with more than two players online. Expect rough edges, and please
 > [open an issue](https://github.com/Patrick-Working/UFO50AndroidOnline/issues) with what you
 > find, good or bad. What was tested and what wasn't: [docs/TESTING.md](docs/TESTING.md).
 
@@ -30,6 +30,52 @@ the mods, the touch overlay and online play.
 ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.4.1.zip)), unzip
 it, and double-click **`build-android.bat`** for the APK or **`build-windows.bat`** for the Windows
 version. See [Quick build](#quick-build).
+
+## What's new on main (since v0.4.1, not yet a release)
+
+Build from the latest code ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/heads/main.zip))
+to get these. Every device in a lobby needs the same build.
+
+**New**
+- **Several players on one device: WHO'S PLAYING.** Every controller is a player of its own: on a
+  phone the touch controls and each gamepad, on Windows the arrow keys, the numpad keys and each
+  gamepad. Before solo play and in an online lobby, each controller picks a slot P1-P8 and locks it
+  in; every player shows its controller's icon and, online, its device's name. Saves, quick saves,
+  rewind and loads work with all of them, and online the match carries every device's players
+  through saves, loads and rejoins. (It replaces hot seat.)
+- **One look on both versions**: the Windows menu in UFO 50's own font, the same colours and
+  wording as the phones, no font shadow, and a short controller rumble on Windows when a save or
+  load is done.
+- **Saving and loading you can feel**: a buzz, a ring on the button and the save's picture flying
+  into it; a load's picture opens out of its button and fades into the game.
+- **Fast rejoin**: a player whose app closed gets the game as it is from the others and is back in
+  about a second, instead of replaying the whole match. Online saves made before the rejoin load
+  for them too.
+
+**Fixed**
+- **Save states and rejoins put the whole game back, exactly.** Every kind of state GameMaker
+  holds was checked against what the 50 games use ([docs/SNAPSHOT_STATE.md](docs/SNAPSHOT_STATE.md)),
+  and the game state of two devices was compared item by item, every frame, after a rejoin into
+  each game. That found and fixed:
+  - a desync after a fast rejoin into Barbuta (instances made again could take each other's ids);
+  - instances and data structures made again under other numbers (two games compare them);
+  - enemies and units that walk paths (library 12 and 50) standing still after a load or rejoin;
+  - parts of a level that could never switch back on after a rejoin (library 12's map);
+  - `noone` and other references to things gone coming back as plain numbers;
+  - the save file not reaching a rejoined device, so the library differed after leaving a game
+    (and a load now also puts your save file back as it was at the save).
+  Result: after a rejoin, 49 of the 50 games are the same on both devices on every frame checked,
+  and on the way back to the library (the 50th differs only in something it draws).
+- A rejoined phone no longer takes the Windows window's picture size.
+- QUICK LOAD in a lobby no longer starts solo play and leaves the lobby.
+- No more green frame around the screen after a key or controller press (Android).
+- A dropped player who is being waited for keeps their seat in the game's pause menu.
+
+**Windows 7:** UFO 50 itself needs Windows 8 or later (its `ufo50.exe` won't start on 7, the Steam
+game included), and this build's Windows version needs Windows 10. See
+[docs/WINDOWS.md](docs/WINDOWS.md).
+
+The full list: [CHANGELOG.md](CHANGELOG.md).
 
 ## What's new in v0.4.0
 
@@ -187,7 +233,9 @@ it shows in the session pill after the chips. See *Overlay* in [CHANGELOG.md](CH
 - **AUTO SAVE WHEN I PAUSE** (in the save list) saves into one AUTO slot each time you pause,
   replacing the last one. Its picture is from just before the pause.
 - Every game works: all 50 were tested loading in the same room, from the library and from inside
-  another game.
+  another game, and after a fast rejoin each game's whole state was compared with the other
+  device's, frame by frame (see [docs/SNAPSHOT_STATE.md](docs/SNAPSHOT_STATE.md)).
+- With several players on one device (WHO'S PLAYING), saves record every player.
 - **Rewind** (single player): **REWIND 15 S / 30 S / 60 S** in the save list go back that far, to
   the exact frame, and play carries on from there. Each shows how long it will take, measured on
   your device; if it's 5 seconds or more you're asked first ("REWIND 60 SECONDS? ABOUT 40 S TO
@@ -218,8 +266,8 @@ it shows in the session pill after the chips. See *Overlay* in [CHANGELOG.md](CH
 - That goes for a player who has no player in the current game too (the third player in a 2-player
   game). If they aren't back after 90 seconds, the match carries on without them.
 - If a player's app was closed or crashed, reopening it offers **REJOIN YOUR MATCH?**. REJOIN
-  takes their old place: the other player sends the game as it is, it's put back in about a second
-  and play carries on. (With three or more players, through the relay, or if that doesn't work
+  takes their old place: the other player sends the game as it is (with every seat that device had
+  and the save files), it's put back in about a second and play carries on. (With three or more players, through the relay, or if that doesn't work
   out, the match so far is sent instead and replayed at high speed, which takes longer for a long
   match.) It works over the relay too.
 - With three or more players, the ones left share the dropped player's last inputs so they all wait
@@ -479,9 +527,14 @@ game's save states passed (50 of 50) and the menu was walked through by keyboard
 for a controller. The Android sweep of every game's save states (150 of 150 runs) is from v0.3.1
 and wasn't repeated.
 
-**Not tested yet:** a real phone, arm64, a second PC, a real controller on Windows, three or more
-players online, and a `ufo50.exe` other than 1.9.5's. If you try any of these, please open an issue
-with how it went. Details: [docs/TESTING.md](docs/TESTING.md).
+Since v0.4.1 (on main): a real phone (a OnePlus 6T, arm64) played online against the Windows
+version through the real room server, both ways, and hosted a match with two players of its own;
+the quick regression (18 tests, both versions and the emulators) passes; and a fast rejoin into
+each of the 50 games was compared item by item with the other device (49 the same throughout).
+
+**Not tested yet:** a second PC, a real controller on Windows, three or more players online, and a
+`ufo50.exe` other than 1.9.5's. If you try any of these, please open an issue with how it went.
+Details: [docs/TESTING.md](docs/TESTING.md).
 
 ## Credits
 

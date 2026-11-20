@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Highlights since v0.4.1: **several players on one device** (WHO'S PLAYING) on both versions;
+**fast rejoin** (back in about a second); **save states and rejoins put the whole game back
+exactly** (six kinds of state that went missing or came back different, found by checking every
+kind GameMaker holds and comparing two devices frame by frame: 49 of 50 games the same throughout a
+rejoin); one look on both versions; tested on a real phone over Wi-Fi. The details:
+
 - **Several players on one device: WHO'S PLAYING.** Every controller is a player of its own: on a
   phone the touch controls and each pad, on Windows the arrow keys, the numpad keys (the game's P2
   keys) and each pad. Before solo play (START SOLO PLAY) and, online, in the lobby (the Players
