@@ -179,6 +179,16 @@ Console.WriteLine("Steam lobby/user functions now resolve to libPFO.so built-ins
             "if (showDelay && os_type != os_android && (pfo_get_frame() > 4 || playingReplay))"),
         ("gml_GlobalScript_scrGetInput", "var key_map = global.keyMap[arg0];",
             "var key_map = global.keyMap[arg0];\npfo_android_keys(arg0, key_map[0], key_map[1], key_map[2], key_map[3], key_map[4], key_map[5], key_map[6]);"),
+        // Several players on one device (a session's device can carry several seats, libPFO): the
+        // input callback is asked once per local seat, global.pfo_local_seat saying which, and reads
+        // that local player's controls; the game's own queued commands go with the first seat only.
+        // Going online, the seats already planned (device by device) are the game's onlinePlayers.
+        ("gml_GlobalScript_scrGetInputCallback", "    scrGetInput(0, UnknownEnum.Value_3);\n    return pfo_add_extra_input(arg0, scrGetPFOFlagsFromInput());",
+            "    scrGetInput(0, UnknownEnum.Value_3);\n    if (variable_global_exists(\"pfo_local_seat\") && global.pfo_local_seat > 0)\n    {\n        return scrGetPFOFlagsFromInput();\n    }\n    return pfo_add_extra_input(arg0, scrGetPFOFlagsFromInput());"),
+        ("gml_GlobalScript_scrGetInput", "    if ((_getInputType & UnknownEnum.Value_1) != UnknownEnum.Value_0 && pfo_is_online())\n    {\n        arg0 = 0;\n    }",
+            "    if ((_getInputType & UnknownEnum.Value_1) != UnknownEnum.Value_0 && pfo_is_online())\n    {\n        arg0 = variable_global_exists(\"pfo_local_seat\") ? global.pfo_local_seat : 0;\n    }"),
+        ("gml_GlobalScript_scrOnlineStateChangedCallback", "            global.onlinePlayers[i] = (i < clientCount) ? i : -1;",
+            "            global.onlinePlayers[i] = (i < 8 && pfo_player_get_client_index(i) >= 0) ? pfo_player_get_client_index(i) : ((i < clientCount) ? i : -1);"),
     };
     var texts = new Dictionary<string, string>();   // several edits to one script build on each other
     foreach (var (name, find, replace) in edits)
@@ -298,7 +308,7 @@ string[] SnapshotFunctions(string source)
 {
     return source.Split('\n').Where(l => l.StartsWith("// uses:"))
         .SelectMany(l => l.Substring(8).Split(new[] { ' ', ',', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries))
-        .Concat(new[] { "pfo_runner_mark", "pfo_runner_rehide", "pfo_runner_settle" }).Distinct().ToArray();
+        .Concat(new[] { "pfo_runner_mark", "pfo_runner_rehide", "pfo_runner_settle", "pfo_runner_maxid" }).Distinct().ToArray();
 }
 
 
@@ -376,6 +386,27 @@ if (Environment.GetEnvironmentVariable("PFO_RNG_TRACE") == "1")
     }
     sgroup.Import();
     Console.WriteLine("runtime sprites: " + routed + " scripts route through the snapshot wrappers");
+
+    // Paths and motion-planning grids (games 45 and 50, library 50 and 12): mp_grid_create, mp_grid_destroy and
+    // path_start go through pfo_snapshot.gml's wrappers, which note what a snapshot can't read back
+    // (a grid's size, what a relative path is measured from)
+    var pgroup = new UndertaleModLib.Compiler.CodeImportGroup(Data);
+    int proutes = 0;
+    var pcall = new System.Text.RegularExpressions.Regex(@"(?<![A-Za-z0-9_])(mp_grid_create|mp_grid_destroy|path_start)\(");
+    foreach (var code in Data.Code)
+    {
+        string cn = code.Name.Content;
+        if (code.ParentEntry != null || cn.Contains("pfo_snapshot")) continue;
+        if (!(cn.StartsWith("gml_Object_o45_") || cn.StartsWith("gml_Object_o50_") || cn.StartsWith("gml_GlobalScript_scr45_") || cn.StartsWith("gml_GlobalScript_scr50_"))) continue;
+        string text;
+        try { text = new Underanalyzer.Decompiler.DecompileContext(sctx, code, Data.ToolInfo.DecompilerSettings).DecompileToString(); }
+        catch { continue; }
+        if (!pcall.IsMatch(text)) continue;
+        pgroup.QueueReplace(cn, pcall.Replace(text, "pfo_$1("));
+        proutes++;
+    }
+    pgroup.Import();
+    Console.WriteLine("paths and grids: " + proutes + " scripts route through the snapshot wrappers");
 }
 
 foreach (var f in failures) Console.WriteLine("FAILED " + f);

@@ -352,6 +352,8 @@ namespace pfo_android
     // same frame. Online saves are then files only, and a load restarts the match from the file.
     constexpr int c_CmdNoSnap = 246;
     bool g_MatchNoSnap = false;
+    int g_TraceLeft = 0;                     // testing: frames still to trace (TraceFrame)
+    void TraceRejoin(const char* who);
     bool g_TestNoSnap = false;               // test command "nosnap": ask for it as a device without snapshots would
     int g_MpCaptures = 0;                    // the captures this match's timeline has had so far
     // A match restarted from a save ends its replay on that save's own SAVE command, which is then
@@ -417,12 +419,42 @@ namespace pfo_android
     }
 
     // A PFO session with just us: no lobby, no connections, recorded like an online session.
+    // how many players play on this device in solo play (the overlay's / menu's player setup)
+    std::atomic<int> g_LocalPlayers{1};
+    // ... and which controller each local seat reads (Windows: keys = the game's keyboard layout
+    // 0 P1 / 1 P2, pad = an XInput slot; -1 none; the phone's overlay routes pads itself)
+    void GlobalSetReal(const char* name, double value, CInstance* self);   // (below)
+    struct SeatSource { int keys = -1, pad = -1; };
+    SeatSource g_SeatSource[8];
+    std::atomic<bool> g_SeatSourcesSet{false};
+    void PublishSeatSources(CInstance* self)
+    {
+        bool on = g_SeatSourcesSet.load();
+        for (int k = 0; k < 8 && on; k++)
+        {
+            char name[32];
+            snprintf(name, sizeof(name), "pfo_seat_keys_%d", k); GlobalSetReal(name, g_SeatSource[k].keys, self);
+            snprintf(name, sizeof(name), "pfo_seat_pad_%d", k); GlobalSetReal(name, g_SeatSource[k].pad, self);
+        }
+        GlobalSetReal("pfo_seat_sources", on ? 1 : 0, self);
+    }
+
     bool StartSolo(CInstance* self)
     {
         if (g_Session.m_OnlineState != EOnlineState::Offline) return false;
         PreloadLibrary(self);
         g_Session.m_ClientIndex = 0;
         g_Session.m_ClientCount = 1;
+        {
+            // one player: as always; several: the device carries every seat (players can be added in
+            // the game's pause menu later), the first ones seated
+            int players = std::clamp(g_LocalPlayers.load(), 1, c_PlayerLimit);
+            g_Session.m_SeatCount[0] = players > 1 ? c_PlayerLimit : 1;
+            g_Session.m_HasPlan = players > 1;
+            for (int i = 0; i < c_PlayerLimit; i++) g_Session.m_Plan[i] = i < players ? 0 : -1;
+            PublishSeatSources(self);
+            if (players > 1) __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "solo session: %d players on this device", players);
+        }
         g_Session.m_ClientData[0].m_SteamID = g_SteamUser->GetSteamID().ConvertToUint64();
         g_Session.m_OnlineState = EOnlineState::GoingOnline;
         g_TouchFrames.clear();
@@ -461,6 +493,10 @@ namespace pfo_android
         RValue out = {};
         Script_Perform(g_FnGlobalSet, self, self, 2, &out, args);
     }
+
+    // several players on this device: PFO asks the game's input callback once per local seat, with
+    // global.pfo_local_seat saying which (the patched callback reads that local player's controls)
+    void SetLocalSeat(int k, CInstance* self) { GlobalSetReal("pfo_local_seat", k, self); }
 
     std::string JsonStr(const char* s)
     {
@@ -663,10 +699,11 @@ namespace pfo_android
         if (!ok) { SetResult(-2); __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: not a usable state", slot); return false; }
         // A save of a match with others holds every player's inputs: alone, the replay would end
         // waiting for players who aren't there. (In a match, LOAD offers it to the others instead.)
-        if (data[8] > 1)
+        // (the replay header's device count; its top bit says a seat table follows: libPFO)
+        if ((data[8] & 0x7f) > 1)
         {
-            __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: refused, it's a save of a match with %d players", slot, data[8]);
-            g_OfferRefused = data[8];
+            __android_log_print(ANDROID_LOG_WARN, "PFOSTATE", "load slot %d: refused, it's a save of a match with %d players", slot, data[8] & 0x7f);
+            g_OfferRefused = data[8] & 0x7f;
             SetResult(-5);
             return false;
         }
@@ -1106,6 +1143,11 @@ namespace pfo_android
             }
             char b[96];
             snprintf(b, sizeof(b), "%zu+%zu instances, %zu objects, %d missing", st.active.size(), st.inactive.size(), st.objects.size(), missing);
+            // the runner keeps the switched-off instances' list for instance_activate_*() and remakes it
+            // only when its own deactivate or activate marks it stale: lists put straight back leave it
+            // as it was (a fast rejoin's game: empty, and game 50's map never came back on)
+            static auto dirty = Sym<bool*>("g_DeactiveListDirty");
+            if (dirty) *dirty = true;
             return b + (missing ? " (" + missed.substr(1) + (missing > 6 ? " ..." : "") + ")" : std::string());
         }
 
@@ -1129,6 +1171,23 @@ namespace pfo_android
         State g_MarkState;
         bool g_MarkValid = false;
         void Mark() { g_MarkState = Capture(); g_MarkValid = true; }
+        // the runner's instance id counter (room_maxid: the last id handed out): read, and set when
+        // set >= 0. A restore makes instances again under the ids they had (pfo_snapshot.gml
+        // pfo_snap_make): games compare ids (id < other.id), so new ones must come out in the same order
+        int MaxId(int set)
+        {
+            if (!Pointers()) return -1;
+            if (set == -2)   // the highest id in the runner's lists (destroyed ones still there included)
+            {
+                int hi = -1;
+                ForEachInstance([&](void* i, bool) { hi = std::max(hi, At<int>(i, InstId)); });
+                return hi;
+            }
+            int was = *g_RoomMaxId;
+            if (set >= 0) *g_RoomMaxId = set;
+            return was;
+        }
+
         int Settle()
         {
             if (!Pointers()) return 0;
@@ -1179,6 +1238,48 @@ namespace pfo_android
         if (n > 0) { v.resize(n); if (fread(v.data(), 1, n, f) != static_cast<size_t>(n)) v.clear(); }
         fclose(f);
         return v;
+    }
+
+// The game's own save files (save1.ufo, account.ufo) are where GameMaker keeps its files, which
+    // isn't the process's folder (Windows: %LOCALAPPDATA%\ufo50_online; Android: the app's files):
+    // read and write them as PFO does, through GameMaker's own functions. (A bare fopen() of the name
+    // never found them: a fast rejoin told the rejoiner the sender had no save file, so its library
+    // showed no records and drifted from the others' once a game was left.)
+    std::vector<uint8> ReadGameFile(const char* name, bool& exists, CInstance* self)
+    {
+        std::vector<uint8> v;
+        exists = false;
+        RValue arg = {}; YYCreateString(&arg, name);
+        RValue r = {};
+        Script_Perform(g_gml_file_exists, self, self, 1, &r, &arg);
+        if (!BOOL_RValue(&r)) return v;
+        RValue buf = {};
+        Script_Perform(g_gml_buffer_load, self, self, 1, &buf, &arg);
+        int index = KIND_RValue(&buf) == VALUE_REF ? buf.v32
+            : KIND_RValue(&buf) == VALUE_REAL || KIND_RValue(&buf) == VALUE_INT32 || KIND_RValue(&buf) == VALUE_INT64 ? static_cast<int>(YYGetReal(&buf, 0)) : -1;
+        if (index < 0) return v;
+        void* data = nullptr; int size = 0;
+        if (BufferGetContent(index, &data, &size) && data && size >= 0)
+        {
+            v.assign(static_cast<const uint8*>(data), static_cast<const uint8*>(data) + size);
+            exists = true;
+            YYFree(data);
+        }
+        RValue ignored = {};
+        Script_Perform(g_gml_buffer_delete, self, self, 1, &ignored, &buf);
+        return v;
+    }
+    bool WriteGameFile(const char* name, const std::vector<uint8>& data, CInstance* self)
+    {
+        int buffer = CreateBuffer(static_cast<int>(std::max<size_t>(1, data.size())), eBuffer_Format_Fixed, 1);
+        if (buffer < 0) return false;
+        if (!data.empty()) BufferWriteContent(buffer, 0, data.data(), static_cast<int>(data.size()), false, false);
+        RValue args[2] = {}; init_buffer(args[0], buffer); YYCreateString(&args[1], name);
+        RValue result = {};
+        Script_Perform(g_gml_buffer_save, self, self, 2, &result, args);
+        RValue ignored = {};
+        Script_Perform(g_gml_buffer_delete, self, self, 1, &ignored, &args[0]);
+        return true;
     }
 
     // forget a snapshot: ours, the runner's side of it, and the game's (pfo_snapshot.gml)
@@ -1373,7 +1474,7 @@ namespace pfo_android
             if (fd.m_Data != nullptr) { f.hasData = true; f.data.assign(static_cast<const uint8*>(fd.m_Data), static_cast<const uint8*>(fd.m_Data) + fd.m_Size); }
             // our save files as they are on disk now (the game may write them before you load)
             f.ours = fd.m_Status == EFileStatus::Physical && fd.m_OwnerClientIndex == s.m_ClientIndex && strchr(fd.m_Filename, '.') != nullptr;
-            if (f.ours) f.disk = ReadWhole(fd.m_Filename, f.onDisk);
+            if (f.ours) f.disk = ReadGameFile(fd.m_Filename, f.onDisk, self);
             n.files.push_back(std::move(f));
         }
         if (RngPointers()) { memcpy(n.rng, g_RngState, sizeof(n.rng)); n.rndIndex = *g_RngIndex; n.rndSeed = *g_RngSeed; }
@@ -1527,14 +1628,9 @@ namespace pfo_android
             }
             if (f.ours)
             {
-                if (f.onDisk)
-                {
-                    FILE* o = fopen(f.name.c_str(), "wb");
-                    bool wrote = o && fwrite(f.disk.data(), 1, f.disk.size(), o) == f.disk.size();
-                    if (o && fclose(o) != 0) wrote = false;
-                    if (!wrote) __android_log_print(ANDROID_LOG_ERROR, "PFOSTATE", "snapshot %d: couldn't write %s back", n.id, f.name.c_str());
-                }
-                else remove(f.name.c_str());
+                // as it was then (a file made since is left alone: a save file is never deleted)
+                if (f.onDisk && !WriteGameFile(f.name.c_str(), f.disk, self))
+                    __android_log_print(ANDROID_LOG_ERROR, "PFOSTATE", "snapshot %d: couldn't write %s back", n.id, f.name.c_str());
             }
         }
         if (RngPointers()) { memcpy(g_RngState, n.rng, sizeof(n.rng)); *g_RngIndex = n.rndIndex; *g_RngSeed = n.rndSeed; }
@@ -1717,7 +1813,11 @@ namespace pfo_android
             }
             auto& st = g_SnapRunner[g_SnapLoad.id];
             gmi::ResolveObjects(st);   // (a snapshot through bytes names its objects by index)
-            if (g_SnapLoad.rejoin) __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: %zu made afresh (%.160s)", newId.size(), ValueString(made).c_str());
+            size_t sameId = 0;
+            for (auto& [o, nw] : newId) if (o == nw) sameId++;
+            if (g_SnapLoad.rejoin || sameId != newId.size())
+                __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "%s: %zu made afresh, %zu of them under the ids they had (%.120s)", g_SnapLoad.rejoin ? "rejoin" : "load",
+                    newId.size(), sameId, ValueString(made).c_str());
             std::string how = gmi::Apply(st, newId);
             gmi::ResetCollisionTree();
             g_SnapStandIn = false;   // (dropped by the restore)
@@ -1824,7 +1924,7 @@ namespace pfo_android
         fclose(f);
         remove(path);
         if (n < 1) return;
-        if (!strcmp(cmd, "solo")) g_StateRequest = 1;
+        if (!strcmp(cmd, "solo")) { if (n >= 2) g_LocalPlayers = std::clamp(slot, 1, c_PlayerLimit); g_StateRequest = 1; }   // ("solo 2": two players here)
         else if (!strcmp(cmd, "save")) { g_StateRequestSlot = slot; g_StateRequest = 2; }
         else if (!strcmp(cmd, "load")) { g_StateRequestSlot = slot; g_StateRequest = 3; }
         else if (!strcmp(cmd, "probe")) g_StateRequest = 9;
@@ -1836,6 +1936,7 @@ namespace pfo_android
         else if (!strcmp(cmd, "where")) g_StateRequest = 14;                                  // which game, without touching it
         else if (!strcmp(cmd, "sleep")) g_StateRequest = 15;                                  // a 550 ms hitch, nothing else
         else if (!strcmp(cmd, "netdrop")) { fakesteam::g_DropUntilMs = fakesteam::NowMs() + 1000LL * slot; __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "network dropped for %d s", slot); }
+        else if (!strcmp(cmd, "trace")) { g_TraceLeft = n > 1 ? slot : 60; __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "trace: the next %d frames", g_TraceLeft); }
         else if (!strcmp(cmd, "nosnap")) { g_TestNoSnap = true; __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "test: asking for a match without snapshots"); }
         else if (!strcmp(cmd, "rejoin")) g_StateRequest = 20;                                 // rejoin the last match
         else if (!strcmp(cmd, "rewind")) { g_StateRequestSlot = slot; g_StateRequest = 30; }   // rewind <seconds>
@@ -1993,7 +2094,8 @@ namespace pfo_android
         for (int p = 0; p < c_PlayerLimit; p++)
         {
             int c = g_Session.m_PlayerIndexToClientIndexMap[p];
-            if (c >= 0 && c < g_Session.m_ClientCount) m |= 1u << p;
+            // a device answers once, as its first seat (its further seats send no commands of their own)
+            if (c >= 0 && c < g_Session.m_ClientCount && g_Session.m_ClientData[c].m_PlayerData.m_PlayerIndex == p) m |= 1u << p;
         }
         return m;
     }
@@ -2286,6 +2388,7 @@ namespace pfo_android
             int c = s.m_PlayerIndexToClientIndexMap[p];
             if (c < 0 || c >= s.m_ClientCount) { last[p] = 0; continue; }
             auto& pd = s.m_ClientData[c].m_PlayerData;
+            if (pd.m_PlayerIndex != p) { last[p] = 0; continue; }   // (a device's further seat: its commands come with its first)
             if (pd.m_TailInputFrame < s.m_Frame) continue;
             uint32 cmd = (static_cast<uint32>(pd.m_InputBuffer[s.m_Frame & (countof(pd.m_InputBuffer) - 1)]) >> 16) & 0xffff;
             // an input can be stored for several frames in a row (input delay changes): once is enough
@@ -2418,7 +2521,7 @@ namespace pfo_android
     // Only between two players for now: a capture changes the game a little (it switches every
     // instance on and off again and rebuilds the collision tree: SnapCapture), which the rejoiner's
     // restore repeats, and a third player would have to repeat at R too.
-    constexpr uint8 c_RejoinStateVersion = 1;            // the hello's second byte: "I can take the state"
+    constexpr uint8 c_RejoinStateVersion = 2;   // (2: the seats of devices with several players)            // the hello's second byte: "I can take the state"
     constexpr uint32 c_RejoinStateMagic = 0x31524650u;   // PFR1
     bool RejoinByReplayOnly() { return access("/sdcard/Android/data/" PFO_PACKAGE "/files/rejoinreplay", F_OK) == 0; }   // testing: the old way
     uint32 g_RejoinTouchAt = 0;        // a replayed rejoin whose sender captured at R: touch there too
@@ -2429,9 +2532,11 @@ namespace pfo_android
     {
         uint64 id = 0; int inputDelay = 0, autoDelay = 0, player = -1; uint32 lastInput = 0, tail = 0;
         std::vector<uint32> inputs; std::vector<std::pair<uint32, int>> delays;
+        int seats = 1; std::vector<int> extraPlayer; std::vector<std::vector<uint32>> extraInputs;   // a device's further seats
     };
     struct RejoinPkg
     {
+        bool hasPlan = false; int assignedSeats = 0; int plan[8] = { -1, -1, -1, -1, -1, -1, -1, -1 };   // the seats as agreed
         // the replay, for falling back to it
         uint32 r = 0, sumAtR = 0, lastWritten = 0;
         std::vector<uint8> replay;
@@ -2511,6 +2616,19 @@ namespace pfo_android
             for (auto v : pd.m_InputBuffer) o.u32(static_cast<uint32>(v));
             for (auto& dc : cd.m_AutomaticInputDelayChanges) { o.u32(dc.m_InputFrame); o.i32(dc.m_InputDelay); }
         }
+        // several players on a device: the seats as agreed, and each further seat's inputs
+        o.u8(s.m_HasPlan ? 1 : 0); o.i32(s.m_AssignedSeatsCount);
+        for (int i = 0; i < c_PlayerLimit; i++) o.i32(s.m_Plan[i]);
+        for (int c = 0; c < s.m_ClientCount; c++)
+        {
+            o.u8(static_cast<uint8>(1 + s.Extras(c)));
+            for (int x = 0; x < s.Extras(c); x++)
+            {
+                auto& xd = s.m_ClientData[c].m_ExtraPlayerData[x];
+                o.i32(xd.m_PlayerIndex);
+                for (auto v : xd.m_InputBuffer) o.u32(static_cast<uint32>(v));
+            }
+        }
         // the save files as the others have them: ours on disk are in memory there
         uint32 files = 0;
         for (auto& fd : s.m_FileData) if (fd.m_Filename) files++;
@@ -2526,7 +2644,7 @@ namespace pfo_android
             if (st == EFileStatus::Physical && fd.m_OwnerClientIndex == s.m_ClientIndex)
             {
                 bool exists = false;
-                data = ReadWhole(fd.m_Filename, exists);
+                data = ReadGameFile(fd.m_Filename, exists, self);
                 st = exists ? EFileStatus::VirtualExists : EFileStatus::VirtualDoesNotExist;
                 has = exists;
             }
@@ -2595,7 +2713,7 @@ namespace pfo_android
     // the rejoiner: the match so far, played flat out like a load
     void RejoinByReplay(uint32 frame, uint32 checksum, uint32 lastWritten, std::vector<uint8> replay, const std::vector<uint32>& touches, bool touchAtR, CInstance* self)
     {
-        if (replay.size() < 10 || replay[8] != g_Rejoin.m.n) { RejoinFail("bad match data"); return; }
+        if (replay.size() < 10 || (replay[8] & 0x7f) != g_Rejoin.m.n) { RejoinFail("bad match data"); return; }
         if (g_Rejoin.conn != k_HSteamNetConnection_Invalid) g_SteamNetworkingSockets->CloseConnection(g_Rejoin.conn, 0, "replaying", false);
         g_Rejoin.conn = k_HSteamNetConnection_Invalid;
         g_Rejoin.frame = frame;
@@ -2641,6 +2759,17 @@ namespace pfo_android
             q.delays.resize(countof(PlayerData::m_InputBuffer));
             for (auto& d : q.delays) { d.first = in.u32(); d.second = in.i32(); }
             if (in.ok && c < static_cast<int>(m.ids.size()) && q.id != m.ids[c]) { why = "the players differ"; return false; }
+        }
+        p.hasPlan = in.u8() != 0; p.assignedSeats = in.i32();
+        for (int i = 0; i < c_PlayerLimit; i++) p.plan[i] = in.i32();
+        for (int c = 0; c < p.clients && in.ok; c++)
+        {
+            auto& q = p.cl[c];
+            q.seats = in.u8();
+            if (q.seats < 1 || q.seats > c_PlayerLimit) { why = "bad seat data"; return false; }
+            q.extraPlayer.assign(q.seats - 1, -1);
+            q.extraInputs.assign(q.seats - 1, std::vector<uint32>(countof(PlayerData::m_InputBuffer)));
+            for (int x = 0; x < q.seats - 1; x++) { q.extraPlayer[x] = in.i32(); for (auto& v : q.extraInputs[x]) v = in.u32(); }
         }
         size_t files = in.count(14);
         p.files.clear();
@@ -2754,6 +2883,22 @@ namespace pfo_android
             for (size_t j = 0; j < countof(pd.m_InputBuffer); j++) pd.m_InputBuffer[j] = static_cast<InputFlags_t>(q.inputs[j]);
             for (size_t j = 0; j < countof(cd.m_AutomaticInputDelayChanges); j++) { cd.m_AutomaticInputDelayChanges[j].m_InputFrame = q.delays[j].first; cd.m_AutomaticInputDelayChanges[j].m_InputDelay = q.delays[j].second; }
         }
+        // the seats as agreed, and the further seats' inputs (their frames are their device's)
+        s.m_HasPlan = p.hasPlan;
+        s.m_AssignedSeatsCount = p.assignedSeats;
+        for (int i = 0; i < c_PlayerLimit; i++) s.m_Plan[i] = p.plan[i];
+        for (int c = 0; c < p.clients; c++)
+        {
+            auto& q = p.cl[c];
+            s.m_SeatCount[c] = q.seats;
+            for (int x = 0; x < q.seats - 1 && x < c_ExtraSeatLimit; x++)
+            {
+                auto& xd = s.m_ClientData[c].m_ExtraPlayerData[x];
+                xd.m_PlayerIndex = q.extraPlayer[x];
+                xd.m_TailInputFrame = s.m_ClientData[c].m_PlayerData.m_TailInputFrame;
+                for (size_t j = 0; j < countof(xd.m_InputBuffer); j++) xd.m_InputBuffer[j] = static_cast<InputFlags_t>(q.extraInputs[x][j]);
+            }
+        }
         s.m_RequestedAutomaticInputDelay = p.cl[k].autoDelay;
         s.m_RequestedAutomaticInputDelayFrame = 0;
         {
@@ -2832,6 +2977,7 @@ namespace pfo_android
         g_Rejoin.phase = 3;
         g_Rejoin.frame = p.r;
         p = RejoinPkg();
+        TraceRejoin("the rejoiner");
         RejoinAfterReplay(self);
     }
 
@@ -3118,6 +3264,18 @@ namespace pfo_android
                 InputFlags_t in = pd.m_InputBuffer[(first + i) & (countof(pd.m_InputBuffer) - 1)];
                 memcpy(b.data() + 6 + 4 * i, &in, 4);
             }
+            // then the device's further seats, the same frames each (older builds read up to here)
+            int extras = s.Extras(c);
+            b.push_back(static_cast<uint8>(extras));
+            for (int x = 0; x < extras; x++)
+            {
+                auto& xd = s.m_ClientData[c].m_ExtraPlayerData[x];
+                for (int i = 0; i < count; i++)
+                {
+                    InputFlags_t in = xd.m_InputBuffer[(first + i) & (countof(xd.m_InputBuffer) - 1)];
+                    uint8 w[4]; memcpy(w, &in, 4); b.insert(b.end(), w, w + 4);
+                }
+            }
             for (int o = 0; o < s.m_ClientCount; o++)
                 if (o != s.m_ClientIndex && o != c && s.m_ClientData[o].m_ConnectSocket != k_HSteamNetConnection_Invalid)
                     fakesteam::SendRejoin(s.m_ClientData[o].m_SteamID, fakesteam::Msg::LostInputs, b);
@@ -3143,16 +3301,207 @@ namespace pfo_android
             InputFlags_t in; memcpy(&in, b.data() + 6 + 4 * (f - first), 4);
             pd.m_InputBuffer[f & (countof(pd.m_InputBuffer) - 1)] = in;
         }
+        // the device's further seats, when the message carries them
+        size_t at = 6 + 4u * count;
+        int extras = b.size() > at ? b[at] : 0;
+        at++;
+        for (int x = 0; x < extras && x < c_ExtraSeatLimit && b.size() >= at + 4u * count; x++, at += 4u * count)
+        {
+            auto& xd = cd.m_ExtraPlayerData[x];
+            for (uint32 f = pd.m_TailInputFrame + 1; f <= last; f++)
+            {
+                InputFlags_t in; memcpy(&in, b.data() + at + 4 * (f - first), 4);
+                xd.m_InputBuffer[f & (countof(xd.m_InputBuffer) - 1)] = in;
+            }
+            xd.m_TailInputFrame = last;
+        }
         __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "lost client %d: filled in inputs %u..%u from another player", c, pd.m_TailInputFrame + 1, last);
         pd.m_TailInputFrame = last;
         if (cd.m_LastInputFrame < last) cd.m_LastInputFrame = last;
     }
 
     // a new match (not a rejoin, not a load): its first timeline
+    // ---- several players on a device, online: the lobby's seats ----
+    // Each device puts the slots its players locked in (WHO'S PLAYING) in its lobby member data
+    // ("pfo_slots": "0,2"). The host works the seats out from everyone's: a slot two devices want
+    // goes to the one earlier in the lobby, the other moves to the first free slot; a device that
+    // set none gets one seat, as always. It puts them in the lobby data ("pfo_plan": per seat the
+    // device's id, or "-"), and at the match start every device takes the seats from there.
+    std::mutex g_SlotsMutex;
+    std::vector<std::pair<int, std::string>> g_MySlots;   // our players' locked-in slots and their controllers (empty: one seat, as always)
+    std::string g_MySlotsPublished = "\x01";
+    void SetMySlots(std::vector<std::pair<int, std::string>> slots)
+    {
+        std::sort(slots.begin(), slots.end());
+        std::lock_guard<std::mutex> l(g_SlotsMutex);
+        g_MySlots = slots;
+        g_MySlotsPublished = "\x01";   // (published again at the next tick)
+    }
+    // "0:KEYS,2:PAD 1" -> the slots, and the controller in each
+    std::vector<std::pair<int, std::string>> ParseSlotSpec(const std::string& t)
+    {
+        std::vector<std::pair<int, std::string>> v;
+        for (size_t k = 0; k < t.size();)
+        {
+            size_t e = t.find(',', k);
+            std::string f = t.substr(k, e == std::string::npos ? std::string::npos : e - k);
+            if (!f.empty() && f[0] >= '0' && f[0] <= '9')
+            {
+                int x = atoi(f.c_str());
+                size_t colon = f.find(':');
+                if (x >= 0 && x < c_PlayerLimit) v.push_back({ x, colon == std::string::npos ? std::string() : f.substr(colon + 1) });
+            }
+            if (e == std::string::npos) break;
+            k = e + 1;
+        }
+        return v;
+    }
+    std::vector<int> ParseSlots(const std::string& t)
+    {
+        std::vector<int> v;
+        for (auto& sp : ParseSlotSpec(t)) v.push_back(sp.first);
+        return v;
+    }
+    // the host: the seats from everyone's slots ("" while nobody set any)
+    std::string WorkOutPlan()
+    {
+        auto& mem = fakesteam::g_Lobby.members;
+        std::vector<std::vector<int>> want(mem.size());
+        bool any = false;
+        for (size_t i = 0; i < mem.size(); i++)
+        {
+            auto it = mem[i].data.find("pfo_slots");
+            if (it != mem[i].data.end() && !it->second.empty()) { want[i] = ParseSlots(it->second); any = true; }
+        }
+        if (!any) return "";
+        uint64 seat[c_PlayerLimit] = {};
+        std::vector<size_t> later;   // claims that lost their slot, and devices that set none
+        for (int slot = 0; slot < c_PlayerLimit; slot++)
+            for (size_t i = 0; i < mem.size(); i++)
+                if (std::find(want[i].begin(), want[i].end(), slot) != want[i].end())
+                {
+                    if (!seat[slot]) seat[slot] = mem[i].id;
+                    else later.push_back(i);
+                }
+        for (size_t i = 0; i < mem.size(); i++) if (want[i].empty()) later.push_back(i);
+        for (size_t i : later)
+            for (int slot = 0; slot < c_PlayerLimit; slot++) if (!seat[slot]) { seat[slot] = mem[i].id; break; }
+        std::string out;
+        for (int slot = 0; slot < c_PlayerLimit; slot++) out += (slot ? "," : "") + (seat[slot] ? std::to_string(seat[slot]) : std::string("-"));
+        return out;
+    }
+    // every frame: our slots into the lobby; the host keeps the plan up to date
+    void LobbySeatsTick()
+    {
+        static int64 last = 0;
+        int64 now = fakesteam::NowMs();
+        if (now - last < 250) return;
+        last = now;
+        std::lock_guard<std::recursive_mutex> net(fakesteam::g_NetMutex);
+        if (!fakesteam::g_InLobby) { std::lock_guard<std::mutex> l(g_SlotsMutex); g_MySlotsPublished = "\x01"; return; }
+        std::string mine;
+        {
+            std::lock_guard<std::mutex> l(g_SlotsMutex);
+            for (size_t k = 0; k < g_MySlots.size(); k++)
+            {
+                std::string input = g_MySlots[k].second;
+                for (char& ch : input) if (ch == ',' || ch == ':') ch = ' ';
+                mine += (k ? "," : "") + std::to_string(g_MySlots[k].first) + ":" + input;
+            }
+            if (mine == g_MySlotsPublished) mine = "\x01";
+            else g_MySlotsPublished = mine;
+        }
+        if (mine != "\x01") fakesteam::SetMemberData("pfo_slots", mine);
+        if (fakesteam::g_IsOwner)
+        {
+            std::string plan = WorkOutPlan();
+            auto* cur = fakesteam::FindLobbyData(fakesteam::g_Lobby.id, "pfo_plan");
+            if ((cur ? *cur : std::string()) != plan)
+            {
+                fakesteam::OwnerMutate([&] { if (plan.empty()) fakesteam::g_Lobby.data.erase("pfo_plan"); else fakesteam::g_Lobby.data["pfo_plan"] = plan; });
+                __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "lobby seats: %s", plan.empty() ? "one each" : plan.c_str());
+            }
+        }
+    }
+    // for the setup pages: who sits where by the host's plan, "device~controller" per slot ("" empty;
+    // ours flagged "*"; a device that set nothing up: its name alone)
+    std::vector<std::string> LobbySeatNames()
+    {
+        std::vector<std::string> out(c_PlayerLimit);
+        std::lock_guard<std::recursive_mutex> net(fakesteam::g_NetMutex);
+        if (!fakesteam::g_InLobby) return out;
+        auto* plan = fakesteam::FindLobbyData(fakesteam::g_Lobby.id, "pfo_plan");
+        if (!plan)
+        {
+            // nobody set anything up: one seat per device, in lobby order
+            auto& mem = fakesteam::g_Lobby.members;
+            for (size_t i = 0; i < mem.size() && i < out.size(); i++) out[i] = (mem[i].id == fakesteam::g_MyId ? "*" : "") + mem[i].name;
+            return out;
+        }
+        size_t k = 0;
+        for (int slot = 0; slot < c_PlayerLimit && k <= plan->size(); slot++)
+        {
+            size_t e = plan->find(',', k);
+            std::string f = plan->substr(k, e == std::string::npos ? std::string::npos : e - k);
+            if (!f.empty() && f != "-")
+            {
+                uint64 id = strtoull(f.c_str(), nullptr, 10);
+                if (auto* m = fakesteam::g_Lobby.Find(id))
+                {
+                    std::string input;
+                    auto it = m->data.find("pfo_slots");
+                    if (it != m->data.end()) for (auto& sp : ParseSlotSpec(it->second)) if (sp.first == slot) input = sp.second;
+                    out[slot] = (id == fakesteam::g_MyId ? "*" : "") + m->name + (input.empty() ? "" : "~" + input);
+                }
+            }
+            if (e == std::string::npos) break;
+            k = e + 1;
+        }
+        return out;
+    }
+
     void MatchStarts()
     {
         fakesteam::g_Timeline = 0; fakesteam::g_TimelineTag = 0;
         fakesteam::g_TimelineNews = fakesteam::TimelineNews();
+        // the seats the lobby agreed on (several players on a device): closed up from P1
+        std::string plan;
+        {
+            std::lock_guard<std::recursive_mutex> net(fakesteam::g_NetMutex);
+            auto* p = fakesteam::g_InLobby ? fakesteam::FindLobbyData(fakesteam::g_Lobby.id, "pfo_plan") : nullptr;
+            if (p) plan = *p;
+        }
+        if (plan.empty()) return;
+        auto& s = g_Session;
+        int seats[c_PlayerLimit], n = 0;
+        size_t k = 0;
+        for (int slot = 0; slot < c_PlayerLimit; slot++)
+        {
+            size_t e = plan.find(',', k);
+            std::string f = plan.substr(k, e == std::string::npos ? std::string::npos : e - k);
+            if (!f.empty() && f != "-")
+            {
+                uint64 id = strtoull(f.c_str(), nullptr, 10);
+                for (int c = 0; c < s.m_ClientCount; c++) if (s.m_ClientData[c].m_SteamID == id) { seats[n++] = c; break; }
+            }
+            if (e == std::string::npos) break;
+            k = e + 1;
+        }
+        bool plain = n == s.m_ClientCount;   // one seat each, in order: as always
+        for (int i = 0; i < n && plain; i++) plain = seats[i] == i;
+        if (plain || n == 0) return;
+        for (int c = 0; c < c_ClientLimit; c++) s.m_SeatCount[c] = 1;
+        for (int i = 0; i < c_PlayerLimit; i++) s.m_Plan[i] = i < n ? seats[i] : -1;
+        for (int c = 0; c < s.m_ClientCount; c++)
+        {
+            int count = 0;
+            for (int i = 0; i < n; i++) count += seats[i] == c;
+            s.m_SeatCount[c] = std::max(1, count);
+        }
+        s.m_HasPlan = true;
+        std::string line;
+        for (int i = 0; i < n; i++) line += (i ? " " : "") + std::string("P") + std::to_string(i + 1) + "=" + std::to_string(seats[i]);
+        __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "match seats from the lobby: %s", line.c_str());
     }
 
     // Is our connection to this player through the room server's relay? It carries a few kilobytes
@@ -3312,6 +3661,7 @@ namespace pfo_android
             std::vector<uint8> b = RejoinStateBody(stateFor, stateR, stateTo, self);
             bool ok = fakesteam::SendRejoin(stateTo, fakesteam::Msg::RejoinState, b);
             RejoinGrace(stateFor, stateR);
+            TraceRejoin("the rejoin's sender");
             __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "rejoin: client %d asked for the match: sent %zu bytes up to frame %u, the game as it is and its replay (%s)", stateFor,
                 b.size(), stateR, ok ? "ok" : "FAILED");
         }
@@ -3618,6 +3968,7 @@ namespace pfo_android
         if (g_MpSavePending) { int i = g_MpSavePending; bool a = g_MpSavePendingAuto; g_MpSavePending = 0; g_MpSavePendingAuto = false; MpSave(i, self, a); }
         if (int a = g_VoteAnswerRequest.exchange(0)) AnswerVote(a == 1);
         TimelineTick();
+        LobbySeatsTick();
         if (g_ReseedPending) { int t = g_ReseedPending; g_ReseedPending = 0; StartReseed(t, self); return; }
         ReadTestCommand();
         int req = g_StateRequest.exchange(0);
@@ -3650,7 +4001,7 @@ namespace pfo_android
         else if (req == 14)
         {
             RValue v; int game = GlobalGet("currGameID", v, self) ? static_cast<int>(YYGetReal(&v, 0)) : -1;
-            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "where: game %d, frame %u, clients %d, room %s", game, g_Session.m_Frame, g_Session.m_OnlineState == EOnlineState::Online ? g_Session.m_ClientCount : 0, Snap("room", 0, self).c_str());
+            __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "where: game %d, frame %u, clients %d, room %s, seats %d, extra inputs %d", game, g_Session.m_Frame, g_Session.m_OnlineState == EOnlineState::Online ? g_Session.m_ClientCount : 0, Snap("room", 0, self).c_str(), g_Session.m_AssignedSeatsCount, g_Session.m_ExtraChunksWritten);
         }
         else if (req == 10) SnapTest("capture", self);
         else if (req == 11 || (req == 0 && g_SnapTest == 1)) SnapTest("restore", self);
@@ -3684,6 +4035,41 @@ namespace pfo_android
         else lastFrame = 0;
         std::lock_guard<std::mutex> lock(g_SeatMutex);
         g_SeatInfo = v;
+    }
+
+    // testing: the whole game state, frame by frame, to files (tests/tracediff.py finds where two
+    // devices' traces first differ). ss_cmd "trace <frames>" traces from now; files/tracerejoin holding
+    // "<frames>" makes a rejoin's sender and the rejoiner each trace from the rejoin on (TraceRejoin).
+    // Each new frame: files/trace/<tag>/<frame>.txt (the tag from files/tracetag, else "t"): a picture
+    // line, then the items (pfo_snapshot "items": name, fingerprint, short value).
+    void TraceRejoin(const char* who)
+    {
+        int k = 0;
+        if (FILE* f = fopen("/sdcard/Android/data/" PFO_PACKAGE "/files/tracerejoin", "r")) { if (fscanf(f, "%d", &k) != 1) k = 60; fclose(f); }
+        if (k <= 0) return;
+        g_TraceLeft = k;
+        __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "trace: %s: the next %d frames from frame %u", who, k, g_Session.m_Frame);
+    }
+    void TraceFrame(CInstance* self)
+    {
+        static uint32 last = 0;
+        if (g_TraceLeft <= 0 || g_Session.m_OnlineState != EOnlineState::Online || g_Restore.active || g_Session.m_Frame == last) return;
+        last = g_Session.m_Frame;
+        char tag[64] = "t";
+        if (FILE* f = fopen("/sdcard/Android/data/" PFO_PACKAGE "/files/tracetag", "r")) { if (fscanf(f, "%63s", tag) != 1) strcpy(tag, "t"); fclose(f); }
+        std::string dir = "/sdcard/Android/data/" PFO_PACKAGE "/files/trace";
+        mkdir(dir.c_str(), 0700);
+        dir += "/"; dir += tag;
+        mkdir(dir.c_str(), 0700);
+        std::string txt = "frame " + std::to_string(g_Session.m_Frame) + (g_Session.m_ReplayReader.m_Buffer ? " replaying" : "") + "\n";
+        txt += "picture\t" + Snap("picture", 0, self) + "\n";
+        // (destroyed instances count in instance_count until the step ends: a restore's step has its
+        // dropped ones still in it, as PFO's checksum knows)
+        if (g_ChecksumInstanceFix != 0) txt += "instancefix\t" + std::to_string(g_ChecksumInstanceFix) + "\n";
+        txt += Snap("items", 0, self);
+        std::string path = dir + "/" + std::to_string(g_Session.m_Frame) + ".txt";
+        if (FILE* f = fopen(path.c_str(), "w")) { fwrite(txt.data(), 1, txt.size(), f); fclose(f); }
+        if (--g_TraceLeft == 0) __android_log_print(ANDROID_LOG_INFO, "PFOSTATE", "trace: done at frame %u (%s)", g_Session.m_Frame, tag);
     }
 
     // development: files/inputlog makes every frame's input (and the random generator's place) go to
@@ -3754,6 +4140,7 @@ namespace pfo_android
                 && GlobalGet("paused", v, self) && YYGetBool(&v, 0);
         }
         InputLog(self);
+        TraceFrame(self);
         if (g_SnapLoad.phase == 0) ScanCommands(self);
         PublishVote();
         PublishEstimates();
@@ -3862,6 +4249,8 @@ namespace pfo_android
 static void pfo_runner_mark(RValue& r, CInstance*, CInstance*, int, RValue*) { pfo_android::gmi::Mark(); r.kind = VALUE_UNDEFINED; }
 static void pfo_runner_rehide(RValue& r, CInstance*, CInstance*, int, RValue*) { init_real(r, pfo_android::gmi::Rehide()); }
 static void pfo_runner_settle(RValue& r, CInstance*, CInstance*, int, RValue*) { init_real(r, pfo_android::gmi::Settle()); }
+// pfo_runner_maxid(set): the runner's instance id counter, before setting it to set (when set >= 0)
+static void pfo_runner_maxid(RValue& r, CInstance*, CInstance*, int argc, RValue* arg) { init_real(r, pfo_android::gmi::MaxId(argc > 0 ? static_cast<int>(YYGetReal(arg, 0)) : -1)); }
 
 // pfo_android_screen(x, y, w, h, window w, window h): the game reports where it draws its picture each frame
 static void pfo_android_screen(RValue& r, CInstance* self, CInstance*, int argc, RValue* arg)

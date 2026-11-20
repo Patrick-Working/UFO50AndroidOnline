@@ -45,7 +45,7 @@ namespace pfo_android
         };
         constexpr uint32 c_RunRoom = 0xa008f8, c_RoomMaxId = 0x772c94, c_CreateCounter = 0x75c8c8,
             c_RngState = 0x74fa60, c_RngIndex = 0x74f654, c_RngSeed = 0xa1f8a4, c_DrawAutomatic = 0xa008a3,
-            c_UpdateActive = 0x11e740, c_RebuildTree = 0x176b00,
+            c_UpdateActive = 0x11e740, c_RebuildTree = 0x176b00, c_DeactiveListDirty = 0x6deca4,
             c_ChangeArray = 0xa21e10, c_ChangeCount = 0xa21e1c, c_ListRemove = 0x107c30, c_ObjectAddInstance = 0x1077a0, c_Free = 0x3f97a0;
 
         uint8* g_Base = nullptr;
@@ -142,7 +142,7 @@ namespace pfo_android
             static const struct { const char* name; uint32 rva; } data[] = {
                 { "Run_Room", c_RunRoom }, { "room_maxid", c_RoomMaxId }, { "_ZN9CInstance23ms_CurrentCreateCounterE", c_CreateCounter },
                 { "state", c_RngState }, { "g_RndIndex", c_RngIndex }, { "g_nRandSeed", c_RngSeed }, { "Draw_Automatic", c_DrawAutomatic },
-                { "_Z11RebuildTreeb", c_RebuildTree },
+                { "_Z11RebuildTreeb", c_RebuildTree }, { "g_DeactiveListDirty", c_DeactiveListDirty },
             };
             for (auto& d : data) if (!strcmp(name, d.name)) return g_Base + d.rva;
             if (!strcmp(name, "_ZN5CRoom12UpdateActiveEv")) return reinterpret_cast<void*>(&UpdateActive);
@@ -333,6 +333,7 @@ PFO_BUILTIN(pfo_android_screen)
 PFO_BUILTIN(pfo_runner_mark)
 PFO_BUILTIN(pfo_runner_rehide)
 PFO_BUILTIN(pfo_runner_settle)
+PFO_BUILTIN(pfo_runner_maxid)
 PFO_BUILTIN(steam_get_achievement)
 PFO_BUILTIN(steam_set_achievement)
 PFO_BUILTIN(steam_reset_all_stats_achievements)

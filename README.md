@@ -102,7 +102,7 @@ The full list is in [CHANGELOG.md](CHANGELOG.md). How save states, rewind and re
 | ![Lobby browser with a lobby found](docs/screenshots/lobby_browser.png) | ![In the lobby, both players listed](docs/screenshots/lobby_joined.png) |
 | **Online lobby list**: lobbies on your network and on the internet, plus HOST PUBLIC / HOST PRIVATE / JOIN BY CODE | **In the lobby**: both players are listed |
 | ![Players panel](docs/screenshots/players_panel.png) | ![Layout editor](docs/screenshots/layout_editor.png) |
-| **Players panel**: touch and each gamepad to P1-P4, your name, join code, UPnP, hot seat | **Layout editor**: move, resize and hide controls, opacity, 4-way / 8-way d-pad |
+| **Players panel**: touch and each gamepad to P1-P4, your name, join code, UPnP, WHO'S PLAYING | **Layout editor**: move, resize and hide controls, opacity, 4-way / 8-way d-pad |
 | ![Save states](docs/screenshots/save_states.png) | ![Loading a save online](docs/screenshots/online_load_vote.png) |
 | **Save states**: the save list with each save's picture, game, players and time into the game, and the REWIND buttons with how long each takes | **Loading online**: the other players see what you want to load and accept or decline |
 | ![Rewind asks first when it will take a while](docs/screenshots/rewind_confirm.png) | ![Rewinding](docs/screenshots/rewinding.png) |
@@ -145,11 +145,12 @@ it shows in the session pill after the chips. See *Overlay* in [CHANGELOG.md](CH
 - **Players panel**: tap your player chip (top left), or use the game's own *Settings > Joypad
   Config > Pad Assign*. Bind the touch controls and each connected gamepad to P1-P4 or OFF. Each pad
   gets a numbered badge.
-- **Hot seat**: in turn-based games, the touch controls follow whoever's turn it is. This covers
-  Party House, Bug Hunter, Mortol II, Lords of Diskonia, Avianos, Hot Foot and Grimstone. Every
-  player has a chip; the one whose turn it is is solid, and it pulses when the turn changes.
-
-**Touch controls**
+- **Several players on one device (WHO'S PLAYING)**: every controller is a player of its own, the
+  touch controls and each gamepad. Before solo play (START SOLO PLAY) and in an online lobby (the
+  Players panel), tap a slot P1-P8 to take it with touch; a pad joins with A, moves with the d-pad,
+  locks in with A and backs out with B. Solo play then records every player, so saves and rewind
+  work for all of them; online, each device's players get the slots they locked in (the host sorts
+  out clashes) and the match carries them through saves, loads and rejoins.
 - A classic d-pad (8-way by default, with a 4-way switch), the two action buttons, MENU and BACK.
 - Buttons carry the labels the game itself shows: the keys it has bound (Z / X, or DEL / END on
   player 2's side of the keyboard). They follow your rebinds and use UFO 50's own font and colours.
@@ -400,7 +401,8 @@ app id and wire number there, so they never mix with other okplay games.
   4-way / 8-way d-pad and the quick buttons are in the panel. ACCEPT keeps it, CANCEL doesn't.
 - **Gamepads**: connect them, then tap your player chip to open the players panel and give each
   pad a player.
-- **Hot seat**: tap the player chip and turn HOT SEAT on, then pass the phone around.
+- **Several players on one phone**: START SOLO PLAY (or, online, the Players panel's WHO'S PLAYING),
+  then each controller picks a slot and locks it in.
 - **Online**: choose *Online* from the main menu.
   - HOST PUBLIC to be listed, HOST PRIVATE to get a code, JOIN BY CODE to enter one.
   - Everyone needs the same version of this build (Android or Windows), with the same game version

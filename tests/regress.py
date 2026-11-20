@@ -35,6 +35,7 @@ TESTS = [
     ("rejoin-replay",   WIN,  ["rejoin.py", "game"], {"REJOIN_REPLAY": "1"}, 40),
     ("pauseseat",       WIN,  ["pauseseat.py", "5565"], {}, 40),
     ("duo",             WIN,  ["duo.py", "all"], {}, 40),
+    ("seats-online",    WIN,  ["seats_online.py"], {}, 40),
     ("cross-win",       WIN,  ["cross.py", "win", "5565"], {}, 50),
     ("cross-android",   WIN,  ["cross.py", "android", "5565"], {}, 50),
     ("win-quickslot",   WIN,  ["quickslot.py"], {}, 20),

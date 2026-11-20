@@ -343,7 +343,7 @@ if ($Windows) {
         ForEach-Object { Copy-Item -Recurse -LiteralPath $_.FullName -Destination $win }
     Copy-Item -LiteralPath $winKit -Destination (Join-Path $win "PFO.dll")
     $out = Utmt @("load", (Join-Path $modded "data.win"), "-s", (Join-Path $Root "scripts\windows_patch.csx"), "-o", (Join-Path $win "data.win"), "-f") @{ PFO_SNAPSHOT_GML = (Join-Path $Root "scripts\pfo_snapshot.gml") }
-    $out | Where-Object { $_ -match "^(extension|save folder|lobby menu|screen|snapshots|runtime sprites|FAILED)" } | ForEach-Object { Write-Host "   $_" }
+    $out | Where-Object { $_ -match "^(extension|save folder|lobby menu|screen|snapshots|runtime sprites|paths and grids|FAILED)" } | ForEach-Object { Write-Host "   $_" }
     $patched = ($out -match "^windows patch: OK") -and ($out -match "^save folder: game name ufo50 -> ufo50_online") -and (Test-Path (Join-Path $win "data.win"))
     $steamLeft = $steamFiles | Where-Object { Test-Path (Join-Path $win $_) }
     if (-not $patched -or $steamLeft) {
@@ -368,7 +368,7 @@ $game = Join-Path $Work "game"
 if (Test-Path $game) { Remove-Item -Recurse -Force $game }
 Copy-Item -Recurse $modded $game
 $out = Utmt @("load", (Join-Path $modded "data.win"), "-s", (Join-Path $Root "scripts\android_patch.csx"), "-o", (Join-Path $game "data.win"), "-f") @{ PFO_SNAPSHOT_GML = (Join-Path $Root "scripts\pfo_snapshot.gml") }
-$out | Where-Object { $_ -match "hot seat|pad bindings|overlay support|lobby menu|quit:|join timeout|Steam lobby|snapshots|runtime sprites" } | ForEach-Object { Write-Host "   $_" }
+$out | Where-Object { $_ -match "hot seat|pad bindings|overlay support|lobby menu|quit:|join timeout|Steam lobby|snapshots|runtime sprites|paths and grids" } | ForEach-Object { Write-Host "   $_" }
 $out = Utmt @("load", (Join-Path $game "data.win"), "-s", (Join-Path $Root "scripts\export_overlay_art.csx")) @{ OUT_DIR = $game }
 Ok "game data"
 

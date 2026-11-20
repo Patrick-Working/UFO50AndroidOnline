@@ -33,7 +33,7 @@ string[] moved = {
 };
 // ours, called by the game code this script adds: the invite-code box, where the game draws its
 // picture, and the three that scripts/pfo_snapshot.gml calls
-string[] added = { "pfo_android_ask_code", "pfo_android_screen", "pfo_runner_mark", "pfo_runner_rehide", "pfo_runner_settle" };
+string[] added = { "pfo_android_ask_code", "pfo_android_screen", "pfo_runner_mark", "pfo_runner_rehide", "pfo_runner_settle", "pfo_runner_maxid" };
 
 var pfo = Data.Extensions.FirstOrDefault(e => e.Name.Content == "PFO");
 if (pfo == null) throw new ScriptException("PFO extension not found - is PFO 50 installed in this data.win?");
@@ -168,6 +168,20 @@ if (pfoFile == null) throw new ScriptException("the PFO extension has no PFO.dll
         // delay on its session line, CATCHING UP as a message), as the phones' overlay does
         ("gml_Object_oController_Draw_64", "if (showDelay && (pfo_get_frame() > 4 || playingReplay))",
             "if (false && showDelay && (pfo_get_frame() > 4 || playingReplay))"),
+        // Several players on one device (a session's device can carry several seats, libPFO): the
+        // input callback is asked once per local seat, global.pfo_local_seat saying which, and reads
+        // that local player's controls; the game's own queued commands go with the first seat only.
+        // Going online, the seats already planned (device by device) are the game's onlinePlayers.
+        ("gml_GlobalScript_scrGetInputCallback", "    scrGetInput(0, UnknownEnum.Value_3);\n    return pfo_add_extra_input(arg0, scrGetPFOFlagsFromInput());",
+            "    scrGetInput(0, UnknownEnum.Value_3);\n    if (variable_global_exists(\"pfo_local_seat\") && global.pfo_local_seat > 0)\n    {\n        return scrGetPFOFlagsFromInput();\n    }\n    return pfo_add_extra_input(arg0, scrGetPFOFlagsFromInput());"),
+        ("gml_GlobalScript_scrGetInput", "    if ((_getInputType & UnknownEnum.Value_1) != UnknownEnum.Value_0 && pfo_is_online())\n    {\n        arg0 = 0;\n    }",
+            "    if ((_getInputType & UnknownEnum.Value_1) != UnknownEnum.Value_0 && pfo_is_online())\n    {\n        arg0 = variable_global_exists(\"pfo_local_seat\") ? global.pfo_local_seat : 0;\n    }"),
+        ("gml_GlobalScript_scrOnlineStateChangedCallback", "            global.onlinePlayers[i] = (i < clientCount) ? i : -1;",
+            "            global.onlinePlayers[i] = (i < 8 && pfo_player_get_client_index(i) >= 0) ? pfo_player_get_client_index(i) : ((i < clientCount) ? i : -1);"),
+        // the players' setup: in a session, local seat k reads the keyboard layout and pad its player
+        // locked in (global.pfo_seat_keys_k: the game's P1 / P2 keys, -1 none; pfo_seat_pad_k: a pad slot, -1 none)
+        ("gml_GlobalScript_scrGetInput", "        var _slot = global.joySlot[arg0];\n        holdUp = keyboard_check(key_map[0]);",
+            "        var _slot = global.joySlot[arg0];\n        if ((_getInputType & 1) != 0 && pfo_is_online() && variable_global_exists(\"pfo_seat_sources\") && global.pfo_seat_sources)\n        {\n            var _sk = variable_global_get(\"pfo_seat_keys_\" + string(arg0));\n            key_map = (_sk >= 0) ? global.keyMap[_sk] : [2, 2, 2, 2, 2, 2, 2];\n            _slot = variable_global_get(\"pfo_seat_pad_\" + string(arg0));\n        }\n        holdUp = keyboard_check(key_map[0]);"),
     };
     var texts = new Dictionary<string, string>();   // several edits to one script build on each other
     foreach (var (name, find, replace) in edits)
@@ -267,6 +281,27 @@ if (pfoFile == null) throw new ScriptException("the PFO extension has no PFO.dll
         }
         sgroup.Import();
         Console.WriteLine("runtime sprites: " + routed + " scripts route through the snapshot wrappers");
+
+        // Paths and motion-planning grids (games 45 and 50, library 50 and 12): mp_grid_create, mp_grid_destroy and
+        // path_start go through pfo_snapshot.gml's wrappers, which note what a snapshot can't read back
+        // (a grid's size, what a relative path is measured from)
+        var pgroup = new UndertaleModLib.Compiler.CodeImportGroup(Data);
+        int proutes = 0;
+        var pcall = new System.Text.RegularExpressions.Regex(@"(?<![A-Za-z0-9_])(mp_grid_create|mp_grid_destroy|path_start)\(");
+        foreach (var code in Data.Code)
+        {
+            string cn = code.Name.Content;
+            if (code.ParentEntry != null || cn.Contains("pfo_snapshot")) continue;
+            if (!(cn.StartsWith("gml_Object_o45_") || cn.StartsWith("gml_Object_o50_") || cn.StartsWith("gml_GlobalScript_scr45_") || cn.StartsWith("gml_GlobalScript_scr50_"))) continue;
+            string text;
+            try { text = new Underanalyzer.Decompiler.DecompileContext(sctx, code, Data.ToolInfo.DecompilerSettings).DecompileToString(); }
+            catch { continue; }
+            if (!pcall.IsMatch(text)) continue;
+            pgroup.QueueReplace(cn, pcall.Replace(text, "pfo_$1("));
+            proutes++;
+        }
+        pgroup.Import();
+        Console.WriteLine("paths and grids: " + proutes + " scripts route through the snapshot wrappers");
     }
 }
 

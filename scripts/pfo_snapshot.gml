@@ -33,6 +33,10 @@
 // uses: layer_get_name layer_get_visible layer_get_vspeed layer_get_x layer_get_y layer_hspeed
 // uses: layer_set_visible layer_vspeed layer_x layer_y method method_get_index method_get_self real
 // uses: room_get_name room_goto show_debug_message static_get static_set string string_copy
+// uses: ds_map_destroy ds_grid_destroy ds_stack_destroy ds_queue_destroy ds_priority_destroy
+// uses: path_add path_exists path_get_number path_get_point_x path_get_point_y path_get_point_speed path_get_closed
+// uses: path_get_kind path_get_precision path_clear_points path_add_point path_set_closed path_set_kind path_set_precision
+// uses: path_start path_end mp_grid_create mp_grid_destroy mp_grid_get_cell mp_grid_clear_all mp_grid_add_cell
 // uses: string_delete string_pos struct_remove tilemap_get tilemap_get_height tilemap_get_width
 // uses: tilemap_set typeof variable_global_exists variable_global_get variable_global_set
 // uses: variable_instance_get variable_instance_get_names variable_instance_set
@@ -84,6 +88,16 @@ function pfo_snapshot(_cmd, _arg)
             if (_arg != 0) variable_struct_set(global.pfo_snap_keptby, string(_arg), global.pfo_snap_kept);
             show_debug_message("PFOSNAP keep: " + string(array_length(global.pfo_snap_kept)) + " items");
             return array_length(global.pfo_snap_kept);
+        case "items":   // testing (libPFO's trace): the whole state, a line per item: name, fingerprint, short value
+            var _it = pfo_snap_items();
+            var _tb = buffer_create(65536, buffer_grow, 1);
+            for (var i = 0; i < array_length(_it); i++)
+                buffer_write(_tb, buffer_text, _it[i][0] + "\t" + _it[i][1] + "\t" + string_replace_all(_it[i][2], "\n", " ") + "\n");
+            buffer_write(_tb, buffer_u8, 0);
+            buffer_seek(_tb, buffer_seek_start, 0);
+            var _ts = buffer_read(_tb, buffer_string);
+            buffer_delete(_tb);
+            return _ts;
         case "diff":   // log what changed since "keep" (the one kept under this frame, when given)
             var _base = global.pfo_snap_kept;
             if (_arg != 0 && variable_global_exists("pfo_snap_keptby") && is_struct(global.pfo_snap_keptby) && variable_struct_exists(global.pfo_snap_keptby, string(_arg)))
@@ -187,8 +201,55 @@ function pfo_snap_ds_kind(_t)
         case "ds_stack": return ds_type_stack;
         case "ds_queue": return ds_type_queue;
         case "ds_priority": return ds_type_priority;
+        case "path": return 100;      // paths a game adds while it runs (pfo_snap_res_*)
+        case "mp_grid": return 101;   // motion-planning grids
     }
     return -1;
+}
+
+// ---- paths and motion-planning grids ----
+// Two games' enemies and units (ids 45 and 50: library 50 and 12) walk paths the game makes at run time (path_add, filled
+// by mp_grid_path from a grid of where they can go). They're kept like data structures: their
+// contents copied, made again where they're missing, refs to them mapped. A grid's size can't be
+// read back, so the build routes mp_grid_create and mp_grid_destroy through the wrappers below,
+// which note it; path_start goes through pfo_path_start, which notes what a relative path is
+// measured from (pfo_snap_pstart), so following one can be started again where it was.
+function pfo_snap_grids_reg()
+{
+    if (!variable_global_exists("pfo_snap_grids") || !is_struct(global.pfo_snap_grids)) global.pfo_snap_grids = {};
+    return global.pfo_snap_grids;
+}
+function pfo_mp_grid_create(_l, _t, _h, _v, _cw, _ch)
+{
+    var _g = mp_grid_create(_l, _t, _h, _v, _cw, _ch);
+    variable_struct_set(pfo_snap_grids_reg(), string(real(_g)), [_l, _t, _h, _v, _cw, _ch]);
+    return _g;
+}
+function pfo_mp_grid_destroy(_g)
+{
+    var _reg = pfo_snap_grids_reg();
+    if (variable_struct_exists(_reg, string(real(_g)))) struct_remove(_reg, string(real(_g)));
+    mp_grid_destroy(_g);
+}
+function pfo_path_start(_p, _sp, _end, _abs)
+{
+    pfo_snap_pstart = [_abs, x, y];
+    path_start(_p, _sp, _end, _abs);
+}
+// data structures, paths and grids alike: is it there
+function pfo_snap_res_exists(_n, _k)
+{
+    if (_k == 100) return path_exists(_n);
+    if (_k == 101) return variable_struct_exists(pfo_snap_grids_reg(), string(real(_n)));
+    return ds_exists(_n, _k);
+}
+// a new one for a record of the snapshot (a grid needs its size)
+function pfo_snap_res_new(_r)
+{
+    if (_r.kind == 100) return path_add();
+    if (_r.kind == 101) { var _gm = _r.data[0]; return pfo_mp_grid_create(_gm[0], _gm[1], _gm[2], _gm[3], _gm[4], _gm[5]); }
+    var _want = pfo_snap_ref_number(_r.ref);
+    return _want >= 0 ? pfo_snap_new_ds_at(_r.kind, _want) : pfo_snap_new_ds(_r.kind);
 }
 
 // global variables that are the game's own functions never change: leave them out
@@ -233,7 +294,7 @@ function pfo_snap_copy(_v, _ctx, _depth)
 function pfo_snap_copy_ds(_ref, _kind, _ctx)
 {
     var _key = string(_ref);
-    if (variable_struct_exists(_ctx.ds, _key) || !ds_exists(_ref, _kind)) return;
+    if (variable_struct_exists(_ctx.ds, _key) || !pfo_snap_res_exists(_ref, _kind)) return;
     var _rec = { ref: _ref, kind: _kind, data: undefined };
     variable_struct_set(_ctx.ds, _key, _rec);
     switch (_kind)
@@ -256,6 +317,19 @@ function pfo_snap_copy_ds(_ref, _kind, _ctx)
             for (var gx = 0; gx < _w; gx++)
                 for (var gy = 0; gy < _h; gy++) _g[gx * _h + gy] = pfo_snap_copy(ds_grid_get(_ref, gx, gy), _ctx, 1);
             _rec.data = [_w, _h, _g];
+            break;
+        case 100:   // a path: [closed, kind, precision, [x, y, speed, ...]]
+            var _pn = path_get_number(_ref);
+            var _pts = array_create(_pn * 3);
+            for (var i = 0; i < _pn; i++) { _pts[i * 3] = path_get_point_x(_ref, i); _pts[i * 3 + 1] = path_get_point_y(_ref, i); _pts[i * 3 + 2] = path_get_point_speed(_ref, i); }
+            _rec.data = [path_get_closed(_ref), path_get_kind(_ref), path_get_precision(_ref), _pts];
+            break;
+        case 101:   // a grid: [its size, the blocked cells (column * rows + row)]
+            var _gm = variable_struct_get(pfo_snap_grids_reg(), string(real(_ref)));
+            var _cells = [];
+            for (var gx = 0; gx < _gm[2]; gx++)
+                for (var gy = 0; gy < _gm[3]; gy++) if (mp_grid_get_cell(_ref, gx, gy) == -1) array_push(_cells, gx * _gm[3] + gy);
+            _rec.data = [_gm, _cells];
             break;
         default:
             // stacks, queues, priority queues: a hidden copy (contents aren't inspected)
@@ -336,7 +410,7 @@ function pfo_snap_by_key(_a, _b)
 function pfo_snap_capture()
 {
     var _ctx = { ds: {} };
-    var _snap = { rm: room, ctx: _ctx, globals: {}, insts: [], layers: [], views: [], frame: pfo_get_frame(), icount: instance_count, sprites: pfo_snap_sprites_copy() };
+    var _snap = { rm: room, ctx: _ctx, globals: {}, insts: [], layers: [], views: [], frame: pfo_get_frame(), icount: instance_count, sprites: pfo_snap_sprites_copy(), maxid: pfo_runner_maxid(-1) };
     // GameMaker's drawing state as the last frame left it: some games draw text without setting a
     // colour first (game 34's score came out in the colour another game had left set)
     _snap.draw = [draw_get_colour(), draw_get_alpha(), draw_get_font(), draw_get_halign(), draw_get_valign(), gpu_get_blendmode_ext()];
@@ -366,6 +440,7 @@ function pfo_snap_capture()
                      b: array_create(array_length(_bi)), al: array_create(12), vars: {} };
         for (var j = 0; j < array_length(_bi); j++) _rec.b[j] = variable_instance_get(_inst, _bi[j]);
         for (var j = 0; j < 12; j++) _rec.al[j] = _inst.alarm[j];
+        if (_inst.path_index != -1) _rec.pth = pfo_snap_copy(pfo_snap_path_of(_inst), _ctx, 0);
         var _vn = variable_instance_get_names(_inst);
         for (var j = 0; j < array_length(_vn); j++)
             if (string_char_at(_vn[j], 1) != "@") variable_struct_set(_rec.vars, _vn[j], pfo_snap_copy(variable_instance_get(_inst, _vn[j]), _ctx, 0));
@@ -468,6 +543,18 @@ function pfo_snap_remap(_v, _map, _depth)
     return _v;
 }
 
+// here and not on its way out: an instance destroyed this step (a Create event of the room just
+// entered can destroy another: Barbuta's ladders take out the cliff under them) still answers
+// instance_exists until the step ends, but with (all) has already left it out, and the runner
+// removes it then; one reused would be lost a step after the load
+function pfo_snap_alive(_inst)
+{
+    if (!instance_exists(_inst)) return false;
+    var _seen = false;
+    with (_inst) _seen = true;
+    return _seen;
+}
+
 function pfo_snap_same_vars(_inst, _vars)
 {
     var _vn = variable_instance_get_names(_inst);
@@ -487,6 +574,40 @@ function pfo_snap_new_ds(_kind)
         case ds_type_queue: return ds_queue_create();
     }
     return ds_priority_create();
+}
+
+function pfo_snap_ref_number(_r) { return pfo_snap_is_wref(_r) ? _r.n : real(_r); }
+function pfo_snap_by_number(_a, _b) { return pfo_snap_ref_number(_a.ref) - pfo_snap_ref_number(_b.ref); }
+
+function pfo_snap_free_ds(_d, _kind)
+{
+    switch (_kind)
+    {
+        case ds_type_list: ds_list_destroy(_d); return;
+        case ds_type_map: ds_map_destroy(_d); return;
+        case ds_type_grid: ds_grid_destroy(_d); return;
+        case ds_type_stack: ds_stack_destroy(_d); return;
+        case ds_type_queue: ds_queue_destroy(_d); return;
+    }
+    ds_priority_destroy(_d);
+}
+
+// a data structure made again under the number it had: GameMaker hands out the lowest free number
+// of each kind, so the free ones below it are taken (and given back) until it comes up. Games keep
+// numbers of lists they've freed (library 12's teams, after its game is left): with other numbers
+// here, such a stale one named a live list on one device and nothing on the other.
+function pfo_snap_new_ds_at(_kind, _want)
+{
+    var _spare = [], _got = undefined;
+    repeat (512)
+    {
+        var _d = pfo_snap_new_ds(_kind);
+        if (real(_d) == _want) { _got = _d; break; }
+        array_push(_spare, _d);
+        if (real(_d) > _want) break;
+    }
+    for (var i = 0; i < array_length(_spare); i++) pfo_snap_free_ds(_spare[i], _kind);
+    return is_undefined(_got) ? pfo_snap_new_ds(_kind) : _got;
 }
 
 function pfo_snap_count(_where)
@@ -623,13 +744,14 @@ function pfo_snap_ensure_ds(_ctx, _map)
     for (var i = 0; i < array_length(_dk); i++)
     {
         var _r = variable_struct_get(_ctx.ds, _dk[i]);
-        if (ds_exists(pfo_snap_here(_r.ref), _r.kind)) continue;
+        if (pfo_snap_res_exists(pfo_snap_here(_r.ref), _r.kind)) continue;
         var _have = variable_struct_get(_map, pfo_snap_key(_r.ref));
-        if (!is_undefined(_have) && ds_exists(_have, _r.kind)) continue;
+        if (!is_undefined(_have) && pfo_snap_res_exists(_have, _r.kind)) continue;
         array_push(_need, _r);
     }
+    array_sort(_need, pfo_snap_by_number);
     for (var i = 0; i < array_length(_need); i++)
-        variable_struct_set(_map, pfo_snap_key(_need[i].ref), pfo_snap_new_ds(_need[i].kind));
+        variable_struct_set(_map, pfo_snap_key(_need[i].ref), pfo_snap_res_new(_need[i]));
 }
 
 function pfo_snap_fill_ds(_ctx, _map)
@@ -656,6 +778,17 @@ function pfo_snap_fill_ds(_ctx, _map)
                 ds_grid_resize(_ds, _w, _h);
                 for (var gx = 0; gx < _w; gx++)
                     for (var gy = 0; gy < _h; gy++) ds_grid_set(_ds, gx, gy, pfo_snap_remap(_g[gx * _h + gy], _map, 0));
+                break;
+            case 100:
+                path_clear_points(_ds);
+                var _pts = _r.data[3];
+                for (var j = 0; j < array_length(_pts); j += 3) path_add_point(_ds, _pts[j], _pts[j + 1], _pts[j + 2]);
+                path_set_closed(_ds, _r.data[0]); path_set_kind(_ds, _r.data[1]); path_set_precision(_ds, _r.data[2]);
+                break;
+            case 101:
+                mp_grid_clear_all(_ds);
+                var _gh = _r.data[0][3], _cells = _r.data[1];
+                for (var j = 0; j < array_length(_cells); j++) mp_grid_add_cell(_ds, _cells[j] div _gh, _cells[j] mod _gh);
                 break;
             case ds_type_stack: ds_stack_copy(_ds, _r.data); break;
             case ds_type_queue: ds_queue_copy(_ds, _r.data); break;
@@ -728,13 +861,45 @@ function pfo_snap_ensure_sprites(_snap, _map)
 
 // made as an event-less shell and then turned into its object: its Create event would otherwise
 // run (and in some games make or remove other instances)
+//
+// It gets the id it had: the runner's id counter is set so the next id handed out is that one
+// (unless an instance here has it). Games compare ids (games 10 and 35 by order in their logic:
+// id < other.id), and new ids would put the ones made again after the ones still here.
 function pfo_snap_make(_rec)
 {
+    var _want = typeof(_rec.oid) == "ref" || is_numeric(_rec.oid) ? real(_rec.oid) : (pfo_snap_is_wref(_rec.oid) ? _rec.oid.n : -1);
+    var _exact = _want >= 100000 && !instance_exists(_want) && pfo_snap_id_step() >= 0;
+    var _was = _exact ? pfo_runner_maxid(_want - pfo_snap_id_step()) : -1;
     var _inst = layer_exists(_rec.lay) ? instance_create_layer(_rec.b[0], _rec.b[1], _rec.lay, oPfoSnapShell)
         : instance_create_depth(_rec.b[0], _rec.b[1], _rec.b[20], oPfoSnapShell);
+    if (_exact)
+    {
+        pfo_runner_maxid(max(_was, real(_inst)));   // (the counter never goes back below an id in use)
+        if (real(_inst) != _want) global.pfo_snap_idhi = max(global.pfo_snap_idhi, real(_inst));
+    }
+    else global.pfo_snap_idhi = max(global.pfo_snap_idhi, real(_inst));
     var _obj = _rec.obj;
     with (_inst) instance_change(_obj, false);
     return _inst;
+}
+
+// what the runner adds to its counter for a new instance's id (found once, with a throwaway shell)
+function pfo_snap_id_step()
+{
+    if (variable_global_exists("pfo_snap_idstep")) return global.pfo_snap_idstep;
+    var _m = pfo_runner_maxid(-1);
+    if (_m < 0) { global.pfo_snap_idstep = -1; return -1; }
+    var _t = instance_create_depth(-10000, -10000, 0, oPfoSnapShell);
+    var _d = real(_t) - _m;
+    instance_destroy(_t, false);
+    global.pfo_snap_idstep = _d == 0 || _d == 1 ? _d : -1;
+    return global.pfo_snap_idstep;
+}
+
+// an instance following a path: which, where on it, how
+function pfo_snap_path_of(_inst)
+{
+    return [_inst.path_index, _inst.path_position, _inst.path_positionprevious, _inst.path_speed, _inst.path_scale, _inst.path_orientation, _inst.path_endaction];
 }
 
 function pfo_snap_set_vars(_rec, _inst, _map, _bi)
@@ -749,6 +914,21 @@ function pfo_snap_set_vars(_rec, _inst, _map, _bi)
         variable_instance_set(_inst, _bi[j], pfo_snap_remap(_rec.b[j], _map, 0));
     }
     for (var j = 0; j < 12; j++) _inst.alarm[j] = _rec.al[j];
+    // following a path: started again from where it was measured from, then put where it was on it
+    if (variable_struct_exists(_rec, "pth"))
+    {
+        var _pt = pfo_snap_remap(_rec.pth, _map, 0);
+        with (_inst)
+        {
+            var _x = x, _y = y;
+            var _ps = variable_instance_exists(id, "pfo_snap_pstart") && is_array(pfo_snap_pstart) ? pfo_snap_pstart : [true, x, y];
+            x = _ps[1]; y = _ps[2];
+            path_start(_pt[0], _pt[3], _pt[6], _ps[0]);
+            path_position = _pt[1]; path_positionprevious = _pt[2]; path_scale = _pt[4]; path_orientation = _pt[5];
+            x = _x; y = _y;
+        }
+    }
+    else if (_inst.path_index != -1) with (_inst) path_end();
 }
 
 function pfo_snap_restore(_snap)
@@ -788,6 +968,7 @@ function pfo_snap_restore(_snap)
             scrCleanup();
         }
         with (all) if (!persistent) instance_deactivate_object(id);
+        global.pfo_snap_idhi = -1;
         pfo_snap_ensure_ds(_snap.ctx, _map0);
         var _bi0 = pfo_snap_builtins();
         var _pi = -1;
@@ -800,7 +981,7 @@ function pfo_snap_restore(_snap)
             var _o0 = pfo_snap_here(_rec.oid), _k0 = pfo_snap_key(_rec.oid);
             if (typeof(_o0) == "ref" && instance_exists(_o0) && _o0.object_index == _rec.obj) continue;   // still here (oController and the like)
             var _have = variable_struct_get(_map0, _k0);
-            if (!is_undefined(_have) && instance_exists(_have)) continue;
+            if (!is_undefined(_have) && pfo_snap_alive(_have)) continue;
             var _inst = pfo_snap_make(_rec);
             variable_struct_set(_map0, _k0, _inst);
             array_push(_carried, [_rec, _inst]);
@@ -811,6 +992,9 @@ function pfo_snap_restore(_snap)
         for (var i = 0; i < array_length(_gn0); i++) if (!pfo_snap_device_global(_gn0[i])) variable_global_set(_gn0[i], pfo_snap_remap(variable_struct_get(_g, _gn0[i]), _map0, 0));
         global.pfo_snap_room_map = _map0;
         global.pfo_snap_room_for = _snap;   // only this load reuses them
+        // what the room makes on its way in (dropped by the full restore) gets ids well clear of the
+        // snapshot's, so the instances made again can have theirs
+        if (variable_struct_exists(_snap, "maxid") && _snap.maxid >= 0) pfo_runner_maxid(max(pfo_runner_maxid(-1), _snap.maxid, global.pfo_snap_idhi, pfo_runner_maxid(-2)) + 100000);
         room_goto(_snap.rm);
         return 1;
     }
@@ -828,23 +1012,40 @@ function pfo_snap_restore(_snap)
     pfo_snap_allon();
     global.pfo_snap_touched = false;
     pfo_snap_count("activated");
+    if (!variable_global_exists("pfo_snap_idhi")) global.pfo_snap_idhi = -1;
     var _keep = {};
     var _made = {};
     var _madeIds = "";   // "old:new," for libPFO
+    // first the ones to reuse: each still here, as the same object, without variables it didn't
+    // have then (an instance's variables can't be removed: one that gained some is made afresh).
+    // All of them before any is made: a new instance takes the next free id, which can be the one
+    // a later record had in the other game (a fast rejoin: Barbuta's cliffs), and that record
+    // would then take the new instance for its own and its own would never be made
+    // (nor one the room-change pass made for its record: that one is its record's below)
+    var _roomMade = {};
+    var _mk = variable_struct_get_names(_map);
+    for (var i = 0; i < array_length(_mk); i++)
+    {
+        var _mv = variable_struct_get(_map, _mk[i]);
+        if (string_pos("instance", _mk[i]) > 0 && typeof(_mv) == "ref" && instance_exists(_mv)) variable_struct_set(_roomMade, string(real(_mv)), true);
+    }
+    var _toMake = [];
     for (var n = 0; n < array_length(_snap.insts); n++)
     {
         var _rec = _snap.insts[n];
-        var _old = pfo_snap_here(_rec.oid), _okey = pfo_snap_key(_rec.oid);
-        // reuse it if it's still here, as the same object, without variables it didn't have then
-        // (an instance's variables can't be removed: one that gained some is made afresh)
-        if (typeof(_old) == "ref" && instance_exists(_old) && _old.object_index == _rec.obj && pfo_snap_same_vars(_old, _rec.vars))
-        {
+        var _old = pfo_snap_here(_rec.oid);
+        if (typeof(_old) == "ref" && pfo_snap_alive(_old) && _old.object_index == _rec.obj && pfo_snap_same_vars(_old, _rec.vars)
+            && !variable_struct_exists(_keep, string(real(_old))) && !variable_struct_exists(_roomMade, string(real(_old))))
             variable_struct_set(_keep, string(real(_old)), true);
-            continue;
-        }
+        else array_push(_toMake, n);
+    }
+    for (var m = 0; m < array_length(_toMake); m++)
+    {
+        var _rec = _snap.insts[_toMake[m]];
+        var _old = pfo_snap_here(_rec.oid), _okey = pfo_snap_key(_rec.oid);
         // made afresh (event-less), unless the room-change pass already made it
         var _have = variable_struct_get(_map, _okey);
-        var _inst = !is_undefined(_have) && instance_exists(_have) && _have.object_index == _rec.obj ? _have : pfo_snap_make(_rec);
+        var _inst = !is_undefined(_have) && pfo_snap_alive(_have) && _have.object_index == _rec.obj && !variable_struct_exists(_keep, string(real(_have))) ? _have : pfo_snap_make(_rec);
         variable_struct_set(_map, _okey, _inst);
         variable_struct_set(_made, _okey, _inst);
         _madeIds += string(real(_old)) + ":" + string(real(_inst)) + ",";
@@ -878,6 +1079,11 @@ function pfo_snap_restore(_snap)
     // which instances were switched off, the order of GameMaker's instance lists and the like are
     // put back by libPFO afterwards (savestate.inc): it needs to know the ones made afresh
     global.pfo_snap_made_ids = _madeIds;
+    // the id counter as it was then (or past the highest id here, if one couldn't have its own)
+    // (and past every id still in the runner: the dropped ones keep theirs until the step ends, and
+    // games only compare ids by order, which new ones keep, after all the others, as there)
+    if (variable_struct_exists(_snap, "maxid") && _snap.maxid >= 0) pfo_runner_maxid(max(_snap.maxid, global.pfo_snap_idhi, pfo_runner_maxid(-2)));
+    global.pfo_snap_idhi = -1;
     // tile layers and layer positions
     for (var i = 0; i < array_length(_snap.layers); i++)
     {
@@ -1016,7 +1222,14 @@ function pfo_snap_hash_value(_buf, _v, _h, _depth)
 
 function pfo_snap_hash_ds(_buf, _ref, _kind, _h, _depth)
 {
-    if (!ds_exists(_ref, _kind)) { buffer_write(_buf, buffer_u8, 0); return; }
+    if (!pfo_snap_res_exists(_ref, _kind)) { buffer_write(_buf, buffer_u8, 0); return; }
+    if (_kind == 100 || _kind == 101)   // (their contents, as a snapshot keeps them)
+    {
+        var _hc = { ds: {} };
+        pfo_snap_copy_ds(_ref, _kind, _hc);
+        pfo_snap_hash_value(_buf, variable_struct_get(_hc.ds, string(_ref)).data, _h, _depth + 1);
+        return;
+    }
     switch (_kind)
     {
         case ds_type_list:
@@ -1262,8 +1475,23 @@ function pfo_snap_here(_v)
     var _n = _v.n, _there = false;
     if (_v.t == "instance") _there = _n >= 100000 && instance_exists(_n);
     else if (_v.t == "sprite") _there = sprite_exists(_n);
-    else { var _k = pfo_snap_ds_kind(_v.t); _there = _k >= 0 && ds_exists(_n, _k); }
-    if (!_there) return _n;
+    else { var _k = pfo_snap_ds_kind(_v.t); _there = _k >= 0 && pfo_snap_res_exists(_n, _k); }
+    if (!_there)
+    {
+        // something gone by then was still a ref there (a weapon's last hit, a list a game freed but
+        // still names, noone): a ref here too
+        // (a freed list can't be named by handle_parse: one is made under its number for the ref,
+        // and freed again, so the stale ref is the same as there and names whatever takes it next)
+        var _dk = pfo_snap_ds_kind(_v.t);
+        if (_dk >= 0 && _dk < 100 && _n >= 0)
+        {
+            var _tmp = pfo_snap_new_ds_at(_dk, _n);
+            pfo_snap_free_ds(_tmp, _dk);
+            return real(_tmp) == _n ? _tmp : _n;
+        }
+        if (_v.t != "instance" || _n >= 100000 || _n < 0) { var _gone = handle_parse(_v.pfo_wref); if (typeof(_gone) == "ref" && real(_gone) == _n) return _gone; }
+        return _n;
+    }
     var _h = handle_parse(_v.pfo_wref);
     return typeof(_h) == "ref" && real(_h) == _n ? _h : _n;
 }
@@ -1510,6 +1738,13 @@ function pfo_snap_items()
             array_push(_out, [_tag + _bi[j], buffer_md5(_buf, 0, buffer_tell(_buf)), pfo_snap_short(_v)]);
         }
         for (var j = 0; j < 12; j++) array_push(_out, [_tag + "alarm" + string(j), string(_inst.alarm[j]), string(_inst.alarm[j])]);
+        if (_inst.path_index != -1)
+        {
+            buffer_seek(_buf, buffer_seek_start, 0); _h.ds = {}; _h.nds = 0;
+            var _pv = pfo_snap_path_of(_inst);
+            pfo_snap_hash_value(_buf, _pv, _h, 1);
+            array_push(_out, [_tag + "path", buffer_md5(_buf, 0, buffer_tell(_buf)), pfo_snap_short(_pv)]);
+        }
         var _vn = variable_instance_get_names(_inst);
         array_sort(_vn, true);
         for (var j = 0; j < array_length(_vn); j++)

@@ -174,8 +174,9 @@ namespace pfo_win_ui
     constexpr COLORREF c_Back = RGB(12, 12, 20), c_Text = RGB(255, 255, 255), c_Dim = RGB(150, 150, 160), c_Off = RGB(96, 96, 104), c_Attention = RGB(0xE0, 0x6A, 0x10);   // (attention: the overlay's orange; amber read as P4's yellow)
     constexpr COLORREF c_Progress = RGB(0x00, 0x84, 0x56);
     // the players' colours, as the game's and the overlay's
-    constexpr COLORREF c_Seat[4] = { RGB(0xE0, 0x3C, 0x32), RGB(0x00, 0x6A, 0xB4), RGB(0x63, 0xB3, 0x1D), RGB(0xE8, 0xEA, 0x4A) };
-    COLORREF SeatColor(int seat) { return seat < 0 ? c_Dim : seat < 4 ? c_Seat[seat] : c_Text; }
+    constexpr COLORREF c_Seat[8] = { RGB(0xE0, 0x3C, 0x32), RGB(0x00, 0x6A, 0xB4), RGB(0x63, 0xB3, 0x1D), RGB(0xE8, 0xEA, 0x4A),
+                                     RGB(0xFE, 0x70, 0x00), RGB(0x96, 0x00, 0xDC), RGB(0x27, 0xBA, 0xDB), RGB(0xFE, 0x48, 0xDE) };
+    COLORREF SeatColor(int seat) { return seat < 0 ? c_Dim : seat < 8 ? c_Seat[seat] : c_Text; }
 
     // a controller (its code is further down: namespace pad)
     bool g_PadConnected = false;     // one is there
@@ -587,14 +588,12 @@ namespace pfo_win_ui
                 // a DIB's pixel is 0x00RRGGBB, a COLORREF 0x00BBGGRR
                 auto dib = [](COLORREF c) { return static_cast<uint32>((GetRValue(c) << 16) | (GetGValue(c) << 8) | GetBValue(c)); };
                 uint32* out = static_cast<uint32*>(bits);
-                // dark letters (on the chosen row's white bar) go without the shadow: black on
-                // black would thicken them into blobs
-                const bool dark = GetRValue(color) * 299 + GetGValue(color) * 587 + GetBValue(color) * 114 < 128 * 1000;
+                // the letters alone: the font's black shadow is left out
                 for (size_t i = 0; i < g_Px.size(); i++)
                 {
                     uint32 p = g_Px[i];
-                    const bool letter = (p >> 24) >= 128 && ((p >> 16) & 255) >= 128, shadow = (p >> 24) >= 128 && !letter;
-                    out[i] = letter ? dib(color) : shadow && !dark ? 0 : dib(c_Clear);   // the letter, its shadow, clear
+                    const bool letter = (p >> 24) >= 128 && ((p >> 16) & 255) >= 128;
+                    out[i] = letter ? dib(color) : dib(c_Clear);
                 }
                 t.dc = CreateCompatibleDC(like);
                 SelectObject(t.dc, t.bmp);
@@ -744,8 +743,8 @@ namespace pfo_win_ui
     }
 
     // ---- the menu ----
-    enum { PageClosed, PageMain, PageSaves, PageConfirm, PageName, PageCode };
-    enum { ActNone, ActClose, ActBack, ActSolo, ActSave, ActSaves, ActLoad, ActRewind, ActAccept, ActDecline, ActRejoin, ActForget, ActAutoSave, ActCopyCode, ActCode, ActName, ActUpnp, ActQuickSave, ActQuickLoad };
+    enum { PageClosed, PageMain, PageSaves, PageConfirm, PageName, PageCode, PagePlayers };
+    enum { ActNone, ActClose, ActBack, ActPlayers, ActSolo, ActSave, ActSaves, ActLoad, ActRewind, ActAccept, ActDecline, ActRejoin, ActForget, ActAutoSave, ActCopyCode, ActCode, ActName, ActUpnp, ActQuickSave, ActQuickLoad };
     struct Item { std::wstring text; int action = ActNone; int arg = 0; bool enabled = true; };
 
     // a box about one save: lines of text, its picture, the names of who was playing
@@ -757,6 +756,82 @@ namespace pfo_win_ui
         int playersAfter = -1;           // ...and above the players' names (-1: no names)
         std::vector<Run> lines, players;
     };
+
+    // ---- the players' setup: who's playing, on what ----
+    // Before solo play (and online, before the match) every controller is a player of its own: the
+    // arrow keys, the numpad keys (the game's P2 keys) and each pad. It joins with its A (Z on the
+    // arrow keys, Del on the numpad), moves along the slots P1-P8 with left / right, locks its slot
+    // in with A, unlocks with B, and leaves with B again. Enter (a pad's START) starts once every
+    // joined player is locked in; the locked slots, closed up from P1, are the seats.
+    namespace pad { extern bool g_Present[4]; }   // (the controllers' part, below)
+    constexpr int c_Inputs = 6, c_Slots = 8;   // inputs: 0 arrow keys, 1 numpad keys, 2-5 pads 1-4
+    struct Marker { bool joined = false, locked = false; int slot = 0; };
+    Marker g_Markers[c_Inputs];
+    bool g_PlayersOnline = false;   // the page was opened in a lobby: it sends our slots instead of starting solo play
+    std::wstring InputName(int i) { return i == 0 ? L"KEYS" : i == 1 ? L"NUMPAD" : L"PAD " + std::to_wstring(i - 1); }
+    bool SlotLocked(int slot, int except)
+    {
+        for (int i = 0; i < c_Inputs; i++)
+            if (i != except && g_Markers[i].joined && g_Markers[i].locked && g_Markers[i].slot == slot) return true;
+        return false;
+    }
+    int JoinedCount() { int n = 0; for (auto& m : g_Markers) n += m.joined; return n; }
+    bool PlayersReady()
+    {
+        int n = 0;
+        for (auto& m : g_Markers) if (m.joined) { if (!m.locked) return false; n++; }
+        return n > 0;
+    }
+    void PlayersReset()
+    {
+        for (auto& m : g_Markers) m = Marker();
+        if (g_PlayersOnline)
+        {
+            // in a lobby: the slots we sent, as they were (none yet: the arrow keys, to be placed)
+            std::vector<std::pair<int, std::string>> sent;
+            {
+                std::lock_guard<std::mutex> l(pfo_android::g_SlotsMutex);
+                sent = pfo_android::g_MySlots;
+            }
+            for (auto& sp : sent)
+                for (int i = 0; i < c_Inputs; i++)
+                    if (Utf8(InputName(i).c_str()) == sp.second) { g_Markers[i].joined = g_Markers[i].locked = true; g_Markers[i].slot = sp.first; }
+            if (sent.empty())
+            {
+                // the arrow keys in the seat the lobby gives us now (one player per device)
+                auto names = pfo_android::LobbySeatNames();
+                g_Markers[0].joined = true;
+                for (int slot = 0; slot < c_Slots; slot++) if (!names[slot].empty() && names[slot][0] == '*') { g_Markers[0].slot = slot; g_Markers[0].locked = true; break; }
+            }
+            return;
+        }
+        g_Markers[0].joined = g_Markers[0].locked = true;   // the arrow keys as P1: one player can start at once
+    }
+    // what: 0 left, 1 right, 2 A (join / lock), 3 B (unlock / leave)
+    void PlayersInput(int i, int what)
+    {
+        if (i < 0 || i >= c_Inputs) return;
+        Marker& m = g_Markers[i];
+        if (!m.joined)
+        {
+            if (what != 2) return;
+            m.joined = true;
+            m.locked = false;
+            m.slot = 0;
+            while (m.slot < c_Slots - 1 && SlotLocked(m.slot, i)) m.slot++;
+            __android_log_print(ANDROID_LOG_INFO, "PFOMENU", "players: %s joined", Utf8(InputName(i).c_str()).c_str());
+            return;
+        }
+        if (what == 0 && !m.locked) m.slot = (m.slot + c_Slots - 1) % c_Slots;
+        else if (what == 1 && !m.locked) m.slot = (m.slot + 1) % c_Slots;
+        else if (what == 2 && !m.locked)
+        {
+            if (SlotLocked(m.slot, i)) { Say(L"P" + std::to_wstring(m.slot + 1) + L" IS TAKEN", 1200); return; }
+            m.locked = true;
+            __android_log_print(ANDROID_LOG_INFO, "PFOMENU", "players: %s locked in P%d", Utf8(InputName(i).c_str()).c_str(), m.slot + 1);
+        }
+        else if (what == 3) { if (m.locked) m.locked = false; else m.joined = false; }
+    }
 
     int g_Page = PageClosed;
     bool g_TextFromGame = false;      // the code box was opened by JOIN BY CODE: leaving it closes the menu
@@ -875,6 +950,13 @@ namespace pfo_win_ui
         g_Players.clear();
         g_Details = Card();
         const bool restoring = (g_Status & 4) != 0, inLobby = (g_Net & 16) != 0, byPad = g_PadHints;
+        if (g_Page == PagePlayers)
+        {
+            g_Title = L"WHO'S PLAYING";
+            g_Sub = L"SELECT A SLOT TO JOIN";
+            g_Hint = PlayersReady() ? (g_PlayersOnline ? L"ENTER OR START: DONE   ESC: BACK" : L"ENTER OR START: PLAY   ESC: BACK") : L"LOCK EVERYONE IN, THEN ENTER";
+            return;
+        }
         if (g_Page == PageMain)
         {
             g_Title = L"UFO 50 ONLINE";
@@ -883,10 +965,11 @@ namespace pfo_win_ui
             if ((g_Net & 64) != 0 && !Solo()) g_Players = OnlinePlayers();
             if (VoteShown()) { Add(L"ACCEPT THE LOAD P" + std::to_wstring(g_Vote[2] + 1) + L" ASKED FOR", ActAccept); Add(L"DECLINE THE LOAD", ActDecline); }
             if (!g_RejoinOffer.empty()) { Add(L"REJOIN YOUR MATCH (" + RejoinText() + L")", ActRejoin); Add(L"FORGET THAT MATCH", ActForget); }
+            if (inLobby && (g_Net & 64) == 0) Add(L"WHO'S PLAYING... (SEVERAL PLAYERS ON THIS PC)", ActPlayers);
             if (Solo() || OnlineGame()) Add(OnlineGame() ? L"SAVE (EVERY PLAYER'S GAME SAVES)" : L"SAVE", ActSave, 0, (g_Status & 2) != 0);
             if (Solo()) Add(L"QUICK SAVE (F5)", ActQuickSave, 0, (g_Status & 2) != 0);
             Add(L"LOAD A SAVE...", ActSaves, 0, !restoring);
-            if (!OnlineGame() && SaveOf(c_QuickSlot)) Add(L"QUICK LOAD (F9)", ActQuickLoad, 0, !restoring);
+            if (!OnlineGame() && !inLobby && SaveOf(c_QuickSlot)) Add(L"QUICK LOAD (F9)", ActQuickLoad, 0, !restoring);   // (not in a lobby: it would leave it)
             if (Solo())
             {
                 static const int c_Seconds[3] = { 15, 30, 60 };
@@ -1075,7 +1158,8 @@ namespace pfo_win_ui
         {
         case ActClose: Open(PageClosed); break;
         case ActBack: LeaveConfirm(); break;
-        case ActSolo: Request(1, 0); Open(PageClosed); Say(L"SOLO PLAY: SAVES AND REWIND ARE ON (F1)", 3000); break;
+        case ActSolo: g_PlayersOnline = false; PlayersReset(); Open(PagePlayers); break;
+        case ActPlayers: g_PlayersOnline = true; PlayersReset(); Open(PagePlayers); break;
         case ActSave:
             g_PendingWhat = 2; g_PendingAuto = false; g_PendingQuick = false;
             // online every device saves on the same frame, and the netcode picks the slot
@@ -1097,6 +1181,7 @@ namespace pfo_win_ui
         case ActQuickLoad:
             if ((g_Status & 4) != 0) { Open(PageClosed); break; }
             if (OnlineGame()) { Open(PageClosed); Say(L"QUICK LOAD IS FOR SOLO PLAY (F1: LOAD A SAVE)", 2200); break; }
+            if ((g_Net & 16) != 0) { Open(PageClosed); Say(L"QUICK LOAD ISN'T FOR A LOBBY (IT WOULD LEAVE IT)", 2200); break; }
             g_SaveCache.erase(c_QuickSlot);
             RefreshSaves();   // LOAD's estimate (and the question for a slow load) reads the list
             if (!SaveOf(c_QuickSlot)) { Open(PageClosed); Say(L"NO QUICK SAVE YET (F5 MAKES ONE)", 2000); break; }
@@ -1638,6 +1723,218 @@ namespace pfo_win_ui
         Text(dc, g_Hint, r, c_Dim, DT_CENTER);
     }
 
+    // the overlay's pixel icons (PFO_Android.java): what drives a player
+    const char* const c_PadArt[] = {
+        "   kkkkkkkkkkkk   ",
+        "  kbbbbbbbbbbbbk  ",
+        " kbbwbbbbbbbbwbbk ",
+        "kbbwwwbbbbbbwbwbbk",
+        "kbbbwbbbbbbbbwbbbk",
+        "kbbbbbbbbbbbbbbbbk",
+        "kbbbbbkkkkkkbbbbbk",
+        " kbbbk      kbbbk ",
+        "  kkk        kkk  ",
+    };
+    const char* const c_TouchArt[] = {
+        " kkkkkkkkkk      ",
+        "kbbbbbbbbbbk     ",
+        "kbbbkkkkbbbk     ",
+        "kbsssssssssk     ",
+        "kbsssssssssk     ",
+        "kbsssrrrsssk     ",
+        "kbssrsssrssk     ",
+        "kbssrskksrsk     ",
+        "kbsssrkwkssk     ",
+        "kbssssk wkkk     ",
+        "kbssssk wkwkkk   ",
+        "kbssssk wkwkwkk  ",
+        "kbsskkk wwwwwwk  ",
+        "kbbkwwk wwwwwwk  ",
+        "kbbkwwwwwwwwwwk  ",
+        " kkkwwwwwwwwwk   ",
+        "     kwwwwwwk    ",
+        "      kbbbbk     ",
+    };
+    const char* const c_KeysArt[] = {
+        "kkkkkkkkkkkkkkkkkk",
+        "kbbbbbbbbbbbbbbbbk",
+        "kbwbwbwbwbwbwbwbbk",
+        "kbbbbbbbbbbbbbbbbk",
+        "kbbwbwbwbwbwbwbbbk",
+        "kbbbbbbbbbbbbbbbbk",
+        "kbbbwwwwwwwwwbbbbk",
+        "kbbbbbbbbbbbbbbbbk",
+        "kkkkkkkkkkkkkkkkkk",
+    };
+    void DrawArt(HDC dc, const char* const* art, int rows, int cx, int cy, int cell, COLORREF body, bool touch)
+    {
+        const int cols = static_cast<int>(strlen(art[0]));
+        const int left = cx - cols * cell / 2, top = cy - rows * cell / 2;
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++)
+            {
+                char ch = art[r][c];
+                if (ch == ' ') { if (!touch || r < 9 || r > 14 || c != 7) continue; ch = 'w'; }   // (the touch hand: inside of the finger)
+                COLORREF col = ch == 'k' ? RGB(0, 0, 0) : ch == 'w' ? RGB(255, 255, 255) : ch == 's' ? RGB(0x27, 0xBA, 0xDB) : ch == 'r' ? RGB(0xE8, 0xEA, 0x4A) : body;
+                RECT px = { left + c * cell, top + r * cell, left + (c + 1) * cell, top + (r + 1) * cell };
+                Fill(dc, px, col);
+            }
+    }
+    // a controller's icon (KEYS, NUMPAD, PAD n, TOUCH) fitted into r
+    void DrawInputIcon(HDC dc, const std::wstring& input, const RECT& r)
+    {
+        const COLORREF body = RGB(0x3A, 0x3A, 0x4A);
+        const int h = (r.bottom - r.top) * 8 / 10, w = (r.right - r.left) * 9 / 10;
+        const int cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+        if (input.rfind(L"TOUCH", 0) == 0) { DrawArt(dc, c_TouchArt, 18, cx, cy, std::max(1, std::min(h / 18, w / 17)), body, true); return; }
+        const bool pad = input.rfind(L"PAD", 0) == 0, keys = input.rfind(L"KEYS", 0) == 0, num = input.rfind(L"NUM", 0) == 0;
+        if (pad || keys || num)
+        {
+            const int cell = std::max(1, std::min(h / 9, w / 18));
+            DrawArt(dc, pad ? c_PadArt : c_KeysArt, 9, cx, cy, cell, body, false);
+            std::wstring n = pad ? input.substr(3) : num ? L"2" : L"";
+            while (!n.empty() && n[0] == L' ') n.erase(0, 1);
+            if (!n.empty()) { RECT t = { cx - cell * 4, cy - cell * 4, cx + cell * 4, cy + cell * 3 }; Text(dc, n, t, c_Text, DT_CENTER); }
+            return;
+        }
+        Text(dc, input, r, c_Text, DT_CENTER);
+    }
+
+    // the players' setup: the slots, and each joined controller's marker under its slot
+    void PaintPlayers(HDC dc, const Look& k)
+    {
+        const int bw = k.limit;
+        const int slotW = (bw - 2 * k.pad) / c_Slots;
+        // a marker's label: the input's name, shorter when the slot is narrow
+        const int markH = g_PlayersOnline ? 3 * k.lineH : 2 * k.lineH;   // the controller's icon (online: the device's name above it)
+        const std::wstring myName = Upper(Wide(ShownName().c_str()));
+        // the other devices' players (online): by the host's seating, "device~controller"
+        std::vector<std::string> others(c_Slots);
+        if (g_PlayersOnline)
+        {
+            auto names = pfo_android::LobbySeatNames();
+            for (int slot = 0; slot < c_Slots; slot++) if (!names[slot].empty() && names[slot][0] != '*') others[slot] = names[slot];
+        }
+        int stack = 1;   // markers in the busiest slot
+        for (int slot = 0; slot < c_Slots; slot++)
+        {
+            int n = others[slot].empty() ? 0 : 1;
+            for (auto& m : g_Markers) n += m.joined && m.slot == slot;
+            stack = std::max(stack, n);
+        }
+        std::vector<Run> waiting;   // controllers that can still join
+        waiting.push_back(Colored(L"JOIN:", c_Dim));
+        if (!g_Markers[0].joined) waiting.push_back(Colored(L"Z (ARROW KEYS)", c_Text));
+        if (!g_Markers[1].joined) waiting.push_back(Colored(L"DEL (NUMPAD)", c_Text));
+        for (int i = 2; i < c_Inputs; i++)
+            if (!g_Markers[i].joined && pad::g_Present[i - 2]) waiting.push_back(Colored(L"A (" + InputName(i) + L")", c_Text));
+        const int rowsH = k.lineH * (2 + 1 + 1) + stack * markH;
+        RECT box = { (k.w - bw) / 2, (k.h - rowsH - 2 * k.pad) / 2, (k.w - bw) / 2 + bw, (k.h + rowsH + 2 * k.pad) / 2 };
+        Box(dc, box, c_Text);
+        RECT r = { box.left + k.pad, box.top + k.pad, box.right - k.pad, box.top + k.pad + k.lineH };
+        Text(dc, g_Title, r, c_Text, DT_CENTER);
+        OffsetRect(&r, 0, k.lineH);
+        Text(dc, g_Sub, r, c_Dim, DT_CENTER);
+        OffsetRect(&r, 0, k.lineH * 3 / 2);
+        const int left = (box.left + box.right - slotW * c_Slots) / 2;
+        for (int slot = 0; slot < c_Slots; slot++)
+        {
+            RECT cell = { left + slot * slotW + 2, r.top, left + (slot + 1) * slotW - 2, r.bottom };
+            Fill(dc, cell, SeatColor(slot));
+            Text(dc, L"P" + std::to_wstring(slot + 1), cell, slot == 3 || slot == 6 || slot == 7 ? c_Back : c_Text, DT_CENTER);
+            int row = 0;
+            if (!others[slot].empty())
+            {
+                // another device's player: its device and controller
+                std::string who = others[slot];
+                size_t t = who.find('~');
+                std::wstring device = Upper(Wide((t == std::string::npos ? who : who.substr(0, t)).c_str()));
+                std::wstring input = t == std::string::npos ? std::wstring() : Upper(Wide(who.substr(t + 1).c_str()));
+                RECT mk = { cell.left, r.bottom + k.lineH / 4, cell.right, r.bottom + k.lineH / 4 + markH - 2 };
+                Fill(dc, mk, c_Off);
+                RECT top = { mk.left, mk.top, mk.right, mk.top + k.lineH }, bottom = { mk.left, mk.top + k.lineH, mk.right, mk.bottom };
+                Text(dc, device, input.empty() ? mk : top, c_Text, DT_CENTER);
+                if (!input.empty()) DrawInputIcon(dc, input, bottom);
+                row++;
+            }
+            for (int i = 0; i < c_Inputs; i++)
+            {
+                const Marker& m = g_Markers[i];
+                if (!m.joined || m.slot != slot) continue;
+                RECT mk = { cell.left, r.bottom + k.lineH / 4 + row * markH, cell.right, r.bottom + k.lineH / 4 + (row + 1) * markH - 2 };
+                const COLORREF ink = m.locked && (slot == 3 || slot == 6 || slot == 7) ? c_Back : c_Text;
+                if (m.locked) Fill(dc, mk, SeatColor(slot));
+                else
+                {
+                    Fill(dc, mk, c_Dim);
+                    RECT in = { mk.left + 2, mk.top + 2, mk.right - 2, mk.bottom - 2 };
+                    Fill(dc, in, c_Back);
+                }
+                if (g_PlayersOnline)
+                {
+                    RECT top = { mk.left, mk.top, mk.right, mk.top + k.lineH }, bottom = { mk.left, mk.top + k.lineH, mk.right, mk.bottom };
+                    Text(dc, myName, top, ink, DT_CENTER);
+                    DrawInputIcon(dc, InputName(i), bottom);
+                }
+                else DrawInputIcon(dc, InputName(i), mk);
+                row++;
+            }
+        }
+        (void)waiting;
+    }
+
+    void PlayersStart()
+    {
+        if (!PlayersReady()) { Say(L"EVERY PLAYER LOCKS IN A SLOT FIRST", 1500); return; }
+        int k = 0;
+        for (int slot = 0; slot < c_Slots; slot++)
+            for (int i = 0; i < c_Inputs; i++)
+            {
+                const Marker& m = g_Markers[i];
+                if (!m.joined || !m.locked || m.slot != slot || k >= 8) continue;
+                pfo_android::g_SeatSource[k].keys = i < 2 ? i : -1;
+                pfo_android::g_SeatSource[k].pad = i >= 2 ? i - 2 : -1;
+                __android_log_print(ANDROID_LOG_INFO, "PFOMENU", "players: seat %d is %s", k + 1, Utf8(InputName(i).c_str()).c_str());
+                k++;
+            }
+        pfo_android::g_SeatSourcesSet = true;
+        if (g_PlayersOnline)
+        {
+            std::vector<std::pair<int, std::string>> slots;
+            std::wstring said;
+            for (int i = 0; i < c_Inputs; i++)
+                if (g_Markers[i].joined && g_Markers[i].locked) slots.push_back({ g_Markers[i].slot, Utf8(InputName(i).c_str()) });
+            std::sort(slots.begin(), slots.end());
+            for (auto& sp : slots) said += (said.empty() ? L"" : L" ") + std::wstring(L"P") + std::to_wstring(sp.first + 1);
+            pfo_android::SetMySlots(slots);
+            Open(PageClosed);
+            Say(L"YOUR PLAYERS: " + said + L" (THE HOST SEATS EVERYONE)", 3000);
+            return;
+        }
+        pfo_android::g_LocalPlayers = k;
+        Request(1, 0);
+        Open(PageClosed);
+        Say(k > 1 ? L"SOLO PLAY: " + std::to_wstring(k) + L" PLAYERS, SAVES AND REWIND ON (F1)" : L"SOLO PLAY: SAVES AND REWIND ARE ON (F1)", 3000);
+    }
+
+    // the keys on the setup page: the arrow keys' player and the numpad's
+    void PlayersKey(WPARAM vk)
+    {
+        switch (vk)
+        {
+        case VK_LEFT: PlayersInput(0, 0); break;
+        case VK_RIGHT: PlayersInput(0, 1); break;
+        case 'Z': PlayersInput(0, 2); break;
+        case 'X': PlayersInput(0, 3); break;
+        case VK_NUMPAD1: case VK_NUMPAD4: PlayersInput(1, 0); break;
+        case VK_NUMPAD3: case VK_NUMPAD6: PlayersInput(1, 1); break;
+        case VK_DELETE: PlayersInput(1, 2); break;
+        case VK_END: PlayersInput(1, 3); break;
+        case VK_RETURN: PlayersStart(); break;
+        case VK_ESCAPE: Open(PageMain); break;
+        }
+    }
+
     // another player asks to load a save
     void PaintVote(HDC dc, const Look& k)
     {
@@ -1689,6 +1986,7 @@ namespace pfo_win_ui
         if (!g_Sticky.empty()) message(g_Sticky, g_StickyAttention);
 
         if (g_Page == PageSaves && g_Details.on) PaintSaves(dc, k);
+        else if (g_Page == PagePlayers) PaintPlayers(dc, k);
         else if (g_Page != PageClosed) PaintMenu(dc, k);
         else if (g_VoteBox.on) PaintVote(dc, k);
         SelectObject(dc, oldFont);
@@ -1715,6 +2013,11 @@ namespace pfo_win_ui
             for (auto& it : g_Items) s += it.text + (it.enabled ? L"\n" : L"\t\n");
             for (auto& r : g_Players) s += r.text + L"\t" + std::to_wstring(r.color) + L"\n";
             Flat(s, g_Details);
+            if (g_Page == PagePlayers)
+            {
+                for (auto& m : g_Markers) s += std::to_wstring(m.joined) + std::to_wstring(m.locked) + std::to_wstring(m.slot);
+                for (bool there : pad::g_Present) s += there ? L"p" : L"-";
+            }
         }
         else Flat(s, g_VoteBox);
         return s;
@@ -1844,6 +2147,10 @@ namespace pfo_win_ui
         GetStateFn g_Real = nullptr;
         SetStateFn g_SetState = nullptr;
         std::atomic<unsigned> g_Seen{0};   // the controllers that answered the game's last reading
+        // the tests' controllers for the game itself (message UFO50OnlineMenuPad, lParam 16+slot): what
+        // XInput slot 0-3 reads as, buttons; -1: the real one (several players on one PC, tested)
+        std::atomic<int> g_TestGamePad[4] = { -1, -1, -1, -1 };
+        DWORD g_TestPacket[4] = {};
         ULONGLONG g_RumbleUntil = 0;       // (Poll's thread only)
         void** g_Pointer = nullptr;
         int g_Hooked = 0;                // 1 done, -1 can't be
@@ -1858,6 +2165,13 @@ namespace pfo_win_ui
             GetStateFn real = g_Real;
             DWORD r = real ? real(index, st) : ERROR_DEVICE_NOT_CONNECTED;
             g_Called = true;
+            if (index < 4 && st && g_TestGamePad[index].load() >= 0)
+            {
+                memset(st, 0, sizeof(*st));
+                st->buttons = static_cast<WORD>(g_TestGamePad[index].load());
+                st->packet = ++g_TestPacket[index];
+                r = ERROR_SUCCESS;
+            }
             if (index < 4) { if (r == ERROR_SUCCESS) g_Seen |= 1u << index; else g_Seen &= ~(1u << index); }
             if (r != ERROR_SUCCESS || index >= 4 || !st) return r;
             Filter& f = g_Filter[index];
@@ -1945,7 +2259,7 @@ namespace pfo_win_ui
         int g_TestButtons = -1;          // the tests' controller (message UFO50OnlineMenuPad): its buttons; -1: not plugged in
         bool g_Present[4] = {}, g_Announced = false, g_CalledLogged = false;
         ULONGLONG g_LastLook = 0, g_LastHookTry = 0, g_NextTry[4] = {}, g_RepeatAt = 0;
-        WORD g_Before = 0, g_Repeat = 0;
+        WORD g_Before = 0, g_Repeat = 0, g_PadBefore[4] = {};
 
         void Input(WORD buttons, ULONGLONG now)
         {
@@ -2012,7 +2326,24 @@ namespace pfo_win_ui
                     buttons |= st.buttons;
                     if (st.ly > 16000) buttons |= Up;
                     if (st.ly < -16000) buttons |= Down;
+                    // the players' setup: each pad is a player of its own (left / right, A, B, START)
+                    WORD mine = st.buttons;
+                    if (st.lx < -16000) mine |= 0x0004;
+                    if (st.lx > 16000) mine |= 0x0008;
+                    const WORD pressed = static_cast<WORD>(mine & ~g_PadBefore[i]);
+                    g_PadBefore[i] = mine;
+                    if (g_Page == PagePlayers && pressed)
+                    {
+                        if (pressed & 0x0004) PlayersInput(2 + i, 0);
+                        if (pressed & 0x0008) PlayersInput(2 + i, 1);
+                        if (pressed & A) PlayersInput(2 + i, 2);
+                        if (pressed & B) PlayersInput(2 + i, 3);
+                        if (pressed & 0x0010) PlayersStart();
+                        if (g_Page != PageClosed) Build();
+                        Show();
+                    }
                 }
+            if (g_Page == PagePlayers) return;   // (not the menu's moves as well)
             bool connected = g_TestButtons >= 0;
             for (bool there : g_Present) connected = connected || there;
             if (g_TestButtons >= 0) buttons |= static_cast<WORD>(g_TestButtons);
@@ -2058,7 +2389,8 @@ namespace pfo_win_ui
         {
             ours = true;
             g_PadHints = false;
-            MenuKey(vk);
+            if (g_Page == PagePlayers) { if (!repeat) PlayersKey(vk); }
+            else MenuKey(vk);
             if (g_Page != PageClosed) Build();
         }
         else if ((vk == VK_F2 || vk == VK_F3) && (VoteShown() || !g_RejoinOffer.empty()))
@@ -2123,7 +2455,14 @@ namespace pfo_win_ui
         if (m == WM_CLOSE || m == WM_DESTROY) OnGameClosing();
         if (m == g_StartMessage && g_StartMessage != 0) { MakePanel(); return 0; }
         // the tests' controller: wParam its buttons (XInput's bits), lParam 1 unplugs it
-        if (m == g_PadMessage && g_PadMessage != 0) { pad::g_TestButtons = l == 1 ? -1 : static_cast<int>(w & 0xffff); return 0; }
+        if (m == g_PadMessage && g_PadMessage != 0)
+        {
+            // lParam 16+slot / 32+slot: a test controller for the game in that XInput slot / unplugged
+            if (l >= 16 && l < 20) { pad::g_TestGamePad[l - 16] = static_cast<int>(w & 0xffff); return 0; }
+            if (l >= 32 && l < 36) { pad::g_TestGamePad[l - 32] = -1; return 0; }
+            pad::g_TestButtons = l == 1 ? -1 : static_cast<int>(w & 0xffff);
+            return 0;
+        }
         if ((m == WM_KEYDOWN || m == WM_KEYUP || m == WM_CHAR) && OnKey(m, w, l)) return 0;
         if (m == WM_KILLFOCUS) memset(g_Held, 0, sizeof(g_Held));   // their releases go elsewhere
         if (m == WM_NCDESTROY)

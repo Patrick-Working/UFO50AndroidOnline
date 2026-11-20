@@ -95,6 +95,10 @@ public class PFO_Android extends ExtensionBase {
     // libPFO.so: which virtual touch pad (1-4) is in gamepad slot `slot`, or -1
     static native int nativePadForSlot(int slot);
     static native int nativeOnlineSeat();
+    static native void nativeSetLocalPlayers(int n);       // solo play: players on this device (the players' setup)
+    static native int nativeMySeats();                     // this device's seats in the session, as bits
+    static native void nativeSetMySlots(String spec);      // in a lobby: our players' slots and controllers ("0:TOUCH,2:PAD 1")
+    static native String nativeLobbySeats();               // in a lobby: "device~controller|..." per slot ("" empty, ours "*...")
     static native String nativeSeatInfo();                 // online: "<our client>;<seat 0 client>,...;<name>|<name>|..."
     static native int nativeHotSeatTurn();
     static native int nativeHotSeatCount();
@@ -189,7 +193,15 @@ public class PFO_Android extends ExtensionBase {
                 InputStream in = c.getAssets().open("pfo_font.png");
                 Bitmap b = BitmapFactory.decodeStream(in);
                 in.close();
-                return b == null ? null : new PixelFont(b);
+                if (b == null) return null;
+                // the letters alone: the font's black shadow is left out
+                Bitmap m = b.copy(Bitmap.Config.ARGB_8888, true);
+                int w = m.getWidth(), h = m.getHeight();
+                int[] px = new int[w * h];
+                m.getPixels(px, 0, w, 0, 0, w, h);
+                for (int i = 0; i < px.length; i++) if ((px[i] >>> 24) >= 128 && ((px[i] >> 16) & 0xFF) < 128) px[i] = 0;
+                m.setPixels(px, 0, w, 0, 0, w, h);
+                return new PixelFont(m);
             } catch (Throwable t) {
                 Log.i("yoyo", "PFO: overlay font not found, using the system font: " + t);
                 return null;
@@ -345,6 +357,7 @@ public class PFO_Android extends ExtensionBase {
         int slot, player = -1, number;
         String name = "";
         long litUntil;
+        long buttons, prevButtons;   // held now, and at the poll before (the players' setup reads presses)
     }
 
     static final class Control {
@@ -504,7 +517,7 @@ public class PFO_Android extends ExtensionBase {
         void load() {
             opacity = prefs.getFloat("opacity", opacity);
             autoHide = prefs.getBoolean("autohide", autoHide);
-            hotSeat = prefs.getBoolean("hotseat", hotSeat);
+            hotSeat = false;   // (hot seat is gone from the panel: WHO'S PLAYING seats every controller instead)
             dpad4 = prefs.getBoolean("dpad4", dpad4);
             chipsColumn = prefs.getBoolean("chips_column", false);
             quickButtons = prefs.getBoolean("quick_buttons", true);
@@ -605,7 +618,7 @@ public class PFO_Android extends ExtensionBase {
 
         // ---- input while playing ----
         // a box or screen that takes every touch is up
-        boolean blocked() { return panelOpen || naming || inviting || statesOpen || restoring() || voteShown() || rejoinShown() || confirmShown(); }
+        boolean blocked() { return setupOpen || panelOpen || naming || inviting || statesOpen || restoring() || voteShown() || rejoinShown() || confirmShown(); }
         // this touch landed on such a box (the tap may have closed it): the game's controls under it
         // stay untouched until every finger is up
         boolean boxGesture = false;
@@ -622,6 +635,7 @@ public class PFO_Android extends ExtensionBase {
                 if (restoring()) return true;
                 if (confirmShown()) { confirmTap(e.getX(i), e.getY(i)); return true; }
                 if (voteShown()) { voteTap(e.getX(i), e.getY(i)); return true; }
+                if (setupOpen) { setupTap(e.getX(i), e.getY(i)); return true; }
                 if (rejoinShown()) { rejoinTap(e.getX(i), e.getY(i)); return true; }
                 if (statesOpen) { stateDown(e.getX(i), e.getY(i)); return true; }
                 if (naming) return nameTap(e.getX(i), e.getY(i));
@@ -701,9 +715,9 @@ public class PFO_Android extends ExtensionBase {
                     else askEntry(ENTRY_CODE);
                 }
                 else if (code == HIT_HOTSEAT) {
-                    hotSeat = !hotSeat;
-                    save();
-                    if (!hotSeat) { following = false; followedTurn = -1; }
+                    // WHO'S PLAYING (in place of hot seat: every controller is a player of its own)
+                    if (onlineSeat != -1) showBanner(soloSession() ? "LEAVE SOLO PLAY TO CHANGE WHO'S PLAYING" : "SEATS ARE SET FOR THIS MATCH", 1800);
+                    else { panelOpen = false; openSetup(); }
                 } else {
                     int row = code / 8, col = code % 8;   // row 0 = touch, row k = pads[k-1]; col 0 = off, 1-4 = P1-P4
                     if (row == 0) { if (col > 0) setPlayer(col - 1, null); }
@@ -1051,6 +1065,8 @@ public class PFO_Android extends ExtensionBase {
                     pad.number = now.size();
                     pad.litUntil = t + 3000;   // its chip shows "PAD n" for a while
                 } else now.add(pad);
+                pad.prevButtons = pad.buttons;
+                pad.buttons = buttons;
                 if (buttons != 0) pad.litUntil = t + 250;
             }
             for (Pad o : pads) if (!now.contains(o)) { rememberedPlayer.put(o.name, o.player); showBanner("PAD " + o.number + " DISCONNECTED", 1800); }
@@ -1058,8 +1074,9 @@ public class PFO_Android extends ExtensionBase {
             for (int k = 0; k < now.size(); k++) { if (now.get(k).number != k + 1) changed = true; now.get(k).number = k + 1; }
             pads.clear();
             pads.addAll(now);
+            if (setupOpen) for (Pad o : pads) { long pressed = o.buttons & ~o.prevButtons; if (pressed != 0) setupPad(o, pressed); }
             pushBindings();
-            if (changed || panelOpen) invalidate();
+            if (changed || panelOpen || setupOpen) invalidate();
         }
 
         static Pad padOnIn(List<Pad> list, int p) {
@@ -1070,6 +1087,9 @@ public class PFO_Android extends ExtensionBase {
         void pollTestPad() {
             java.io.File dir = getContext().getExternalFilesDir(null);
             if (dir == null) return;
+            // testing: files/opensetup opens WHO'S PLAYING (as the Players panel's button does), once
+            java.io.File open = new java.io.File(dir, "opensetup");
+            if (open.exists() && open.delete() && !setupOpen && onlineSeat == -1) { Log.i("PFOKEYS", "players: opened by files/opensetup"); openSetup(); }
             boolean want = new java.io.File(dir, "testpad").exists();
             if (want && !testPadOn) {
                 testPadOn = true;
@@ -1204,7 +1224,7 @@ public class PFO_Android extends ExtensionBase {
             hitRects.add(jc); hitCodes.add(HIT_JOINCODE);
             toggle(cv, up, upnp ? "UPNP: ON" : "UPNP: OFF", upnp, rowH);
             hitRects.add(up); hitCodes.add(HIT_UPNP);
-            toggle(cv, hs, hotSeat ? "HOT SEAT: ON" : "HOT SEAT: OFF", hotSeat, rowH);
+            toggle(cv, hs, "WHO'S PLAYING", false, rowH);
             hitRects.add(hs); hitCodes.add(HIT_HOTSEAT);
             solid(fill, BTN_NEUTRAL, 1f); cv.drawRoundRect(dn, rowH * 0.15f, rowH * 0.15f, fill);
             solid(line, 0xFFFFFFFF, 0.9f); cv.drawRoundRect(dn, rowH * 0.15f, rowH * 0.15f, line);
@@ -2095,6 +2115,7 @@ public class PFO_Android extends ExtensionBase {
             if (!editing && statesOpen) drawStates(canvas, u);
             if (!editing && vote[0] != 0) drawVote(canvas, u);
             if (!editing && rejoinShown()) drawRejoin(canvas, u);
+            if (!editing && setupOpen) drawSetup(canvas, u);
             if (!editing && confirmShown()) drawConfirm(canvas, u);
             if (!editing && ((confirmShown() && keyMode) || (boxKeys && boxShown()))) {
                 RectF r = confirmShown() ? (boxFocus == 0 ? confirmYesRect : confirmNoRect)
@@ -2312,6 +2333,266 @@ public class PFO_Android extends ExtensionBase {
         final RectF rejoinYes = new RectF(), rejoinNo = new RectF();
 
         boolean rejoinShown() { return !rejoinOffer.isEmpty() && !restoring() && (netStatus & 64) == 0; }
+
+        // ---- the players' setup: who's playing, on what ----
+        // Before solo play every controller is a player of its own: the touch controls and each pad.
+        // Touch: tap a slot to take it (locked in), tap it again to let it go. A pad joins with A,
+        // moves with the d-pad, locks its slot with A, unlocks with B (and leaves with B again);
+        // START or PLAY starts once every joined player is locked in. The locked slots, closed up from
+        // P1, are the seats: each controller then plays its seat (touch -> player, pad -> player).
+        static final int SETUP_SLOTS = 8;
+        boolean setupOpen = false;
+        boolean setupOnline = false;   // opened in a lobby: DONE sends our slots (the host seats everyone)
+        String setupSent = "";         // what DONE sent ("0:TOUCH,2:PAD 1"): reopening in the lobby shows it again
+        static final class Marker { boolean joined, locked; int slot; }
+        final Marker touchMarker = new Marker();
+        final java.util.Map<String, Marker> padMarkers = new java.util.HashMap<>();   // by pad name
+        final RectF[] setupSlot = new RectF[SETUP_SLOTS];
+        final RectF setupPlay = new RectF(), setupBack = new RectF();
+
+        void openSetup() {
+            setupOnline = (netStatus & 16) != 0 && (netStatus & 64) == 0;
+            touchMarker.joined = touchMarker.locked = true; touchMarker.slot = 0;   // touch as P1: one player can start at once
+            padMarkers.clear();
+            if (setupOnline && setupSent.isEmpty()) {
+                // touch in the seat the lobby gives us now (one player per device)
+                String seats = "";
+                try { seats = nativeLobbySeats(); } catch (Throwable t) { }
+                String[] f = seats.split("\\|", -1);
+                for (int q = 0; q < f.length && q < SETUP_SLOTS; q++) if (f[q].startsWith("*")) { touchMarker.slot = q; break; }
+            }
+            if (setupOnline && !setupSent.isEmpty()) {
+                // in a lobby: the slots we sent, as they were
+                touchMarker.joined = touchMarker.locked = false;
+                for (String f : setupSent.split(",")) {
+                    String[] kv = f.split(":", 2);
+                    if (kv.length < 2) continue;
+                    int slot; try { slot = Integer.parseInt(kv[0]); } catch (Throwable t) { continue; }
+                    if (kv[1].equals("TOUCH")) { touchMarker.joined = touchMarker.locked = true; touchMarker.slot = slot; }
+                    else for (Pad p : pads) if (kv[1].equals("PAD " + p.number)) { Marker m = markerOf(p); m.joined = m.locked = true; m.slot = slot; }
+                }
+            }
+            setupOpen = true;
+            Log.i("PFOKEYS", "players: setup open, " + pads.size() + " pads");
+            invalidate();
+        }
+
+        Marker markerOf(Pad p) {
+            Marker m = padMarkers.get(p.name);
+            if (m == null) { m = new Marker(); padMarkers.put(p.name, m); }
+            return m;
+        }
+
+        boolean slotLocked(int slot, Marker except) {
+            if (touchMarker != except && touchMarker.joined && touchMarker.locked && touchMarker.slot == slot) return true;
+            for (Pad p : pads) { Marker m = padMarkers.get(p.name); if (m != null && m != except && m.joined && m.locked && m.slot == slot) return true; }
+            return false;
+        }
+
+        boolean setupReady() {
+            int n = 0;
+            if (touchMarker.joined) { if (!touchMarker.locked) return false; n++; }
+            for (Pad p : pads) { Marker m = padMarkers.get(p.name); if (m != null && m.joined) { if (!m.locked) return false; n++; } }
+            return n > 0;
+        }
+
+        void setupPad(Pad p, long pressed) {
+            Marker m = markerOf(p);
+            boolean a = (pressed & 1) != 0, b = (pressed & 2) != 0, start = (pressed & (1 << 9)) != 0;
+            boolean left = (pressed & (1 << 14)) != 0, right = (pressed & (1 << 15)) != 0;
+            if (start && m.joined) { setupStart(); return; }
+            if (!m.joined) {
+                if (!a) return;
+                m.joined = true; m.locked = false; m.slot = 0;
+                while (m.slot < SETUP_SLOTS - 1 && slotLocked(m.slot, m)) m.slot++;
+                Log.i("PFOKEYS", "players: pad " + p.number + " joined");
+                tick(0);
+                return;
+            }
+            if (left && !m.locked) m.slot = (m.slot + SETUP_SLOTS - 1) % SETUP_SLOTS;
+            else if (right && !m.locked) m.slot = (m.slot + 1) % SETUP_SLOTS;
+            else if (a && !m.locked) {
+                if (slotLocked(m.slot, m)) { tick(2); showBanner("P" + (m.slot + 1) + " IS TAKEN", 1200); return; }
+                m.locked = true;
+                tick(0);
+                Log.i("PFOKEYS", "players: pad " + p.number + " locked in P" + (m.slot + 1));
+            } else if (b) { if (m.locked) m.locked = false; else m.joined = false; }
+        }
+
+        void setupTap(float x, float y) {
+            if (setupPlay.contains(x, y)) { setupStart(); invalidate(); return; }
+            if (setupBack.contains(x, y)) { setupOpen = false; invalidate(); return; }
+            for (int i = 0; i < SETUP_SLOTS; i++) {
+                if (setupSlot[i] == null || !setupSlot[i].contains(x, y)) continue;
+                if (touchMarker.joined && touchMarker.locked && touchMarker.slot == i) { touchMarker.locked = false; touchMarker.joined = false; }
+                else if (slotLocked(i, touchMarker)) { tick(2); showBanner("P" + (i + 1) + " IS TAKEN", 1200); }
+                else { touchMarker.joined = true; touchMarker.locked = true; touchMarker.slot = i; tick(0); Log.i("PFOKEYS", "players: touch locked in P" + (i + 1)); }
+            }
+            invalidate();
+        }
+
+        void setupStart() {
+            if (!setupReady()) { tick(2); showBanner("EVERY PLAYER LOCKS IN A SLOT FIRST", 1500); return; }
+            int k = 0, touchSeat = -1;
+            for (Pad p : pads) p.player = -1;
+            for (int slot = 0; slot < SETUP_SLOTS; slot++) {
+                if (touchMarker.joined && touchMarker.locked && touchMarker.slot == slot) { touchSeat = k; Log.i("PFOKEYS", "players: seat " + (k + 1) + " is touch"); k++; }
+                for (Pad p : pads) {
+                    Marker m = padMarkers.get(p.name);
+                    if (m == null || !m.joined || !m.locked || m.slot != slot) continue;
+                    p.player = k;
+                    rememberedPlayer.put(p.name, k);
+                    Log.i("PFOKEYS", "players: seat " + (k + 1) + " is pad " + p.number);
+                    k++;
+                }
+            }
+            setupOpen = false;
+            // the touch controls play their seat; left out, they play none of them (a seat past the last)
+            setPlayer(touchSeat >= 0 ? touchSeat : Math.min(7, k), "");
+            pushBindings();
+            tick(1);
+            if (setupOnline) {
+                // in a lobby: our slots go to the host, who seats everyone; the routing above holds for the match
+                StringBuilder spec = new StringBuilder(), said = new StringBuilder();
+                for (int slot = 0; slot < SETUP_SLOTS; slot++) {
+                    String input = null;
+                    if (touchMarker.joined && touchMarker.locked && touchMarker.slot == slot) input = "TOUCH";
+                    for (Pad p : pads) { Marker m = padMarkers.get(p.name); if (m != null && m.joined && m.locked && m.slot == slot) input = "PAD " + p.number; }
+                    if (input == null) continue;
+                    spec.append(spec.length() > 0 ? "," : "").append(slot).append(":").append(input);
+                    said.append(said.length() > 0 ? " " : "").append("P").append(slot + 1);
+                }
+                try { nativeSetMySlots(spec.toString()); } catch (Throwable t) { }
+                setupSent = spec.toString();
+                Log.i("PFOKEYS", "players: slots sent " + said);
+                showBanner("YOUR PLAYERS: " + said, 2200);
+                return;
+            }
+            try { nativeSetLocalPlayers(k); } catch (Throwable t) { }
+            nativeStateRequest(1, 0);   // the pill says SOLO: SAVES ON when it starts
+            if (k > 1) showBanner("SOLO PLAY: " + k + " PLAYERS", 2200);
+        }
+
+        static final String[] KEYS_ART = {
+            "kkkkkkkkkkkkkkkkkk",
+            "kbbbbbbbbbbbbbbbbk",
+            "kbwbwbwbwbwbwbwbbk",
+            "kbbbbbbbbbbbbbbbbk",
+            "kbbwbwbwbwbwbwbbbk",
+            "kbbbbbbbbbbbbbbbbk",
+            "kbbbwwwwwwwwwbbbbk",
+            "kbbbbbbbbbbbbbbbbk",
+            "kkkkkkkkkkkkkkkkkk",
+        };
+        // a controller's icon (TOUCH, PAD n, KEYS, NUMPAD) fitted into r: the overlay's own pixel art
+        void drawInputIcon(Canvas cv, String input, RectF r, int body) {
+            float cx = r.centerX(), cy = r.centerY(), room = Math.min(r.height() * 0.8f, r.width() * 0.9f);
+            if (input.startsWith("TOUCH")) { drawTouchIcon(cv, cx, cy, Math.max(1f, room / TOUCH_ART.length), body, 255); return; }
+            if (input.startsWith("PAD")) {
+                int n = 0; try { n = Integer.parseInt(input.substring(3).trim()); } catch (Throwable t) { }
+                drawPadIcon(cv, cx, cy, Math.max(1f, Math.min(room / PAD_ART.length, r.width() * 0.9f / 18f)), body, n, 255);
+                return;
+            }
+            if (input.startsWith("KEYS") || input.startsWith("NUM")) {
+                float cell = Math.max(1f, Math.min(room / KEYS_ART.length, r.width() * 0.9f / 18f));
+                cell = Math.max(1, Math.round(cell));
+                float left = Math.round(cx - cell * 9), top = Math.round(cy - cell * 4.5f);
+                for (int q = 0; q < KEYS_ART.length; q++)
+                    for (int c = 0; c < KEYS_ART[q].length(); c++) {
+                        char k = KEYS_ART[q].charAt(c);
+                        if (k == ' ') continue;
+                        fill.setStyle(Paint.Style.FILL);
+                        fill.setColor(k == 'k' ? 0xFF000000 : k == 'w' ? 0xFFFFFFFF : body);
+                        fill.setAlpha(255);
+                        cv.drawRect(left + c * cell, top + q * cell, left + (c + 1) * cell, top + (q + 1) * cell, fill);
+                    }
+                if (input.startsWith("NUM")) txt(cv, "2", left + cell * 9, top + cell * 4.5f, cell * 4.6f, 0xFFFFFFFF, 255);
+                return;
+            }
+            float sz = r.height() * 0.4f;
+            while (font_w(input, sz) > r.width() * 0.9f && sz > 4) sz *= 0.9f;
+            txt(cv, input, cx, cy, sz, 0xFFFFFFFF, 255);
+        }
+
+        // two lines in a marker: the device's name, the controller under it (each shrunk to fit)
+        void twoLines(Canvas cv, RectF r, String top, String bottom, float lineH, int ink) {
+            boolean hasIcon = bottom != null && !bottom.isEmpty();
+            float h = hasIcon ? r.height() * 0.32f : r.height();
+            if (top != null && !top.isEmpty()) {
+                float sz = lineH * 0.42f;
+                while (font_w(top, sz) > r.width() * 0.9f && sz > lineH * 0.18f) sz *= 0.9f;
+                txt(cv, top, r.centerX(), r.top + h / 2f, sz, ink, 255);
+            }
+            if (hasIcon) drawInputIcon(cv, bottom, new RectF(r.left, r.top + h, r.right, r.bottom), 0xFF3A3A4A);
+        }
+
+        void drawSetup(Canvas cv, float u) {
+            float pw = Math.min(getWidth() * 0.92f, u * 1.7f), gap = u * 0.02f;
+            float slotW = (pw - gap * 2) / SETUP_SLOTS, lineH = u * 0.05f;
+            String[] others = new String[SETUP_SLOTS];
+            if (setupOnline) {
+                String seats = "";
+                try { seats = nativeLobbySeats(); } catch (Throwable t) { }
+                String[] f = seats.split("\\|", -1);
+                for (int q = 0; q < f.length && q < SETUP_SLOTS; q++) if (!f[q].isEmpty() && !f[q].startsWith("*")) others[q] = f[q].toUpperCase();
+            }
+            String me = currentName().toUpperCase();
+            float markH = setupOnline ? lineH * 2.4f : lineH * 1.7f;   // the controller's icon (online: the device's name above it)
+            int stack = 1;
+            float markStep = (setupOnline ? 2.4f : 1.7f) + 0.15f;   // a marker's height and gap, in lines
+            for (int i = 0; i < SETUP_SLOTS; i++) {
+                int n = (touchMarker.joined && touchMarker.slot == i ? 1 : 0) + (others[i] != null ? 1 : 0);
+                for (Pad p : pads) { Marker m = padMarkers.get(p.name); if (m != null && m.joined && m.slot == i) n++; }
+                stack = Math.max(stack, n);
+            }
+            float ph = gap * 2 + lineH * (2.2f + 1.3f + stack * markStep + 0.8f) + u * 0.085f;
+            float left = (getWidth() - pw) / 2f, top = (getHeight() - ph) / 2f;
+            solid(fill, 0xFF000000, 0.55f); cv.drawRect(0, 0, getWidth(), getHeight(), fill);
+            tmp.set(left, top, left + pw, top + ph);
+            solid(fill, 0xFF000000, 0.95f); cv.drawRoundRect(tmp, gap, gap, fill);
+            solid(line, 0xFFFFFFFF, 0.9f); cv.drawRoundRect(tmp, gap, gap, line);
+            float y = top + gap + lineH * 0.7f;
+            txt(cv, "WHO'S PLAYING", left + pw / 2f, y, u * 0.045f, 0xFFFFFFFF, 255);
+            y += lineH;
+            txt(cv, "SELECT A SLOT TO JOIN", left + pw / 2f, y, lineH * 0.55f, 0xFFC8C8C8, 255);
+            y += lineH * 0.9f;
+            float sx = left + gap;
+            for (int i = 0; i < SETUP_SLOTS; i++) {
+                if (setupSlot[i] == null) setupSlot[i] = new RectF();
+                setupSlot[i].set(sx + i * slotW + gap * 0.2f, y, sx + (i + 1) * slotW - gap * 0.2f, y + lineH * 1.1f);
+                solid(fill, PLAYER_COLOR[i], 1f); cv.drawRoundRect(setupSlot[i], gap * 0.5f, gap * 0.5f, fill);
+                int ink = i == 3 || i == 6 || i == 7 ? 0xFF1A1A1A : 0xFFFFFFFF;
+                txt(cv, "P" + (i + 1), setupSlot[i].centerX(), setupSlot[i].centerY(), lineH * 0.6f, ink, 255);
+                float my = y + lineH * 1.3f;
+                java.util.List<String> names = new java.util.ArrayList<>();
+                java.util.List<Boolean> locks = new java.util.ArrayList<>();
+                if (others[i] != null) {
+                    // another device's player: its device and controller
+                    tmp.set(setupSlot[i].left, my, setupSlot[i].right, my + markH);
+                    solid(fill, 0xFF606068, 1f); cv.drawRoundRect(tmp, gap * 0.4f, gap * 0.4f, fill);
+                    String[] dc = others[i].split("~", 2);
+                    twoLines(cv, tmp, dc[0], dc.length > 1 ? dc[1] : "", lineH, 0xFFFFFFFF);
+                    my += markH + lineH * 0.15f;
+                }
+                if (touchMarker.joined && touchMarker.slot == i) { names.add("TOUCH"); locks.add(touchMarker.locked); }
+                for (Pad p : pads) { Marker m = padMarkers.get(p.name); if (m != null && m.joined && m.slot == i) { names.add("PAD " + p.number); locks.add(m.locked); } }
+                for (int q = 0; q < names.size(); q++) {
+                    tmp.set(setupSlot[i].left, my, setupSlot[i].right, my + markH);
+                    if (locks.get(q)) { solid(fill, PLAYER_COLOR[i], 1f); cv.drawRoundRect(tmp, gap * 0.4f, gap * 0.4f, fill); }
+                    else { solid(line, 0xFFFFFFFF, 0.6f); cv.drawRoundRect(tmp, gap * 0.4f, gap * 0.4f, line); }
+                    if (setupOnline) twoLines(cv, tmp, me, names.get(q), lineH, locks.get(q) ? ink : 0xFFFFFFFF);
+                    else drawInputIcon(cv, names.get(q), tmp, 0xFF3A3A4A);
+                    my += markH + lineH * 0.15f;
+                }
+            }
+            y += lineH * (1.3f + stack * markStep);
+            float btnH = u * 0.075f, bw = (pw - gap * 3) / 2f, by = top + ph - gap - btnH;
+            setupBack.set(left + gap, by, left + gap + bw, by + btnH);
+            setupPlay.set(setupBack.right + gap, by, left + pw - gap, by + btnH);
+            stateHits.clear(); stateCodes.clear();
+            button(cv, setupBack, "BACK", BTN_NEUTRAL, true, btnH, ST_CLOSE);
+            button(cv, setupPlay, setupOnline ? "DONE" : "PLAY", BTN_PRIMARY, setupReady(), btnH, ST_CLOSE);
+        }
 
         void pollRejoin() {
             long now = android.os.SystemClock.uptimeMillis();
@@ -2625,6 +2906,7 @@ public class PFO_Android extends ExtensionBase {
         void quickLoad() {
             if (restoring()) return;
             if (onlineGame()) { tick(2); showBanner("QUICK LOAD IS FOR SOLO PLAY (THE DISK HAS THE SAVES)", 2200); return; }
+            if ((netStatus & 16) != 0) { tick(2); showBanner("QUICK LOAD ISN'T FOR A LOBBY (IT WOULD LEAVE IT)", 2200); return; }
             if (!haveQuickSave()) { tick(2); showBanner("NO QUICK SAVE YET", 1800); return; }
             int est = loadEstimateMs(QUICK_SLOT);
             if (est >= CONFIRM_FROM_MS)
@@ -2915,7 +3197,7 @@ public class PFO_Android extends ExtensionBase {
             }
             else if (code == ST_SOLO) {
                 statesOpen = false;
-                nativeStateRequest(1, 0);   // the pill says SOLO: SAVES ON when it starts
+                openSetup();   // who's playing first; PLAY starts solo play (the pill says SOLO: SAVES ON)
             } else if (code == ST_SAVE) {
                 boolean onlineNow = (netStatus & 64) != 0 && !soloSession();
                 if (!canSaveState()) { showBanner(onlineNow ? "ONLY PLAYERS WITH A SEAT CAN SAVE" : soloSession() ? "CAN'T SAVE RIGHT NOW" : "START SOLO PLAY TO SAVE", 1800); return; }
@@ -3029,6 +3311,14 @@ public class PFO_Android extends ExtensionBase {
         // PFO_Android.dispatchKeyEvent: true when the key is ours (the game doesn't get it)
         boolean onKey(KeyEvent e) {
             int code = e.getKeyCode();
+            if (setupOpen) {
+                if (e.getAction() == KeyEvent.ACTION_DOWN && e.getRepeatCount() == 0) {
+                    if (code == KeyEvent.KEYCODE_ENTER || code == KeyEvent.KEYCODE_NUMPAD_ENTER) setupStart();
+                    else if (code == KeyEvent.KEYCODE_ESCAPE || code == KeyEvent.KEYCODE_BACK) { setupOpen = false; Log.i("PFOKEYS", "players: back"); }
+                    invalidate();
+                }
+                return true;   // (nothing reaches the game while it's up)
+            }
             if (e.getAction() == KeyEvent.ACTION_UP) return keysOurs.remove(code);
             if (e.getAction() != KeyEvent.ACTION_DOWN) return keysOurs.contains(code);
             if (e.getRepeatCount() > 0) {

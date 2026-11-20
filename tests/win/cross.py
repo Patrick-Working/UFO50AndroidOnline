@@ -113,13 +113,22 @@ def start_windows():
     return w.start(1)    # the pid (its window comes a few seconds later)
 
 
-def start(host_is, port):
-    """both into one public lobby and on into the online library; returns (host, joiner, windows, android)"""
+def relayed(sender, since):
+    """the rejoin's sender reaches the rejoiner through the relay: it sends the match to replay (the
+    game as it is would be too big for the relay), so that rejoin replays by design"""
+    return "reached through the relay" in sender.log(since)
+
+
+def start(host_is, port, before_ready=None):
+    """both into one public lobby and on into the online library; returns (host, joiner, windows, android).
+    before_ready(windows, android) runs in the lobby before the players are ready (the players' setup)"""
     d = Droid(port)
     d.launch()
+    run0 = duo.mark(1)   # (the Windows log keeps earlier runs' lines: the checks read this run's)
     pid = start_windows()
     time.sleep(24)
     g = duo.Game(1, pid)
+    g.run0 = run0
     if host_is == "win":
         duo.to_lobbies(g)
         g.keys("z", 6)                                # HOST PUBLIC
@@ -129,6 +138,7 @@ def start(host_is, port):
         if not d.sees_a_lobby(): d.shot("no_lobby"); raise RuntimeError("the emulator never saw the lobby")
         mg = g.mark()
         m.keys(port, "Z", 6)                          # join it
+        if before_ready: before_ready(g, d); mg = g.mark()
         m.keys(port, "Z", 1.5)                        # READY
         g.keys("z")                                   # READY: the session starts
         if not g.wait_log(r"STARTING SESSION", mg, 25): g.shot("no_session"); d.shot("no_session"); raise RuntimeError("the session never started")
@@ -145,6 +155,7 @@ def start(host_is, port):
         time.sleep(0.8)
         duo.onto_lobby(g)
         g.keys("z", 7)                                # join it
+        if before_ready: before_ready(g, d); mg = g.mark()
         g.keys("z", 1.5)                              # READY
         m.key(port, "Z")                              # READY: the session starts
         if not g.wait_log(r"STARTING SESSION", mg, 25): g.shot("no_session"); d.shot("no_session"); raise RuntimeError("the session never started")
@@ -253,10 +264,10 @@ def test(host, joiner, g, d):
     md = None
     m.adb(d.port, "shell", "am", "force-stop", PKG); time.sleep(8)
     m.adb(d.port, "shell", "monkey", "-p", PKG, "-c", "android.intent.category.LAUNCHER", "1"); time.sleep(26)
-    md = d.mark(); d.cmd("rejoin")
+    md, mo = d.mark(), g.mark(); d.cmd("rejoin")
     r = d.wait_log(r"rejoin: back in the match|rejoin: (no answer|can.t|nobody|bad|the replay)", md, 60)
     check(bool(r and "back in the match" in r.group(0)), "the emulator's app killed: it rejoins", r.group(0) if r else "no rejoin line")
-    duo.check_rejoin_kind(d, md, check, "the emulator's rejoin")
+    duo.check_rejoin_kind(d, md, check, "the emulator's rejoin", want_fast=False if relayed(g, mo) else None)
     time.sleep(4)
     together(host, joiner, check, "together after the emulator's rejoin")
 
@@ -267,10 +278,11 @@ def test(host, joiner, g, d):
     pid = w.start(1)
     time.sleep(16)
     g2 = duo.Game(1, pid)
-    mg = g2.mark(); g2.keys("f2")
+    g2.run0 = g.run0
+    mg, mo = g2.mark(), d.mark(); g2.keys("f2")
     r = g2.wait_log(r"rejoin: back in the match|rejoin: (no answer|can.t|nobody|bad|the replay)", mg, 90)
     check(bool(r and "back in the match" in r.group(0)), "the Windows game killed: it rejoins", r.group(0) if r else "no rejoin line")
-    duo.check_rejoin_kind(g2, mg, check, "the Windows game's rejoin")
+    duo.check_rejoin_kind(g2, mg, check, "the Windows game's rejoin", want_fast=False if relayed(d, mo) else None)
     time.sleep(4)
     h2, j2 = (g2, d) if host is g else (d, g2)
     together(h2, j2, check, "together after the Windows game's rejoin")
@@ -279,7 +291,7 @@ def test(host, joiner, g, d):
     if s3: save_by(h2, j2, 4, check, "save after both rejoins")
 
     for x, name in ((g2, "the Windows game"), (d, "the emulator")):
-        bad = [l for l in x.log().splitlines() if duo.BAD.search(l)]
+        bad = [l for l in x.log(getattr(x, "run0", 0)).splitlines() if duo.BAD.search(l)]
         check(not bad, "%s: no desync or lost-connection lines" % name, "; ".join(l.strip()[-140:] for l in bad[:3]))
     crash = [l for l in m.full(d.port).splitlines() if re.search(r"FATAL|SIGSEGV|Assertion failed", l)]
     check(not crash, "the emulator: no crash or failed assertion", crash[0].strip()[-140:] if crash else "")

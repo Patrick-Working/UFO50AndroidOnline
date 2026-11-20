@@ -102,7 +102,7 @@ def test(host, joiner, g, d):
     drives_p2(host, d, check, "after that rejoin")
     drives_p1(g, d, check, "after that rejoin")
     for x, name in ((g, "the Windows game"), (d, "the emulator")):
-        bad = [l for l in x.log().splitlines() if duo.BAD.search(l)]
+        bad = [l for l in x.log(getattr(x, "run0", 0)).splitlines() if duo.BAD.search(l)]
         check(not bad, name + ": no desync or lost-connection lines", "; ".join(bad[:3]))
     return check
 

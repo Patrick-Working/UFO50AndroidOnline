@@ -170,6 +170,20 @@ def launch():
         for f in ("rejoin.txt", "ss_cmd", "okplay.txt", "rejoinreplay", "forcerelay"):   # (okplay.txt: the tests that play alone switch the room server off; the others: test switches a run left)
             try: os.remove(os.path.join(folder(n), f))
             except OSError: pass
+    # RELAY=1 (rejoin.py): the joiner skips the direct addresses; set after the clean-up above, which
+    # takes away the switches a run left behind
+    if os.environ.get("RELAY") == "1": open(os.path.join(folder(2), "forcerelay"), "w").close()
+    # TRACE=<frames> (tracediff.py): both trace the whole state each frame from a rejoin on
+    if os.environ.get("TRACE"):
+        import shutil
+        for n, tag in ((1, "host"), (2, "joiner")):
+            shutil.rmtree(os.path.join(folder(n), "trace"), ignore_errors=True)
+            open(os.path.join(folder(n), "tracerejoin"), "w").write(os.environ["TRACE"])
+            open(os.path.join(folder(n), "tracetag"), "w").write(tag)
+    else:
+        for n in (1, 2):
+            try: os.remove(os.path.join(folder(n), "tracerejoin"))
+            except OSError: pass
     pids = [w.start(1)]
     time.sleep(1)
     pids.append(w.start(2))
@@ -211,7 +225,9 @@ def menu_status(g):
     return m.group(1) if m else ""
 
 
-def start():
+def start(before_ready=None):
+    """both into one private lobby and on into the online library; before_ready(host, joiner) runs in
+    the lobby before the players are ready (the players' setup, say)"""
     a, b = launch()
     to_lobbies(a)
     a.keys("down", 0.5, "z", 6)                       # HOST PRIVATE
@@ -233,6 +249,7 @@ def start():
     time.sleep(0.8)
     onto_lobby(b)
     b.keys("z", 7)                                    # join it
+    if before_ready: before_ready(a, b); ma, mb = a.mark(), b.mark()
     b.keys("z", 1.5)                                  # READY
     a.keys("z")                                       # READY: the session starts
     for g, m0 in ((a, ma), (b, mb)):

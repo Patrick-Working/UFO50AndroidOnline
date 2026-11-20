@@ -631,7 +631,8 @@ extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeH
 extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeHotSeatTurn(JNIEnv*, jclass)
 {
     using namespace pfo_android;
-    if (g_Session.m_OnlineState >= EOnlineState::Online) return -1;
+    // (online with other devices: turns are the session's; solo play with several players here: hot seat as offline)
+    if (g_Session.m_OnlineState >= EOnlineState::Online && g_Session.m_ClientCount > 1) return -1;
     // The game reports turns only while it reads the player's controls: not while it's paused or
     // shows a box. The turn holds through those (dropping out and back in each time switched the
     // pad back and forth); it ends when that game is left, or after 20 s without a report.
@@ -686,6 +687,38 @@ namespace pfo_android
 }
 
 #include "savestate.inc"
+
+// Several players on this device: how many play in solo play (the overlay's player setup, set
+// before solo play starts), and this device's seats in the session as bits (its first and the rest)
+extern "C" JNIEXPORT void JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeSetLocalPlayers(JNIEnv*, jclass, jint n)
+{
+    pfo_android::g_LocalPlayers = std::clamp<int>(n, 1, c_PlayerLimit);
+}
+
+// online, in a lobby: the slots our players locked in (the host works the seats out), and the
+// seating as it stands ("name|name|..." per slot, "" empty, ours starting with "*")
+extern "C" JNIEXPORT void JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeSetMySlots(JNIEnv* env, jclass, jstring spec)
+{
+    const char* c = env->GetStringUTFChars(spec, nullptr);
+    pfo_android::SetMySlots(pfo_android::ParseSlotSpec(c ? c : ""));   // ("0:TOUCH,2:PAD 1")
+    if (c) env->ReleaseStringUTFChars(spec, c);
+}
+
+extern "C" JNIEXPORT jstring JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeLobbySeats(JNIEnv* env, jclass)
+{
+    std::string out;
+    auto names = pfo_android::LobbySeatNames();
+    for (size_t i = 0; i < names.size(); i++) out += (i ? "|" : "") + names[i];
+    return env->NewStringUTF(out.c_str());
+}
+
+extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeMySeats(JNIEnv*, jclass)
+{
+    if (g_Session.m_OnlineState < EOnlineState::Online) return 0;
+    int c = g_Session.m_ClientIndex;
+    if (c < 0 || c >= c_ClientLimit) return 0;
+    return static_cast<jint>(g_Session.SeatMask(c));
+}
 
 #define PFO_BUILTIN(name) \
     static void pfo_builtin_##name(RValue& r, CInstance* s, CInstance* o, int argc, RValue* arg) {         std::lock_guard<std::recursive_mutex> netLock(fakesteam::g_NetMutex);   /* the background pump waits while the game runs */         fakesteam::g_LastGameCallMs = fakesteam::NowMs();         pfo_android::EnsureExtensionInitialised(); pfo_android::InputProbe(); pfo_android::RefreshPadSlots();         const bool isUpdate = reinterpret_cast<void*>(&name) == reinterpret_cast<void*>(&pfo_update);   /* once per game step */         if (isUpdate) { pfo_android::HotSeatDev(s); pfo_android::g_LastAdvanceArg = argc > 0 ? YYGetBool(arg, 0) : true; pfo_android::SpeedProbe(s); pfo_android::StateBeforeUpdate(s); }         if (isUpdate && pfo_android::g_SnapSkipUpdate) { r.kind = VALUE_UNDEFINED; return; }   /* a snapshot load is changing room */         name(r, s, o, argc, arg);         if (isUpdate) pfo_android::StateAfterUpdate(s); }
@@ -745,6 +778,7 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*)
     functionAdd("pfo_runner_mark", &pfo_runner_mark, 0, false); count++;
     functionAdd("pfo_runner_rehide", &pfo_runner_rehide, 0, false); count++;
     functionAdd("pfo_runner_settle", &pfo_runner_settle, 0, false); count++;
+    functionAdd("pfo_runner_maxid", &pfo_runner_maxid, 1, false); count++;
     char msg[96];
     snprintf(msg, sizeof(msg), "PFO: registered %d built-in functions", count);
     __android_log_write(ANDROID_LOG_INFO, "yoyo", msg);

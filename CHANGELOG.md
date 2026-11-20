@@ -2,6 +2,54 @@
 
 ## Unreleased
 
+- **Several players on one device: WHO'S PLAYING.** Every controller is a player of its own: on a
+  phone the touch controls and each pad, on Windows the arrow keys, the numpad keys (the game's P2
+  keys) and each pad. Before solo play (START SOLO PLAY) and, online, in the lobby (the Players
+  panel on a phone, WHO'S PLAYING... in the F1 menu on Windows), each controller joins, picks a slot
+  P1-P8 and locks it in; every player shows its controller's icon and, online, its device's name.
+  Solo play records every seat, so saves, quick saves, rewind and loads work with several players
+  on one device. Online, each device sends the slots its players locked in, the host seats everyone
+  (a slot two devices want goes to the one earlier in the lobby), and the match starts with those
+  seats on every device; online saves, loads and fast rejoins carry every seat.
+  How it works: PFO gave each connection exactly one player; a device can now carry several seats,
+  whose inputs travel in the same network messages and replay frames as its first seat. The replay
+  labels them by seat (a new chunk type, and a seat table in the header behind a flag bit: older
+  replays and saves load as before), and the game reads each seat's own controller. Hot seat is gone
+  from the Players panel (its place is WHO'S PLAYING).
+- **Snapshots put back what was missing** (found by going through every kind of state the runner
+  holds against what the games use: docs/SNAPSHOT_STATE.md):
+  - **Fixed: a fast rejoin into Barbuta desynced.** Putting a snapshot back, each instance made
+    again takes the next free id, and that could be the id a later record still had on the other
+    device: that record took the new instance for its own, and its own was never made (38 cliffs).
+    Every instance to reuse is now decided before any is made, as data structures already were.
+  - **Instances made again keep the ids they had**, and new ones still come after all others: two
+    games decide things by comparing ids (`id < other.id`), and the order used to change.
+  - **Paths and motion-planning grids made at run time** (two games' enemies and units walk them,
+    library 12 and 50) are carried, with each instance's place on its path: a load or rejoin used
+    to leave them standing.
+  - **Fixed: after a fast rejoin, switched-off instances could never be switched on again**: the
+    runner keeps a cached list of them for `instance_activate_*()`, which a restore didn't mark
+    stale (library 12's map stayed off on the rejoined device).
+  - References to things gone by then (`noone`, a dead instance, a freed list) stay references
+    (they came back as plain numbers), and data structures made again keep the numbers they had
+    (a game's stale number for a freed list named a live one on one device and nothing on another).
+  - **Fixed: after a fast rejoin, going back to the library desynced.** The rejoin carries the
+    sender's save files, but they were looked for in the wrong folder (a plain file open of
+    `save1.ufo` from the game's own folder): the rejoiner was told there were none, and its library
+    (games played, play time) differed from the others' as soon as a game was left. Save files are
+    now read and written through GameMaker's own file functions, as PFO does; that also makes a
+    load put your save file back as it was at the save (it never got written before). A save file
+    is never deleted by a load.
+- **Tests: state tracing.** `trace <frames>` / `tracerejoin` write the whole game state every frame;
+  `tests/tracediff.py` names the first item where two devices differ; `tests/win/rejoin_sweep.py`
+  rejoins into every game and compares. `WINGAME_BACK=1` keeps the Windows test games' windows
+  behind yours. The cross and pause-seat tests read only their own run's Windows log lines, and a
+  rejoin through the relay may replay (it does, by design).
+- **The menus' font without its black shadow**, on both versions.
+- **Fixed: QUICK LOAD in a lobby** started solo play and left the lobby; it isn't offered there now.
+- **Tests:** `SOLO_PLAYERS=2 tests/win/sweep.py`: the sweep with P2 playing; the test relay switch
+  (`RELAY=1`) is set again after the launch clears old switches (it had stopped taking effect).
+
 - **Windows: the online menu in UFO 50's own font.** The build exports the game's menu font from
   your copy into the game folder (as the phone build does for its overlay; nothing is shipped) and
   the menu draws it at whole-pixel sizes. Without the file it falls back to Consolas.

@@ -42,6 +42,8 @@ user32.SetProcessDPIAware()
 VK = {"up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27, "enter": 0x0D, "esc": 0x1B, "space": 0x20, "tab": 0x09,
       "shift": 0x10, "ctrl": 0x11, "backspace": 0x08, "del": 0x2E, "minus": 0xBD}
 for i in range(1, 13): VK["f%d" % i] = 0x6F + i
+for i in range(10): VK["num%d" % i] = 0x60 + i   # (the game's P2 keys: num5/2/1/3 up/down/left/right, end and del its buttons, pgup start)
+VK.update({"end": 0x23, "pgup": 0x21, "home": 0x24, "pgdn": 0x22})
 
 
 def exe_of(pid):
@@ -89,8 +91,9 @@ def home(n=1):
     return os.path.join(SANDBOX, str(n), "AppData", "Local")
 
 
-def start(n=1, front=True):
+def start(n=1, front=None):
     """front=False: the window opens behind whatever is in front and doesn't take the keyboard"""
+    if front is None: front = not os.environ.get("WINGAME_BACK")   # (WINGAME_BACK=1: every window behind)
     for f in STEAM_FILES:
         if os.path.exists(os.path.join(GAME_DIR, f)): raise SystemExit("refusing to start: %s is in %s" % (f, GAME_DIR))
     profile = os.path.join(SANDBOX, str(n))
@@ -227,6 +230,22 @@ def press(key, hwnd=None, hold=0.06):
 
 # the menu's test controller: a registered message the build takes as a controller's buttons
 PAD = {"up": 0x0001, "down": 0x0002, "l3": 0x0040, "r3": 0x0080, "a": 0x1000, "b": 0x2000, "x": 0x4000}
+
+
+# a test controller for the game itself, in XInput slot 0-3 (XInput's bits)
+GAMEPAD = {"up": 0x0001, "down": 0x0002, "left": 0x0004, "right": 0x0008, "start": 0x0010, "back": 0x0020,
+           "a": 0x1000, "b": 0x2000, "x": 0x4000, "y": 0x8000}
+
+
+def game_pad(slot, buttons, hwnd=None):
+    """hold these buttons on the game's test controller in XInput slot `slot` (0-3) until the next
+    call ("" lets go of all; "unplug" takes it away)"""
+    hwnd = hwnd or game_window()
+    msg = user32.RegisterWindowMessageW("UFO50OnlineMenuPad")
+    if buttons == "unplug": user32.PostMessageW(hwnd, msg, 0, 32 + slot); return
+    bits = 0
+    for b in buttons.replace("+", " ").split(): bits |= GAMEPAD[b.lower()]
+    user32.PostMessageW(hwnd, msg, bits, 16 + slot)
 
 
 def pad(buttons, hwnd=None, hold=0.1):

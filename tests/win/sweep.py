@@ -86,8 +86,10 @@ class Game:
 
     def mash(self, seconds):
         t = time.time()
+        p2 = bool(os.environ.get("SOLO_PLAYERS"))   # (several players here: P2 plays its own keys, the numpad's)
         while time.time() - t < seconds:
             self.key(self.rnd.choice(["left", "right", "up", "down", "z", "x", "right", "z"]))
+            if p2: self.key(self.rnd.choice(["num1", "num3", "num5", "num2", "del", "end", "num3"]))
 
     # ---- its log (it grows from run to run: only what came after mark() is read) ----
     def mark(self):
@@ -185,7 +187,8 @@ class Game:
         if not self.wait_ready(): return None, "the test game did not answer"
         if "snapshots: on" not in self.log_all_run(): return None, "no snapshots in this test game"
         if not self.to_library(): return None, "did not reach the library at start (%s)" % self.room
-        self.cmd("solo"); time.sleep(3)
+        # SOLO_PLAYERS=2: solo play with that many players on this device (their seats all recorded)
+        self.cmd("solo" + (" " + os.environ["SOLO_PLAYERS"] if os.environ.get("SOLO_PLAYERS") else "")); time.sleep(3)
         if not self.to_library(20): return None, "not in the library after starting solo play (%s)" % self.room
         self.open_game(n)
         self.mash(6)

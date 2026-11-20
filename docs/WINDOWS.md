@@ -29,6 +29,10 @@ what happened; it holds network addresses, so look through it before you post it
 ## Building it
 
 You need Windows 10 or 11 and UFO 50 1.9.5 from Steam.
+That's the game's own requirement, not this port's: UFO 50's `ufo50.exe` (GameMaker's runner) needs
+Windows 8 or later system files, so on Windows 7 it stops at once with "api-ms-win-core-path-l1-1-0.dll
+is missing", the Vanilla copy and the Steam game alike. No start option gets round that (there is no
+DirectX 9 mode: the runner draws with Direct3D 11 only). Our PFO.dll needs Windows 10 as well.
 
 **Quick build** (nothing to install): double-click `build-windows.bat` (or run
 `build.bat -Windows`). The first run installs the mods with the UFO 50 Mod Loader, without a window (if
@@ -90,6 +94,11 @@ The **menu** has, depending on where you are:
 - **SAVE** and **LOAD A SAVE...**: the list of saves, and beside it the chosen save's picture,
   its game, how far in it was made, who was playing and how long it takes to load. A load that
   takes more than about five seconds asks first (LOAD THIS SAVE?).
+- **WHO'S PLAYING** (opened by START SOLO PLAY, and in a lobby by WHO'S PLAYING...): every controller
+  is a player of its own (the arrow keys, the numpad keys, each pad). Each joins with its A (Z on the
+  arrow keys, Del on the numpad, A on a pad), moves with left / right, locks a slot P1-P8 in with A
+  and backs out with B (X, End). Enter or START plays (solo) or sends your players' slots (a lobby:
+  the host seats everyone).
 - **START SOLO PLAY**, which turns saves and rewind on in single player, and then REWIND 15 S /
   30 S / 60 S with the time each will take
 - when another player asks to load a save: ACCEPT / DECLINE; after a crash or a closed game:

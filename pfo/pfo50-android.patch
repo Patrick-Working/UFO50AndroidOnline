@@ -1,5 +1,5 @@
 diff --git a/PFO/dllmain.cpp b/PFO/dllmain.cpp
-index 7abb85d..5e87fb3 100644
+index 7abb85d..d7e2bed 100644
 --- a/PFO/dllmain.cpp
 +++ b/PFO/dllmain.cpp
 @@ -5,7 +5,14 @@
@@ -25,7 +25,7 @@ index 7abb85d..5e87fb3 100644
 +#include <atomic>
 +#include <chrono>
 +// savestate.inc (included at the end): online save/load commands added to our input
-+namespace pfo_android { unsigned int InjectCommand(unsigned int input); void RejoinServe(bool frozen, CInstance* self); void MatchStarts(); }
++namespace pfo_android { unsigned int InjectCommand(unsigned int input); void RejoinServe(bool frozen, CInstance* self); void MatchStarts(); void SetLocalSeat(int k, CInstance* self); void PublishSeatSources(CInstance* self); }
 +#endif
 +
  namespace
@@ -42,7 +42,21 @@ index 7abb85d..5e87fb3 100644
          HANDLE logFile = CreateFileA(g_LogFileName, FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA | FILE_APPEND_DATA | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
          if (logFile != INVALID_HANDLE_VALUE)
          {
-@@ -236,6 +254,47 @@ namespace
+@@ -191,6 +209,13 @@ namespace
+ 
+     constexpr int c_ClientLimit = 8;
+     constexpr int c_PlayerLimit = c_ClientLimit;
++#if defined(PFO_OURS)
++    // seats a device can have besides its first (several players on one device)
++    constexpr int c_ExtraSeatLimit = c_PlayerLimit - 1;
++    // the replay chunk code's "other index" saying an extra seat's input follows (input chunks
++    // otherwise use it for their byte count, 0-4)
++    constexpr int c_ReplayExtraSeatChunk = 15;
++#endif
+     constexpr int c_TargetFPS = 60;
+     constexpr int c_MaxInputDelay = 20;
+     constexpr int c_CollectSamplesInterval = 4;
+@@ -236,6 +261,47 @@ namespace
      constexpr uint32 c_ReplayMagic = 0x524f4650u; // PFOR
      constexpr uint32 c_ReplayVersion = VERSION_TO_NUMBER(MOD_VERSION);
      uint8* g_ReplayBuffer;
@@ -90,7 +104,93 @@ index 7abb85d..5e87fb3 100644
      uint8* g_ReplayBuffer2;
      bool g_AlwaysSaveReplays = c_LogLevel <= ELogLevel::Debug;
  
-@@ -934,6 +993,10 @@ namespace
+@@ -712,6 +778,12 @@ namespace
+         int m_InputDelay = 0;
+         int m_AutomaticInputDelay = 0;
+         PlayerData m_PlayerData;
++#if defined(PFO_OURS)
++        // A device's further seats (several players on one device). Their inputs travel with the
++        // first seat's, in the same messages and replay frames, so the frames, the tail and the
++        // acknowledgements are m_PlayerData's; each has its own buffer and seat (-1: unassigned).
++        PlayerData m_ExtraPlayerData[c_ExtraSeatLimit];
++#endif
+         AutomaticInputDelayChange m_AutomaticInputDelayChanges[countof(m_PlayerData.m_InputBuffer)] = { { .m_InputFrame = 1 } };
+         int m_SampleCount = 0;
+         int m_SampleHead = 0;
+@@ -821,6 +893,10 @@ namespace
+ 
+         int16 m_ChecksumFrameDelta;
+         uint8 m_InputFrameCount;
++#if defined(PFO_OURS)
++        uint8 m_ExtraSeatCount;   // the sender's further seats: m_InputFrameCount inputs each
++        InputFlags_t m_ExtraInputs[c_ExtraSeatLimit][1 << c_MessageInputCountBits];
++#endif
+ 
+         template<typename T>
+         FORCEINLINE constexpr void Serialize(T& writer)
+@@ -836,6 +912,17 @@ namespace
+             {
+                 writer.Write(m_Inputs[i]);
+             }
++#if defined(PFO_OURS)
++            writer.Write(m_ExtraSeatCount);
++            if (m_ExtraSeatCount > c_ExtraSeatLimit) m_ExtraSeatCount = 0;   // (not ours: read as none)
++            for (int s = 0; s < m_ExtraSeatCount; s++)
++            {
++                for (int i = 0; i < m_InputFrameCount; i++)
++                {
++                    writer.Write(m_ExtraInputs[s][i]);
++                }
++            }
++#endif
+ 
+             for (int i = 0; i < countof(m_AutomaticInputDelayChanges); i++)
+             {
+@@ -854,6 +941,9 @@ namespace
+         static consteval int GetMaxSize()
+         {
+             Message message = { .m_InputFrameCount = countof(message.m_Inputs) };
++#if defined(PFO_OURS)
++            message.m_ExtraSeatCount = c_ExtraSeatLimit;
++#endif
+ 
+             for (int i = 0; i < countof(message.m_AutomaticInputDelayChanges); i++)
+             {
+@@ -870,6 +960,13 @@ namespace
+         uint32 m_Version;
+         uint8 m_ClientCount;
+         uint8 m_ClientIndex;
++#if defined(PFO_OURS)
++        // m_ClientCount's top bit: the seats follow, a byte per device (the seats it carries), then a
++        // byte per seat (its device, 0xff empty); without it every device has one seat, as in replays
++        // made before
++        uint8 m_Seats[c_ClientLimit] = { 1, 1, 1, 1, 1, 1, 1, 1 };
++        uint8 m_Plan[c_PlayerLimit] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
++#endif
+ 
+         template<typename T>
+         void Serialize(T& writer)
+@@ -878,6 +975,19 @@ namespace
+             writer.Write(m_Version);
+             writer.Write(m_ClientCount);
+             writer.Write(m_ClientIndex);
++#if defined(PFO_OURS)
++            if (m_ClientCount & 0x80)
++            {
++                for (int i = 0; i < (m_ClientCount & 0x7f) && i < c_ClientLimit; i++)
++                {
++                    writer.Write(m_Seats[i]);
++                }
++                for (int i = 0; i < c_PlayerLimit; i++)
++                {
++                    writer.Write(m_Plan[i]);
++                }
++            }
++#endif
+         }
+     };
+ 
+@@ -934,6 +1044,10 @@ namespace
          }
      }
  
@@ -101,7 +201,7 @@ index 7abb85d..5e87fb3 100644
      void* AllocateRingBuffer(size_t bufferSize)
      {
          SYSTEM_INFO sysInfo;
-@@ -965,6 +1028,8 @@ namespace
+@@ -965,6 +1079,8 @@ namespace
          return VirtualAlloc(nullptr, bufferSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
      }
  
@@ -110,7 +210,86 @@ index 7abb85d..5e87fb3 100644
      struct Session
      {
          uint64 m_ChecksumRingBufferHead = c_ChecksumRingBufferSize;
-@@ -1162,6 +1227,17 @@ namespace
+@@ -985,6 +1101,21 @@ namespace
+         int m_ClientCount = 0;
+         int m_AssignedClientsCount = 0;
+         int m_PreviousFrameAssignedClientsCount = 0;
++#if defined(PFO_OURS)
++        int m_SeatCount[c_ClientLimit] = { 1, 1, 1, 1, 1, 1, 1, 1 };   // each device's seats: how many it carries input for (agreed before the session)
++        // the seats as agreed before the session (the players' setup): seat -> device, -1 empty;
++        // without one (m_HasPlan false) the game seats one player per device, as always
++        int m_Plan[c_PlayerLimit] = { -1, -1, -1, -1, -1, -1, -1, -1 };
++        bool m_HasPlan = false;
++        int m_AssignedSeatsCount = 0;
++        int m_ExtraChunksWritten = 0;   // (tests: further seats' input changes the replay holds)
++        // a device's further seats that carry inputs
++        int Extras(int clientIndex) const
++        {
++            int n = clientIndex >= 0 && clientIndex < c_ClientLimit ? m_SeatCount[clientIndex] - 1 : 0;
++            return n < 0 ? 0 : n > c_ExtraSeatLimit ? c_ExtraSeatLimit : n;
++        }
++#endif
+ 
+         EInputDelayMode m_InputDelayMode = {};
+         uint32 m_RequestedAutomaticInputDelayFrame = 0;
+@@ -1046,6 +1177,18 @@ namespace
+                                 uint32_t frame = (m_Frame - i - 1) & static_cast<uint32_t>(countof(playerData.m_InputBuffer) - 1);
+                                 WRITE(playerData.m_InputBuffer[frame]);
+                             }
++#if defined(PFO_OURS)
++                            for (int x = 0; x < c_ExtraSeatLimit; x++)
++                            {
++                                auto& extra = clientData.m_ExtraPlayerData[x];
++                                if (extra.m_PlayerIndex < 0) continue;
++                                for (int i = 0; i < 3; i++)
++                                {
++                                    uint32_t frame = (m_Frame - i - 1) & static_cast<uint32_t>(countof(extra.m_InputBuffer) - 1);
++                                    WRITE(extra.m_InputBuffer[frame]);
++                                }
++                            }
++#endif
+                         }
+                         END_ARRAY()
+                     }
+@@ -1065,6 +1208,10 @@ namespace
+         {
+             Session session;
+             session.m_ClientCount = countof(m_ClientData);
++#if defined(PFO_OURS)
++            // (the most it writes: 8 seats in all, so at most 7 further ones, say all on one device)
++            for (auto& x : session.m_ClientData[0].m_ExtraPlayerData) x.m_PlayerIndex = 0;
++#endif
+             return GetSize(session);
+         }
+ 
+@@ -1099,11 +1246,26 @@ namespace
+                         header.m_Version = c_ReplayVersion;
+                         header.m_ClientCount = static_cast<uint8>(m_ClientCount);
+                         header.m_ClientIndex = static_cast<uint8>(m_ClientIndex);
++#if defined(PFO_OURS)
++                        for (int c = 0; c < m_ClientCount && c < c_ClientLimit; c++) header.m_Seats[c] = static_cast<uint8>(1 + Extras(c));
++                        for (int i = 0; i < c_PlayerLimit; i++) header.m_Plan[i] = m_Plan[i] < 0 ? 0xff : static_cast<uint8>(m_Plan[i]);
++                        if (m_HasPlan) header.m_ClientCount |= 0x80;
++#endif
+                         header.Serialize(m_ReplayWriter);
+                     }
+                 }
+                 
+                 SetPowersaveEnabled(false);
++#if defined(PFO_OURS)
++                pfo_android::PublishSeatSources(instance);   // (which controller each of our seats reads: Windows)
++                if (m_HasPlan)
++                {
++                    // the players' setup: who sits where (the game's callback reads it next)
++                    int plan[c_PlayerLimit];
++                    for (int i = 0; i < c_PlayerLimit; i++) plan[i] = m_Plan[i] >= 0 && m_Plan[i] < m_ClientCount ? m_Plan[i] : -1;
++                    SetPlayers(plan);
++                }
++#endif
+ 
+                 {
+                     RValue result = {};
+@@ -1162,6 +1324,17 @@ namespace
                          int dataSize = BufferTELL(ibuffer);
                          assert(static_cast<size_t>(dataSize) <= static_cast<size_t>(g_GMLChecksumBufferMaxSize));
                          uint8* data = BufferGet(ibuffer);
@@ -128,7 +307,32 @@ index 7abb85d..5e87fb3 100644
  
                          memcpy(g_ChecksumRingBuffer + (checksumRingBufferHead & (c_ChecksumRingBufferSize - 1)), data, static_cast<size_t>(dataSize));
                          checksumBuffer.m_GMLBufferSize = dataSize;
-@@ -1244,6 +1320,9 @@ namespace
+@@ -1236,6 +1409,24 @@ namespace
+                         uint32 frame = myPlayerData.m_TailInputFrame + 1;
+                         uint32 lastFrame = m_Frame + myClientData.m_InputDelay;
+                         InputFlags_t input;
++#if defined(PFO_OURS)
++                        // this device's further seats: the game's input for its local player k
++                        const int extras = Extras(m_ClientIndex);
++                        InputFlags_t extraInput[c_ExtraSeatLimit] = {};
++                        for (int k = 1; k <= extras; k++)
++                        {
++                            pfo_android::SetLocalSeat(k, instance);
++                            RValue result = {};
++                            RValue arg;
++                            init_real(arg, frame);
++                            Script_Perform(g_gml_Script_getInputCallback, instance, instance, 1, &result, &arg);
++                            // (the game's flags come back as a 64-bit integer, or as a plain number when no button is down)
++                            int kind = KIND_RValue(&result);
++                            extraInput[k - 1] = kind == VALUE_INT64 ? bitwise_cast<InputFlags_t>(result.v64)
++                                : kind == VALUE_REAL || kind == VALUE_INT32 || kind == VALUE_BOOL ? static_cast<InputFlags_t>(YYGetInt64(&result, 0)) : 0;
++                        }
++                        if (extras > 0) pfo_android::SetLocalSeat(0, instance);
++#endif
+ 
+                         {
+                             RValue result = {};
+@@ -1244,6 +1435,9 @@ namespace
                              Script_Perform(g_gml_Script_getInputCallback, instance, instance, 1, &result, &arg);
                              assert(KIND_RValue(&result) == VALUE_INT64);
                              input = bitwise_cast<InputFlags_t>(result.v64);
@@ -138,7 +342,92 @@ index 7abb85d..5e87fb3 100644
                          }
  
                          // if we have more inputs than we need, only keep the input if it's different than the previous
-@@ -1656,23 +1735,116 @@ namespace
+@@ -1254,6 +1448,13 @@ namespace
+ 
+                             // we use the diff mask to check that our input is different to what the previous input would become if it was extended to the next frame
+                             keepInput = input != (previousInput & g_InputDiffMask);
++#if defined(PFO_OURS)
++                            for (int k = 0; k < extras && !keepInput; k++)
++                            {
++                                auto& x = myClientData.m_ExtraPlayerData[k];
++                                keepInput = extraInput[k] != (x.m_InputBuffer[(frame - 1) & (countof(x.m_InputBuffer) - 1)] & g_InputDiffMask);
++                            }
++#endif
+                         }
+ 
+                         if (keepInput)
+@@ -1263,6 +1464,15 @@ namespace
+                                 assert(frame - m_Frame < countof(myPlayerData.m_InputBuffer));
+                                 myPlayerData.m_InputBuffer[frame & (countof(myPlayerData.m_InputBuffer) - 1)] = input;
+                                 myPlayerData.m_TailInputFrame = frame;
++#if defined(PFO_OURS)
++                                for (int k = 0; k < extras; k++)
++                                {
++                                    auto& x = myClientData.m_ExtraPlayerData[k];
++                                    x.m_InputBuffer[frame & (countof(x.m_InputBuffer) - 1)] = extraInput[k];
++                                    x.m_TailInputFrame = frame;
++                                    extraInput[k] &= g_InputDiffMask;
++                                }
++#endif
+ 
+                                 if (++frame > lastFrame)
+                                 {
+@@ -1397,6 +1607,17 @@ namespace
+                                                     playerData.m_InputBuffer[(i + firstFrame) & (countof(playerData.m_InputBuffer) - 1)] = message.m_Inputs[i + firstMessageIndex];
+                                                 }
+                                                 playerData.m_TailInputFrame = lastFrame;
++#if defined(PFO_OURS)
++                                                for (int x = 0; x < message.m_ExtraSeatCount && x < c_ExtraSeatLimit; x++)
++                                                {
++                                                    auto& extra = clientData.m_ExtraPlayerData[x];
++                                                    for (int i = 0; i < count; i++)
++                                                    {
++                                                        extra.m_InputBuffer[(i + firstFrame) & (countof(extra.m_InputBuffer) - 1)] = message.m_ExtraInputs[x][i + firstMessageIndex];
++                                                    }
++                                                    extra.m_TailInputFrame = lastFrame;
++                                                }
++#endif
+ 
+                                                 assert(clientData.m_LastInputFrame < playerData.m_TailInputFrame);
+                                                 clientData.m_LastInputFrame = lastFrame;
+@@ -1528,6 +1749,9 @@ namespace
+ 
+                                     assert(count <= countof(message.m_Inputs));
+                                     message.m_InputFrameCount = static_cast<uint8>(count);
++#if defined(PFO_OURS)
++                                    message.m_ExtraSeatCount = static_cast<uint8>(Extras(m_ClientIndex));
++#endif
+ 
+                                     uint32 checksumFrame = m_Frame - 1;
+                                     auto& checksumBuffer = myClientData.m_ChecksumData[checksumFrame & (countof(myClientData.m_ChecksumData) - 1)];
+@@ -1549,6 +1773,13 @@ namespace
+                                                 uint32 frame = i + first;
+ 
+                                                 message.m_Inputs[i] = myPlayerData.m_InputBuffer[frame & (countof(myPlayerData.m_InputBuffer) - 1)];
++#if defined(PFO_OURS)
++                                                for (int x = 0; x < message.m_ExtraSeatCount; x++)
++                                                {
++                                                    auto& extra = myClientData.m_ExtraPlayerData[x];
++                                                    message.m_ExtraInputs[x][i] = extra.m_InputBuffer[frame & (countof(extra.m_InputBuffer) - 1)];
++                                                }
++#endif
+ 
+                                                 auto& delayChange = myClientData.m_AutomaticInputDelayChanges[frame & (countof(myClientData.m_AutomaticInputDelayChanges) - 1)];
+                                                 if (delayChange.m_InputFrame == frame)
+@@ -1651,28 +1882,129 @@ namespace
+ 
+                             input = previousInput & g_InputDiffMask;
+                             playerData.m_TailInputFrame++;
++#if defined(PFO_OURS)
++                            for (int x = 0; x < Extras(clientIndex); x++)
++                            {
++                                auto& extra = clientData.m_ExtraPlayerData[x];
++                                extra.m_InputBuffer[m_Frame & (countof(extra.m_InputBuffer) - 1)] = extra.m_InputBuffer[(m_Frame - 1) & (countof(extra.m_InputBuffer) - 1)] & g_InputDiffMask;
++                                extra.m_TailInputFrame = playerData.m_TailInputFrame;
++                            }
++#endif
+                         }
+ 
                          ReplayReadFrame(instance, false);
                      }
  
@@ -192,7 +481,7 @@ index 7abb85d..5e87fb3 100644
 +                            {
 +                                int64 now = AndroidNowMs();
 +                                if (g_StallSinceMs == 0) g_StallSinceMs = now;
-+                                if (now - g_StallSinceMs > 1500 && clientData.m_PlayerData.m_PlayerIndex >= 0) waitMask |= 1u << clientData.m_PlayerData.m_PlayerIndex;
++                                if (now - g_StallSinceMs > 1500 && clientData.m_PlayerData.m_PlayerIndex >= 0) waitMask |= SeatMask(clientIndex);
 +                            }
 +#endif
  
@@ -215,7 +504,7 @@ index 7abb85d..5e87fb3 100644
 +                                int64 grace = g_LeftOnPurpose[clientIndex] ? 0 : std::max(c_RejoinGraceMs, g_GraceMs[clientIndex]);
 +                                if (now - g_LostAtMs[clientIndex] < grace)
 +                                {
-+                                    waitMask |= 1u << (clientData.m_PlayerData.m_PlayerIndex >= 0 ? clientData.m_PlayerData.m_PlayerIndex : clientIndex);
++                                    waitMask |= clientData.m_PlayerData.m_PlayerIndex >= 0 ? SeatMask(clientIndex) : 1u << clientIndex;
 +                                    int left = static_cast<int>((grace - (now - g_LostAtMs[clientIndex]) + 999) / 1000);
 +                                    waitCountdown = true;
 +                                    if (left > waitLeft) waitLeft = left;
@@ -255,7 +544,48 @@ index 7abb85d..5e87fb3 100644
                      if (canMoveToNextFrame)
                      {
                          break;
-@@ -2051,6 +2223,9 @@ namespace
+@@ -1980,6 +2312,23 @@ namespace
+                             ReplayWriteChunkHeader(false, clientIndex, byteCount);
+                             m_ReplayWriter.Write(&input, byteCount);
+                         }
++#if defined(PFO_OURS)
++                        for (int x = 0; x < Extras(clientIndex); x++)
++                        {
++                            auto& extra = clientData.m_ExtraPlayerData[x];
++                            auto xInput = extra.m_InputBuffer[m_Frame & (countof(extra.m_InputBuffer) - 1)];
++                            auto xPrevious = extra.m_InputBuffer[(m_Frame - 1) & (countof(extra.m_InputBuffer) - 1)];
++                            if (xInput != (xPrevious & g_InputDiffMask))
++                            {
++                                int byteCount = static_cast<int>((ssizeof(xInput) * 8 + 7 - __lzcnt(xInput)) / 8u);
++                                ReplayWriteChunkHeader(false, clientIndex, c_ReplayExtraSeatChunk);
++                                m_ExtraChunksWritten++;
++                                uint8 which = static_cast<uint8>((x << 4) | byteCount);
++                                m_ReplayWriter.Write(which);
++                                m_ReplayWriter.Write(&xInput, byteCount);
++                            }
++                        }
++#endif
+                     }
+                 }
+             }
+@@ -2001,6 +2350,16 @@ namespace
+ 
+         void Close()
+         {
++#if defined(PFO_OURS)
++            for (int c = 0; c < c_ClientLimit; c++)
++            {
++                m_SeatCount[c] = 1;
++                for (auto& x : m_ClientData[c].m_ExtraPlayerData) x.m_PlayerIndex = -1;
++            }
++            m_AssignedSeatsCount = 0;
++            for (int& p : m_Plan) p = -1;
++            m_HasPlan = false;
++#endif
+             for (int clientIndex = 0; clientIndex < countof(m_ClientData); clientIndex++)
+             {
+                 auto& clientData = m_ClientData[clientIndex];
+@@ -2051,6 +2410,9 @@ namespace
              }
  
              reset(*this);
@@ -265,7 +595,44 @@ index 7abb85d..5e87fb3 100644
  
              UpdateGameSpeed(instance);
          }
-@@ -2089,6 +2264,14 @@ namespace
+@@ -2069,6 +2431,24 @@ namespace
+             }
+         }
+ 
++#if defined(PFO_OURS)
++        // the input buffer of a device's seat
++        PlayerData& SeatData(int clientIndex, int playerIndex)
++        {
++            auto& clientData = m_ClientData[clientIndex];
++            for (auto& x : clientData.m_ExtraPlayerData) if (x.m_PlayerIndex == playerIndex) return x;
++            return clientData.m_PlayerData;
++        }
++        // a device's seats as bits
++        uint32 SeatMask(int clientIndex) const
++        {
++            auto& clientData = m_ClientData[clientIndex];
++            uint32 mask = clientData.m_PlayerData.m_PlayerIndex >= 0 ? 1u << clientData.m_PlayerData.m_PlayerIndex : 0;
++            for (auto& x : clientData.m_ExtraPlayerData) if (x.m_PlayerIndex >= 0) mask |= 1u << x.m_PlayerIndex;
++            return mask;
++        }
++#endif
++
+         InputFlags_t PlayerGetInput(CInstance* instance, int playerIndex)
+         {
+             InputFlags_t in = 0;
+@@ -2077,7 +2457,11 @@ namespace
+             int clientIndex = m_PlayerIndexToClientIndexMap[playerIndex];
+             if (clientIndex >= 0)
+             {
++#if defined(PFO_OURS)
++                auto& playerData = SeatData(clientIndex, playerIndex);
++#else
+                 auto& playerData = m_ClientData[clientIndex].m_PlayerData;
++#endif
+                 assert(playerData.m_TailInputFrame >= m_Frame);
+                 in = playerData.m_InputBuffer[m_Frame & (countof(playerData.m_InputBuffer) - 1)];
+ 
+@@ -2089,6 +2473,14 @@ namespace
  
          void CheckChecksum(ChecksumBuffer& a, int aClientIndex, CInstance* instance)
          {
@@ -280,7 +647,7 @@ index 7abb85d..5e87fb3 100644
              for (int bClientIndex = 0; bClientIndex < m_ClientCount; bClientIndex++)
              {
                  auto& clientData = m_ClientData[bClientIndex];
-@@ -2205,6 +2388,18 @@ namespace
+@@ -2205,6 +2597,18 @@ namespace
                      if (clientData.m_ConnectSocket == hConn)
                      {
                          clientData.m_ConnectSocket = k_HSteamNetConnection_Invalid;
@@ -299,7 +666,7 @@ index 7abb85d..5e87fb3 100644
  
                          {
                              auto map = CreateDsMap(0, 0);
-@@ -2240,7 +2435,21 @@ namespace
+@@ -2240,7 +2644,21 @@ namespace
                          }
                      }
  
@@ -321,7 +688,7 @@ index 7abb85d..5e87fb3 100644
                      {
                          LogDebug("No more clients connected: Disconnecting\n");
                          m_OnlineState = EOnlineState::GoingOffline;
-@@ -2257,9 +2466,19 @@ namespace
+@@ -2257,9 +2675,19 @@ namespace
                      bool found = false;
  
                      // accept connections from clients after us
@@ -341,7 +708,7 @@ index 7abb85d..5e87fb3 100644
                          if (info.m_identityRemote.GetSteamID64() == clientData.m_SteamID)
                          {
                              if (clientData.m_ConnectSocket != k_HSteamNetConnection_Invalid)
-@@ -2297,6 +2516,18 @@ namespace
+@@ -2297,6 +2725,18 @@ namespace
  
              if (info.m_eState == k_ESteamNetworkingConnectionState_Connected)
              {
@@ -360,7 +727,7 @@ index 7abb85d..5e87fb3 100644
                  if (m_OnlineState == EOnlineState::Offline && m_ClientCount > 0)
                  {
                      bool allClientsConnected = true;
-@@ -2333,6 +2564,19 @@ namespace
+@@ -2333,6 +2773,19 @@ namespace
              constexpr uint16 laneWeights[] = { 1, 1 }; // higher number means more relative bandwidth
              g_SteamNetworkingSockets->ConfigureConnectionLanes(hConn, countof(lanePriorities), lanePriorities, laneWeights);
              clientData.m_ConnectSocket = hConn;
@@ -380,7 +747,7 @@ index 7abb85d..5e87fb3 100644
          }
  
          bool SetClients(CSteamID (&steamIDs)[countof(m_ClientData)], int clientCount)
-@@ -2370,7 +2614,13 @@ namespace
+@@ -2370,7 +2823,13 @@ namespace
                  }
  
                  // create a listen socket for connecting to all clients after us
@@ -394,7 +761,51 @@ index 7abb85d..5e87fb3 100644
                  {
                      assert(m_ListenSocket == k_HSteamListenSocket_Invalid);
  
-@@ -2753,6 +3003,19 @@ namespace
+@@ -2420,6 +2879,35 @@ namespace
+                 playerData.m_PlayerIndex = -1;
+             }
+ 
++#if defined(PFO_OURS)
++            for (int clientIndex = 0; clientIndex < c_ClientLimit; clientIndex++)
++                for (auto& x : m_ClientData[clientIndex].m_ExtraPlayerData) x.m_PlayerIndex = -1;
++            int extrasUsed[c_ClientLimit] = {};
++            m_AssignedSeatsCount = 0;
++            for (int playerIndex = 0; playerIndex < countof(map); playerIndex++)
++            {
++                int clientIndex = map[playerIndex];
++                assert(clientIndex >= -1 && clientIndex < m_ClientCount);
++                if (clientIndex >= 0)
++                {
++                    auto& playerData = m_ClientData[clientIndex].m_PlayerData;
++                    if (playerData.m_PlayerIndex < 0) playerData.m_PlayerIndex = playerIndex;
++                    else if (extrasUsed[clientIndex] < Extras(clientIndex)) m_ClientData[clientIndex].m_ExtraPlayerData[extrasUsed[clientIndex]++].m_PlayerIndex = playerIndex;
++                    else
++                    {
++                        // more seats than the device has: the seat stays empty
++                        LogError("Seat %d given to client %d, which has %d seats\n", playerIndex, clientIndex, 1 + Extras(clientIndex));
++                        clientIndex = -1;
++                    }
++                }
++                if (clientIndex >= 0)
++                {
++                    m_AssignedSeatsCount++;
++                    if (anyAssignedClient < 0) anyAssignedClient = clientIndex;
++                }
++                m_PlayerIndexToClientIndexMap[playerIndex] = clientIndex;
++            }
++#else
+             for (int playerIndex = countof(map) - 1; playerIndex >= 0; playerIndex--)
+             {
+                 int clientIndex = map[playerIndex];
+@@ -2433,6 +2921,7 @@ namespace
+                 }
+                 m_PlayerIndexToClientIndexMap[playerIndex] = clientIndex;
+             }
++#endif
+ 
+             bool changedPlayerAssignment = false;
+             m_AssignedClientsCount = 0;
+@@ -2753,6 +3242,19 @@ namespace
                      }
                  }
              }
@@ -414,7 +825,7 @@ index 7abb85d..5e87fb3 100644
          }
  
          void ReceiveReliableMessage(const void* data, int size, int clientIndex, CInstance* instance)
-@@ -2783,7 +3046,7 @@ namespace
+@@ -2783,7 +3285,7 @@ namespace
                      BufferWriteContent(bufferIndex, 0, reliableMessage.m_File.m_Data, reliableMessage.m_File.m_Size);
  
                      RValue tmpBuffer = {};
@@ -423,7 +834,20 @@ index 7abb85d..5e87fb3 100644
                      init_buffer(arg[0], bufferIndex);
                      init_bool(arg[1], false);
                      YYCreateString(&arg[2], fileData->m_Filename);
-@@ -2886,6 +3149,13 @@ namespace
+@@ -2856,6 +3358,12 @@ namespace
+                 if (header.m_Version == c_ReplayVersion)
+                 {
+                     int clientCount = header.m_ClientCount;
++#if defined(PFO_OURS)
++                    clientCount &= 0x7f;
++                    for (int c = 0; c < c_ClientLimit; c++) m_SeatCount[c] = c < clientCount ? std::clamp<int>(header.m_Seats[c], 1, c_PlayerLimit) : 1;
++                    m_HasPlan = (header.m_ClientCount & 0x80) != 0;
++                    for (int i = 0; i < c_PlayerLimit; i++) m_Plan[i] = m_HasPlan && header.m_Plan[i] < clientCount ? header.m_Plan[i] : -1;
++#endif
+                     if (clientIndex == -1)
+                     {
+                         clientIndex = header.m_ClientIndex;
+@@ -2886,6 +3394,13 @@ namespace
          {
              while (m_ReplayLastFrameRead <= m_Frame)
              {
@@ -437,7 +861,28 @@ index 7abb85d..5e87fb3 100644
                  if (!firstTime)
                  {
                      uint8 code;
-@@ -2914,6 +3184,14 @@ namespace
+@@ -2895,6 +3410,20 @@ namespace
+                     int clientIndex = (code >> 1) & 7;
+                     int otherIndex = code >> 4;
+ 
++#if defined(PFO_OURS)
++                    if (!isReliable && otherIndex == c_ReplayExtraSeatChunk)
++                    {
++                        uint8 which;
++                        m_ReplayReader.Write(which);
++                        int x = which >> 4, byteCount = which & 15;
++                        assert(x < c_ExtraSeatLimit && byteCount <= 4);
++                        auto& extra = m_ClientData[clientIndex].m_ExtraPlayerData[x < c_ExtraSeatLimit ? x : 0];
++                        auto& input = extra.m_InputBuffer[m_Frame & (countof(extra.m_InputBuffer) - 1)];
++                        input = 0;
++                        m_ReplayReader.Write(&input, byteCount <= 4 ? byteCount : 4);
++                    }
++                    else
++#endif
+                     if (!isReliable)
+                     {
+                         auto& clientData = m_ClientData[clientIndex];
+@@ -2914,6 +3443,14 @@ namespace
                          auto& checksumBuffer = clientData.m_ChecksumData[m_Frame & (countof(clientData.m_ChecksumData) - 1)];
                          assert(checksumBuffer.m_Frame == m_Frame);
  
@@ -452,7 +897,7 @@ index 7abb85d..5e87fb3 100644
                          if (m_LastSentChecksumFrame == 0 && checksumBuffer.m_Checksum != checksum)
                          {
                              breakpoint();
-@@ -2995,6 +3273,7 @@ namespace
+@@ -2995,6 +3532,7 @@ namespace
  
          void BufferSendReliableMessage(CInstance* instance, const char* filename, int bufferIndex)
          {
@@ -460,7 +905,7 @@ index 7abb85d..5e87fb3 100644
              ReliableMessage reliableMessage;
              bool exists = bufferIndex != -1;
              reliableMessage.m_Type = exists ? EReliableMessageType::File : EReliableMessageType::FileDoesNotExist;
-@@ -3006,7 +3285,7 @@ namespace
+@@ -3006,7 +3544,7 @@ namespace
              if (exists)
              {
                  RValue tmpBuffer = {};
@@ -469,7 +914,7 @@ index 7abb85d..5e87fb3 100644
                  init_buffer(tmpArg[0], bufferIndex);
                  init_bool(tmpArg[1], true);
                  YYCreateString(&tmpArg[2], filename);
-@@ -3035,7 +3314,7 @@ namespace
+@@ -3035,7 +3573,7 @@ namespace
  
          void BufferSend(RValue& result, CInstance* instance, const char* filename, int bufferIndex)
          {
@@ -478,7 +923,7 @@ index 7abb85d..5e87fb3 100644
              {
                  auto fileData = FindFileData(filename, m_ClientIndex);
                  assert(fileData->m_Status == EFileStatus::None);
-@@ -3103,6 +3382,9 @@ namespace
+@@ -3103,6 +3641,9 @@ namespace
                      } [[fallthrough]];
                      case EFileStatus::VirtualUnknown:
                      {
@@ -488,7 +933,7 @@ index 7abb85d..5e87fb3 100644
                          init_int64(result, -1);
                      } break;
                      case EFileStatus::VirtualDoesNotExist:
-@@ -3471,7 +3753,18 @@ YYEXPORT void pfo_player_get_input(RValue& result, CInstance* selfinst, CInstanc
+@@ -3471,7 +4012,18 @@ YYEXPORT void pfo_player_get_input(RValue& result, CInstance* selfinst, CInstanc
      assert(argc == 1);
  
      int playerIndex = YYGetInt32(arg, 0);
@@ -508,7 +953,19 @@ index 7abb85d..5e87fb3 100644
  }
  
  YYEXPORT void pfo_is_online(RValue& result, CInstance* selfinst, CInstance* otherinst, int argc, RValue* arg)
-@@ -3963,6 +4256,18 @@ YYEXPORT void pfo_client_is_connected(RValue& result, CInstance* selfinst, CInst
+@@ -3744,7 +4296,11 @@ YYEXPORT void pfo_get_assigned_clients_count(RValue& result, CInstance* selfinst
+ {
+     assert(argc == 0);
+ 
++#if defined(PFO_OURS)
++    init_real(result, g_Session.m_AssignedSeatsCount);   // (the game counts players with it; one per device before)
++#else
+     init_real(result, g_Session.m_AssignedClientsCount);
++#endif
+ }
+ 
+ YYEXPORT void pfo_file_exists(RValue& result, CInstance* selfinst, CInstance* otherinst, int argc, RValue* arg)
+@@ -3963,6 +4519,18 @@ YYEXPORT void pfo_client_is_connected(RValue& result, CInstance* selfinst, CInst
      int clientIndex = YYGetInt32(arg, 0);
      assert(clientIndex >= 0 && clientIndex < countof(g_Session.m_ClientData));
  
@@ -527,7 +984,7 @@ index 7abb85d..5e87fb3 100644
      init_real(result, g_Session.m_ClientData[clientIndex].m_ConnectSocket != k_HSteamNetConnection_Invalid || clientIndex == g_Session.m_ClientIndex);
  }
  
-@@ -4021,3 +4326,15 @@ YYEXPORT void pfo_is_playing_replay(RValue& result, CInstance* selfinst, CInstan
+@@ -4021,3 +4589,15 @@ YYEXPORT void pfo_is_playing_replay(RValue& result, CInstance* selfinst, CInstan
  
      init_bool(result, g_Session.m_ReplayReader.m_Buffer != nullptr);
  }
