@@ -193,8 +193,11 @@ and carries on, leaving a folder for 10/11). `-NoWin7` (`bash build.sh --windows
 them out on purpose. Only the game in the folder being patched has to be closed: the Steam copy can
 be running.
 
-`build.bat -Windows -WinDll <file>` uses a `PFO.dll` of your own. The file in `kit/` is still the
-one built before this change, and `build.ps1` pins its checksum: it was left alone.
+`build.bat -Windows -WinDll <file>` uses a `PFO.dll` of your own. The **quick build** is 7-ready as
+well: the Windows kit in `kit/` is this same DLL (`ufo50-online-windows-v0.4.1.dll`, 2011648 bytes,
+pinned by commit and checked against its checksum), so nothing here needs the full build. The older
+`kit/ufo50-online-windows-v0.4.0.dll` stays for the v0.4.0 tag's own pin — a build never picks it
+by accident, since `build.ps1` looks for the exact pinned name and hash.
 
 On the Windows 7 PC, in order:
 

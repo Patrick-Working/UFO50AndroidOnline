@@ -41,8 +41,11 @@ $Pins = @{
     # the runner kit: GameMaker's Android runner + the touch overlay + libPFO.so, no game data
     # (made by the full build: bash build.sh --kit)
     Kit          = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.4.0/kit/ufo50-online-runner-v0.4.0.apk", "a8d0906bb5fabbf89650902c4aa8407ce7f67f13a6df669a05e91063ccc1e4b2", "ufo50-online-runner-v0.4.0.apk")
-    # the Windows kit: our PFO.dll alone (made by the full build: bash build.sh --windows --kit)
-    WinKit       = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.4.0/kit/ufo50-online-windows-v0.4.0.dll", "759106f74eb5195c7f84e9aeb7231a7d3c485f53252efda703f23c98a065f602", "ufo50-online-windows-v0.4.0.dll")
+    # the Windows kit: our PFO.dll alone (made by the full build: bash build.sh --windows --kit),
+    # built without the Windows 10-only memory calls so the folder starts on 7, 10 and 11 alike.
+    # Pinned by commit, not by tag: it has to be the DLL this source tree builds today, and the
+    # v0.4.1 tag does not exist yet. (v0.4.0's kit is still in kit/ for that tag's own pin.)
+    WinKit       = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/d31cb31466e73ec90b5d103b327b774d3a499fce/kit/ufo50-online-windows-v0.4.1.dll", "b4e46b1aeaf469dad5c2690b3ac6e004e8757af6e55fff34e01f29e93f937a90", "ufo50-online-windows-v0.4.1.dll")
 }
 
 function Say($t) { Write-Host ""; Write-Host "== $t" -ForegroundColor Cyan }
@@ -175,8 +178,8 @@ $localKit = Join-Path $Root ("kit\" + $Pins.Kit[2])   # the repository zip carri
 $localWinKit = Join-Path $Root ("kit\" + $Pins.WinKit[2])
 if ($Windows) {
     if ($WinDll) { $winKit = (Resolve-Path $WinDll).Path; Ok "PFO.dll: $winKit" }
-    elseif ((Test-Path $localWinKit) -and ((Sha $localWinKit) -eq $Pins.WinKit[1])) { $winKit = $localWinKit; Ok "Windows kit v0.4.0" }
-    else { $winKit = Fetch $Pins.WinKit; Ok "Windows kit v0.4.0 (downloaded)" }
+    elseif ((Test-Path $localWinKit) -and ((Sha $localWinKit) -eq $Pins.WinKit[1])) { $winKit = $localWinKit; Ok "Windows kit v0.4.1" }
+    else { $winKit = Fetch $Pins.WinKit; Ok "Windows kit v0.4.1 (downloaded)" }
 }
 elseif ($Runner) { $kit = (Resolve-Path $Runner).Path; Ok "runner: $kit" }
 elseif ((Test-Path $localKit) -and ((Sha $localKit) -eq $Pins.Kit[1])) { $kit = $localKit; Ok "runner kit v0.4.0" }

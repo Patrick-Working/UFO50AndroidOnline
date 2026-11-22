@@ -154,9 +154,9 @@ if [ $WINDOWS = 1 ]; then
     cp "$NATIVE/PFO.dll" "$KITDLL"
     echo; echo "Windows kit: $(win "$KITDLL")"; echo "SHA-256:     $(sha256sum "$KITDLL" | cut -d' ' -f1)"
     echo "The quick build (build.bat -Windows) does not look in work/kit/. It uses the file in kit/ of"
-    echo "this repository, and downloads that file from the version's tag if the one in kit/ is missing"
-    echo "or has another checksum. To make it use this one: copy the file to kit/ and put the SHA-256"
-    echo "above in the WinKit line of build.ps1 (and the new file name and tag there, if the version changed)."
+    echo "this repository, and downloads that file from the pinned commit if the one in kit/ is missing"
+    echo "or has another checksum. To make it use this one: copy the file to kit/, commit it, and put"
+    echo "the SHA-256 above and that commit in the WinKit line of build.ps1 (with the new file name)."
     exit 0
   fi
   PS=(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(win "$ROOT/build.ps1")")

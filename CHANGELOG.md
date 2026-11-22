@@ -67,8 +67,11 @@ rejoin); one look on both versions; tested on a real phone over Wi-Fi. The detai
   call site was checked in the disassembly — and puts the `PathCch` stand-in in the folder. All of
   it is harmless on Windows 8 and later (the loader answers `api-ms-*` names from the API set
   schema and ignores the copy), so one folder and one build number serve 7, 10 and 11, and their
-  players share lobbies. Windows 7 still needs KB2670838 and KB2999226; nothing has been run on a 7
-  machine yet ([docs/WINDOWS7.md](docs/WINDOWS7.md), [win7/README.md](win7/README.md)).
+  players share lobbies. The quick build gets that DLL too: `kit/` carries it
+  (`ufo50-online-windows-v0.4.1.dll`) and `build.ps1` pins it by commit, since it is the one this
+  tree builds and there is no v0.4.1 tag yet. Windows 7 still needs KB2670838 and KB2999226; nothing
+  has been run on a 7 machine yet ([docs/WINDOWS7.md](docs/WINDOWS7.md),
+  [win7/README.md](win7/README.md)).
 - **Windows: the online menu in UFO 50's own font.** The build exports the game's menu font from
   your copy into the game folder (as the phone build does for its overlay; nothing is shipped) and
   the menu draws it at whole-pixel sizes. Without the file it falls back to Consolas.
