@@ -1,6 +1,7 @@
 # UFO 50 Android Online - quick build.
 # Double-click build.bat (or run: powershell -ExecutionPolicy Bypass -File build.ps1).
-# Needs only Windows 10/11 and UFO 50 from Steam. Everything else is downloaded into work\.
+# Needs only Windows 10 or 11 to build, and UFO 50 from Steam. Everything else is downloaded into
+# work\. The Windows version it makes starts on Windows 7 as well.
 #
 #   -Install         also install the APK on a phone connected with USB debugging (needs adb)
 #   -Runner <apk>    use this runner instead of the published runner kit (the full build passes its own)
@@ -354,6 +355,11 @@ if ($Windows) {
     $out = Utmt @("load", (Join-Path $win "data.win"), "-s", (Join-Path $Root "scripts\export_overlay_art.csx")) @{ OUT_DIR = $win }
     if (Test-Path (Join-Path $win "pfo_font.png")) { Write-Host "   menu font: UFO 50's" }
     else { Write-Host "   menu font: couldn't be exported, the menu uses Consolas" -ForegroundColor Yellow }
+    # Windows 7 fixups (win7/README.md, docs/WINDOWS7.md): two import names in ufo50.exe that
+    # Windows 8 brought, and the PathCch stand-in the program needs on 7. Both are harmless on
+    # Windows 8 and later, so this folder is the one for 7, 10 and 11 alike.
+    & (Join-Path $Root "win7\patch_win7.ps1") -GameDir $win -CacheDir $Dl
+    if ($LASTEXITCODE -ne 0) { Die "the Windows 7 fixups didn't go in (see above): $win starts on Windows 10/11 only" }
     Write-Host ""
     Write-Host "Done: $win" -ForegroundColor Green
     Write-Host "Start ufo50.exe in that folder (F1 opens the online menu). It contains your copy of the game: keep it to yourself."

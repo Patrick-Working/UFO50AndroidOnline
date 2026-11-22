@@ -124,8 +124,8 @@ folder must not be playing. The names are found by walking the import and delay-
 by searching the file for the text — `MFCreateDXGIDeviceManager` also appears three times in the
 program's own log messages.
 
-[win7/README.md](../win7/README.md) has the two lines that make the Windows build do this itself;
-until they are in, run it by hand as above.
+The Windows build runs this itself (the end of section 4w in `build.ps1`, see
+[win7/README.md](../win7/README.md)); running it by hand is for a folder made before that.
 
 Both edits are harmless on Windows 8 and later, so this is the same folder for 7 and 10/11: the
 loader answers `api-ms-*` names from the API set schema and never looks at the copy in the folder,
@@ -181,7 +181,8 @@ bash build.sh --windows           # ...and the game folder, work/windows/UFO 50 
 powershell -ExecutionPolicy Bypass -File win7\patch_win7.ps1 -GameDir "work/windows/UFO 50 Online"
 ```
 
-The last line is the Windows 7 part (see above); the build does not run it by itself yet.
+The last line is the Windows 7 part (see above); the build runs it by itself now, so it is only
+needed on a folder made before that.
 
 `build.bat -Windows -WinDll <file>` uses a `PFO.dll` of your own. The file in `kit/` is still the
 one built before this change, and `build.ps1` pins its checksum: it was left alone.
