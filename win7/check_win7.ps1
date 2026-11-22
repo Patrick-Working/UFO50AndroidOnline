@@ -36,6 +36,20 @@ $GameDir = (Resolve-Path -LiteralPath $GameDir).Path
 $hasShim = Test-Path -LiteralPath (Join-Path $GameDir $ShimName)
 $bad = 0
 
+# Reads a file, also while the game is running: a loaded program or DLL can keep ReadAllBytes out,
+# and a second try with more sharing usually gets in. $null means it really could not be read.
+function Read-Whole([string]$path) {
+    try { return ,[System.IO.File]::ReadAllBytes($path) } catch { }
+    try {
+        $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            $bytes = New-Object byte[] $fs.Length
+            [void]$fs.Read($bytes, 0, $bytes.Length)
+            return ,$bytes
+        } finally { $fs.Close() }
+    } catch { return $null }
+}
+
 foreach ($file in "ufo50.exe", "PFO.dll") {
     $path = Join-Path $GameDir $file
     if (-not (Test-Path -LiteralPath $path)) {
@@ -43,7 +57,13 @@ foreach ($file in "ufo50.exe", "PFO.dll") {
         $bad++
         continue
     }
-    if (-not (Load-Pe ([System.IO.File]::ReadAllBytes($path)))) {
+    $bytes = Read-Whole $path
+    if ($null -eq $bytes) {
+        Write-Host "   NO   ${file} can't be read (is the game running? close it and run this again)" -ForegroundColor Red
+        $bad++
+        continue
+    }
+    if (-not (Load-Pe $bytes)) {
         Write-Host "   NO   ${file} $($script:PeError)" -ForegroundColor Red
         $bad++
         continue

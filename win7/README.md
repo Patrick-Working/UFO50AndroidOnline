@@ -68,6 +68,10 @@ Exit status is 0 when the folder can load on Windows 7, 1 when it can't; the lin
 name the file and the import. It is a guard rather than an OS analyser — it knows the names in its
 lists, so a failure is trustworthy but a pass is only as good as the list.
 
+A running game doesn't stop it: a loaded program or DLL can keep a plain read out, so it retries
+with a shared handle and, if that fails too, says `PFO.dll can't be read (is the game running?
+close it and run this again)` and exits 1 — no PowerShell error either way.
+
 ## Wired into the build
 
 `build.ps1` runs it at the end of section 4w, once the game data, the art and `PFO.dll` are in
