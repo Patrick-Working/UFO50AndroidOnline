@@ -11,6 +11,7 @@
 #                                 work/windows/UFO 50 Online. Needs none of the Android tools.
 #   bash build.sh --windows --kit build PFO.dll only, into work/kit/
 #   bash build.sh --check         only check the tools (with --windows: the Windows build's)
+#   bash build.sh --windows --no-win7  the same, without the Windows 7 fixups (a folder for 10/11)
 #   bash build.sh --clean         forget everything in work/ and start over
 #
 # Runs in Git Bash on Windows (see README.md). Paths can be overridden in local.env.
@@ -19,15 +20,16 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 WORK="$ROOT/work"
 VERSION="$(head -1 VERSION)"
-INSTALL=0; CHECK_ONLY=0; KIT=0; WINDOWS=0
+INSTALL=0; CHECK_ONLY=0; KIT=0; WINDOWS=0; NOWIN7=0
 for a in "$@"; do
   case "$a" in
     --install) INSTALL=1 ;;
     --check) CHECK_ONLY=1 ;;
     --kit) KIT=1 ;;
     --windows) WINDOWS=1 ;;
+    --no-win7) NOWIN7=1 ;;
     --clean) rm -rf "$WORK" ;;
-    -h|--help) sed -n 2,16p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,17p "$0"; exit 0 ;;
     *) echo "unknown option $a"; exit 2 ;;
   esac
 done
@@ -66,6 +68,7 @@ LLVM_MINGW="$(upath "${LLVM_MINGW:-}")"; LLVM_MINGW="${LLVM_MINGW%/}"
 if [ $WINDOWS = 1 ]; then echo "UFO 50 Android Online v$VERSION - full build of the Windows version"
 else echo "UFO 50 Android Online v$VERSION - full build"; fi
 [ $WINDOWS = 0 ] || [ $INSTALL = 0 ] || die "--install is for the Android build (the Windows build is a folder: work/windows)"
+[ $WINDOWS = 1 ] || [ $NOWIN7 = 0 ] || die "--no-win7 goes with --windows (it is the Windows folder that gets the fixups)"
 
 # ---- 1. tools -------------------------------------------------------------------------------
 say "Checking tools"
@@ -158,6 +161,7 @@ if [ $WINDOWS = 1 ]; then
   fi
   PS=(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(win "$ROOT/build.ps1")")
   ARGS=(-Windows -WinDll "$(win "$NATIVE/PFO.dll")")
+  if [ $NOWIN7 = 1 ]; then ARGS+=(-NoWin7); fi
   if [ -n "${MODDED_DIR:-}" ]; then
     MODDED="$(upath "$MODDED_DIR")"
     ARGS+=(-ModdedDir "$(win "${MODDED%/}")")

@@ -182,7 +182,10 @@ powershell -ExecutionPolicy Bypass -File win7\patch_win7.ps1 -GameDir "work/wind
 ```
 
 The last line is the Windows 7 part (see above); the build runs it by itself now, so it is only
-needed on a folder made before that.
+needed on a folder made before that, or after a build that said the fixups couldn't go in (it warns
+and carries on, leaving a folder for 10/11). `-NoWin7` (`bash build.sh --windows --no-win7`) leaves
+them out on purpose. Only the game in the folder being patched has to be closed: the Steam copy can
+be running.
 
 `build.bat -Windows -WinDll <file>` uses a `PFO.dll` of your own. The file in `kit/` is still the
 one built before this change, and `build.ps1` pins its checksum: it was left alone.

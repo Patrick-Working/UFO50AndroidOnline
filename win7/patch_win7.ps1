@@ -79,6 +79,20 @@ $GameDir = (Resolve-Path -LiteralPath $GameDir).Path
 $exe = Join-Path $GameDir "ufo50.exe"
 if (-not (Test-Path -LiteralPath $exe)) { Die "no ufo50.exe in $GameDir" }
 
+# Is this folder's game running? Only this folder's: the Steam copy, or another build of this one,
+# is none of this script's business (a build used to refuse while any ufo50.exe was open at all).
+function Test-GameRunning([string]$dir) {
+    $prefix = $dir.TrimEnd("\") + "\"
+    foreach ($p in @(Get-Process -Name ufo50 -ErrorAction SilentlyContinue)) {
+        $path = $null
+        try { $path = $p.Path } catch { }   # another user's process: no path to compare, so not it
+        if ($path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
+if (-not $Check -and (Test-GameRunning $GameDir)) { Die "ufo50.exe is running from ${GameDir}: close the game first" }
+
 $script:D = $null
 $script:Secs = @()
 
@@ -195,7 +209,6 @@ foreach ($p in $Patches) {
 }
 
 if ($changed -gt 0 -and -not $Check) {
-    if (Get-Process -Name ufo50 -ErrorAction SilentlyContinue) { Die "ufo50.exe is running: close the game first" }
     [System.IO.File]::WriteAllBytes($exe, $script:D)
     # read it back: what the file now says is what matters, not what was written
     $none = Load-Pe ([System.IO.File]::ReadAllBytes($exe))

@@ -10,6 +10,8 @@
 #                    with the same online play, save states and rewind, which plays with the phones.
 #                    It never talks to Steam and keeps its saves apart from the Steam game's.
 #   -WinDll <dll>    with -Windows: use this PFO.dll instead of the published one (the full build passes its own)
+#   -NoWin7          with -Windows: leave out the Windows 7 fixups (two import names in ufo50.exe and
+#                    the PathCch stand-in), giving a folder for Windows 10/11 only
 #   -Vanilla         make an APK of the game as Steam has it (work\ufo50-vanilla.apk): no mods, no
 #                    online play, no save states, no touch controls (it needs a controller or a
 #                    keyboard). Only the Android runner from the kit is used; nothing is patched.
@@ -18,7 +20,7 @@
 #   -ManualLoader    open the UFO 50 Mod Loader's window and click Install yourself, instead of the
 #                    build running it without a window
 [CmdletBinding(PositionalBinding = $false)]
-param([switch]$Install, [string]$Runner = "", [string]$GamePath = "", [string]$ModdedDir = "", [switch]$Windows, [string]$WinDll = "", [switch]$ManualLoader, [switch]$Vanilla,
+param([switch]$Install, [string]$Runner = "", [string]$GamePath = "", [string]$ModdedDir = "", [switch]$Windows, [string]$WinDll = "", [switch]$ManualLoader, [switch]$Vanilla, [switch]$NoWin7,
       [Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"   # Invoke-WebRequest is far faster without the progress bar
@@ -357,9 +359,17 @@ if ($Windows) {
     else { Write-Host "   menu font: couldn't be exported, the menu uses Consolas" -ForegroundColor Yellow }
     # Windows 7 fixups (win7/README.md, docs/WINDOWS7.md): two import names in ufo50.exe that
     # Windows 8 brought, and the PathCch stand-in the program needs on 7. Both are harmless on
-    # Windows 8 and later, so this folder is the one for 7, 10 and 11 alike.
-    & (Join-Path $Root "win7\patch_win7.ps1") -GameDir $win -CacheDir $Dl
-    if ($LASTEXITCODE -ne 0) { Die "the Windows 7 fixups didn't go in (see above): $win starts on Windows 10/11 only" }
+    # Windows 8 and later, so this folder is the one for 7, 10 and 11 alike. If they can't go in,
+    # the folder is still a good Windows 10/11 one: say so and carry on.
+    if ($NoWin7) {
+        Write-Host "   Windows 7 fixups: skipped (-NoWin7)" -ForegroundColor Yellow
+    } else {
+        & (Join-Path $Root "win7\patch_win7.ps1") -GameDir $win -CacheDir $Dl
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "   Windows 7 fixups: didn't go in (see above) - this folder starts on Windows 10/11 only" -ForegroundColor Yellow
+            Write-Host "   (fix it later with: powershell -ExecutionPolicy Bypass -File win7\patch_win7.ps1 -GameDir `"$win`")" -ForegroundColor Yellow
+        }
+    }
     Write-Host ""
     Write-Host "Done: $win" -ForegroundColor Green
     Write-Host "Start ufo50.exe in that folder (F1 opens the online menu). It contains your copy of the game: keep it to yourself."

@@ -49,21 +49,33 @@ Windows 8 and later the file is inert (see the table), so it does no harm being 
 place, so every Windows build comes out 7-ready:
 
 ```powershell
-    # Windows 7 fixups: two import names and the PathCch stand-in, so the same folder also starts on 7
-    & (Join-Path $Root "win7\patch_win7.ps1") -GameDir $win -CacheDir $Dl
-    if ($LASTEXITCODE -ne 0) { Die "the Windows 7 fixups didn't go in (see above)" }
+    if ($NoWin7) {
+        Write-Host "   Windows 7 fixups: skipped (-NoWin7)" -ForegroundColor Yellow
+    } else {
+        & (Join-Path $Root "win7\patch_win7.ps1") -GameDir $win -CacheDir $Dl
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "   Windows 7 fixups: didn't go in (see above) - this folder starts on Windows 10/11 only" -ForegroundColor Yellow
+            Write-Host "   (fix it later with: powershell -ExecutionPolicy Bypass -File win7\patch_win7.ps1 -GameDir `"$win`")" -ForegroundColor Yellow
+        }
+    }
 ```
 
 `$Dl` is the folder `Fetch` already keeps downloads in, so the shim's zip is cached with the rest.
 The script prints its own `ok` lines in the same shape as the build's, and exits non-zero on
-anything unexpected (a different `ufo50.exe`, a locked file, a checksum mismatch); the build then
-stops with that message rather than shipping a folder that only starts on 10/11. `build.ps1` passes
-neither `-Check` nor `-Force`: they are this script's own, for running it by hand.
+anything unexpected (a different `ufo50.exe`, a checksum mismatch, the game running); the build then
+says so and **carries on**, because the folder is a perfectly good Windows 10/11 one either way, and
+prints the command that fixes it later. `-NoWin7` in `build.ps1` (`--no-win7` in `build.sh`) leaves
+the step out from the start, for a folder meant for 10/11 only. `build.ps1` passes neither `-Check`
+nor `-Force`: they are this script's own, for running it by hand.
 
-So a different UFO 50 version stops the Windows build until the script is given the new numbers or
-run with `-Force` — the stamp and image size it checks are the ones the snapshots check, so it is
-not a formality. A folder made by a build from before this one can be fixed with the same command
-by hand.
+A different UFO 50 version therefore makes the build warn and carry on until the script is given the
+new numbers or run with `-Force` — the stamp and image size it checks are the ones the snapshots
+check, so it is not a formality. A folder made by a build from before this one can be fixed with the
+same command by hand.
+
+**Which game may be running**: only the one in the folder being patched, compared by the process's
+path, so the Steam copy (or another build of this one) can be open while you build. If Windows won't
+say where a process is from, it is not counted either.
 
 ## What it does not do
 
