@@ -127,6 +127,12 @@ program's own log messages.
 The Windows build runs this itself (the end of section 4w in `build.ps1`, see
 [win7/README.md](../win7/README.md)); running it by hand is for a folder made before that.
 
+A finished folder is checked as well: `win7\check_win7.ps1 -GameDir <folder>` reads the import
+tables of both `ufo50.exe` and `PFO.dll` and fails if either still wants something Windows 8 has, so
+a future game version or a kit built another way can't quietly lose Windows 7. The build runs it
+right after the fixups and says so if it fails. `api-ms-win-core-path-l1-1-0.dll` passes while the
+stand-in is in the folder — that is the finished state.
+
 Both edits are harmless on Windows 8 and later, so this is the same folder for 7 and 10/11: the
 loader answers `api-ms-*` names from the API set schema and never looks at the copy in the folder,
 `MFTGetInfo` only costs video playback, and the power hint becomes the no-op described next.
@@ -199,13 +205,94 @@ pinned by commit and checked against its checksum), so nothing here needs the fu
 `kit/ufo50-online-windows-v0.4.0.dll` stays for the v0.4.0 tag's own pin — a build never picks it
 by accident, since `build.ps1` looks for the exact pinned name and hash.
 
-On the Windows 7 PC, in order:
+## On the Windows 7 bench
 
-1. `ufo50.exe` starts (or says which import it is missing — see above);
-2. `%LOCALAPPDATA%\ufo50_online\pfo_online.log` has a `PFOSTATE snapshots: ...` line and the
-   netcode's own start-up lines;
-3. the game draws (the presentation question above), then the menu opens with **F1** and the
-   game's own lobby menu hosts and joins as on Windows 10.
+A Windows 7 SP1 x64 machine, the folder copied over (the same one as on 10/11), and this order.
 
-Not checked at all: whether any of this runs, how it performs, and the two graphics paths. A
-Windows 7 SP1 machine with KB2670838 and KB2999226 is what the next round needs.
+### 1. The machine
+
+- **KB2670838** (the Direct3D 11 platform update) and **KB2999226** (the Universal CRT that
+  `PFO.dll` links against). Quick check: `C:\Windows\System32\api-ms-win-crt-runtime-l1-1-0.dll`
+  exists and `dxdiag` says Direct3D 11.
+- A working Direct3D 11 driver: `dxdiag` shows no errors. A 2012-era driver that never installed
+  properly will not draw whatever is patched.
+
+### 2. The folder, before starting the game
+
+```powershell
+powershell -ExecutionPolicy Bypass -File win7\check_win7.ps1 -GameDir "C:\UFO 50 Online"
+```
+
+It has to end with `Windows 7 check: OK`. If it doesn't, it names the file and the import, and the
+folder is one for 10/11 only — that is exactly the case the check exists for. The folder needs no
+admin rights: saves, settings and the log live in `%LOCALAPPDATA%`.
+
+### 3. Start it, then read the log
+
+Double-click `ufo50.exe` (the first host or join makes Windows Firewall ask about it: allow it on
+private networks). `%LOCALAPPDATA%\ufo50_online\pfo_online.log` is written from the first moments;
+each line is `MM-DD hh:mm:ss.mmm L tag: text`, where L is `I`, `W` or `E`. What to look for, in
+order:
+
+| line | what it means |
+|---|---|
+| `I yoyo: PFO: extension initialised (Windows, our netcode), interface N bytes` | `PFO.dll` loaded and took over the game's networking: the C runtime and every import are answered. Without it the problem is not the folder — a `0xc0000135` in the event log means a missing DLL (KB2999226). |
+| `I PFOSTATE: snapshots: on (this is the runner they were worked out for, 15 places checked)` | the patched `ufo50.exe` is still the program the snapshots know: loads and rewinds restore instead of replaying. |
+| `W PFOSTATE: snapshots: off, this isn't the runner they were worked out for (built 6970f195, a72000 bytes in memory)` | the program is another build: everything works, but loads replay the session instead of restoring it. |
+| `W PFOSTATE: snapshots: off, the runner's code at ... isn't what they were worked out for` | the same, caught by a code hash — a different game version. |
+| `I yoyo: PFO LAN: joined via 192.168.…` | a match connection went through, over the local network. |
+| `I yoyo: PFO LAN: game connection to player XXXX: connected` | the two sides are talking: netplay works on 7. |
+| `W yoyo: PFO LAN: ... another version of the build (theirs N, ours N)` | the other device is another build — a version mismatch, not a Windows 7 problem (`c_BuildWire` is 4 on 7 and on 10/11). |
+| `W yoyo: PFO LAN: no direct answer yet - trying the relay too` | the direct connection didn't get through (firewall, NAT) and it fell back to the relay: normal over the internet. |
+| `E PFOCRASH: fault ... at ..., ... (thread N)` and `called from: ...` | the runner crashed; those lines carry the address and the frames a report needs. |
+
+### 4. Three things to play, not just watch
+
+1. **Solo:** into a game and back to the menu, **F1** for the online menu, **F5**/**F9** for quick
+   save and load. A load that takes about a second means the snapshots are on; one that visibly
+   replays the session and takes seconds means they are off (the lines above say why). Both play;
+   only the first is fast.
+2. **A match with a Windows 10/11 machine:** host on one, join on the other, play a game to the end
+   or quit it. This is what proves the netcode the Android and Windows versions share is the same
+   one on 7.
+3. **A rewind in a match:** the same snapshots under the netcode, where a wrong answer desyncs
+   instead of being slow.
+
+### When to try DXVK
+
+`ufo50.exe` asks DXGI for `IDXGIFactory2` first and has a plain path under it. The program's own
+messages:
+
+```
+Using IDXGIFactory2::CreateSwapChainForHwnd (modern API for windowed mode)
+IDXGIFactory2 not available, falling back to legacy CreateSwapChain API
+pDXGIFactory->CreateSwapChain (legacy fallback)
+```
+
+Windows 7 has DXGI 1.1, so **the fallback lines are the ones to expect**, not a problem, and
+`IDXGIFactory5 not available (Windows 10 1803+ required for tearing support)` is normal too: no
+variable refresh rate on 7.
+
+Reach for DXVK only if one of these happens:
+
+- the window stays black or white for more than ~15 seconds while the game is clearly running (it
+  answers, the log moves on);
+- the program reports `CreateSwapChainForHwnd failed with HRESULT 0x…` **and** the legacy fallback
+  then draws nothing either;
+- `Device lost - reason: 0x…` repeats, or the game dies right after `DirectX11: Using hardware
+  device`.
+
+Then: **DXVK 1.10.3**, its `x64\d3d11.dll` and `x64\dxgi.dll` beside `ufo50.exe`. 1.10.4 and later
+want Vulkan 1.3 while Windows 7's drivers stop at 1.2 (people running 2024.11 GameMaker games on 7
+report 1.10.3 as the last that works). The driver has to offer Vulkan on 7 at all — NVIDIA's last
+Windows 7 driver, 475.14, does, and VulkanRT 1.3.290.0 is the last runtime installer for 7. DXVK
+writes `d3d11.log` and `dxgi.log` next to the program, which is how you know it is in use. The two
+DLLs do nothing on 10/11, but keep them in a copy of the folder rather than the one you ship.
+
+### What to write down
+
+Which of the lines above appeared (above all `extension initialised`, `snapshots: on`, `joined via`,
+`connected`), whether the legacy swap-chain fallback appeared, whether DXVK was needed, and how a
+rewind in a match felt. That is what turns "not checked yet" into results.
+
+None of this has been run on a 7 machine: these are the steps, not results.

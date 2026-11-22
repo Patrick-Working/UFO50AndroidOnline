@@ -69,9 +69,11 @@ rejoin); one look on both versions; tested on a real phone over Wi-Fi. The detai
   schema and ignores the copy), so one folder and one build number serve 7, 10 and 11, and their
   players share lobbies. The quick build gets that DLL too: `kit/` carries it
   (`ufo50-online-windows-v0.4.1.dll`) and `build.ps1` pins it by commit, since it is the one this
-  tree builds and there is no v0.4.1 tag yet. Windows 7 still needs KB2670838 and KB2999226; nothing
-  has been run on a 7 machine yet ([docs/WINDOWS7.md](docs/WINDOWS7.md),
-  [win7/README.md](win7/README.md)).
+  tree builds and there is no v0.4.1 tag yet. A finished folder is now checked for anything newer
+  than Windows 7 in either program (`win7/check_win7.ps1`, which the build runs), and
+  [docs/WINDOWS7.md](docs/WINDOWS7.md) has the steps for the 7 machine — the lines to look for in
+  `pfo_online.log` and when DXVK is worth trying. Windows 7 still needs KB2670838 and KB2999226;
+  nothing has been run on a 7 machine yet ([win7/README.md](win7/README.md)).
 - **Windows: the online menu in UFO 50's own font.** The build exports the game's menu font from
   your copy into the game folder (as the phone build does for its overlay; nothing is shipped) and
   the menu draws it at whole-pixel sizes. Without the file it falls back to Consolas.

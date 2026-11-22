@@ -372,6 +372,11 @@ if ($Windows) {
             Write-Host "   Windows 7 fixups: didn't go in (see above) - this folder starts on Windows 10/11 only" -ForegroundColor Yellow
             Write-Host "   (fix it later with: powershell -ExecutionPolicy Bypass -File win7\patch_win7.ps1 -GameDir `"$win`")" -ForegroundColor Yellow
         }
+        # and prove it: neither program in the finished folder may still want something Windows 8 has
+        & (Join-Path $Root "win7\check_win7.ps1") -GameDir $win
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "   Windows 7 check failed: this folder starts on Windows 10/11 only (see above)" -ForegroundColor Yellow
+        }
     }
     Write-Host ""
     Write-Host "Done: $win" -ForegroundColor Green

@@ -1,8 +1,11 @@
 # Windows 7 fixups (for review)
 
 What makes one `UFO 50 Online` folder run on Windows 7 **and** Windows 10/11, instead of two builds.
-Everything here is new and self-contained: nothing in the main build calls it yet, so it can be
-reviewed on its own and then wired in with the few lines under [Wiring it in](#wiring-it-in).
+Everything here is self-contained: `build.ps1` calls the two scripts at the end of section 4w, so
+every Windows build comes out 7-ready, and both can be run by hand as well (see
+[Wired into the build](#wired-into-the-build)). The steps for the machine itself, the log lines to
+look for and when DXVK is worth trying are in
+[docs/WINDOWS7.md](../docs/WINDOWS7.md#on-the-windows-7-bench).
 
 Background and the evidence: [docs/WINDOWS7.md](../docs/WINDOWS7.md).
 
@@ -43,6 +46,28 @@ The `PathCch` stand-in is [nalexandru/api-ms-win-core-path-HACK](https://github.
 fixed checksum, and the x64 DLL inside it against a second one. It is not in this repository. On
 Windows 8 and later the file is inert (see the table), so it does no harm being there.
 
+## Checking a finished folder
+
+`check_win7.ps1` is the guard against a future game version or a `PFO.dll` built another way
+quietly losing Windows 7. It reads the import and delay-import tables of `ufo50.exe` and `PFO.dll`
+and fails if either still wants something Windows 8 brought: an `api-ms-win-core-*` API set, or a
+Windows 8 function such as `SetProcessInformation`, `VirtualAlloc2` or `MFCreateDXGIDeviceManager`
+(the PathCch family is in the list too).
+
+```powershell
+powershell -ExecutionPolicy Bypass -File win7\check_win7.ps1 -GameDir "work\windows\UFO 50 Online"
+```
+
+`api-ms-win-core-path-l1-1-0.dll` is the one API set name that is fine, provided that file is in the
+folder: that is the stand-in. So a finished folder — `ufo50.exe` importing `PathCchCombine` from that
+name, the stand-in next to it — passes, while the same folder with the import gone (an unpatched
+`ufo50.exe`) fails on the two names the fixups rewrite. Both scripts read the tables with the same
+code, `pe.ps1`.
+
+Exit status is 0 when the folder can load on Windows 7, 1 when it can't; the lines above the summary
+name the file and the import. It is a guard rather than an OS analyser — it knows the names in its
+lists, so a failure is trustworthy but a pass is only as good as the list.
+
 ## Wired into the build
 
 `build.ps1` runs it at the end of section 4w, once the game data, the art and `PFO.dll` are in
@@ -56,6 +81,11 @@ place, so every Windows build comes out 7-ready:
         if ($LASTEXITCODE -ne 0) {
             Write-Host "   Windows 7 fixups: didn't go in (see above) - this folder starts on Windows 10/11 only" -ForegroundColor Yellow
             Write-Host "   (fix it later with: powershell -ExecutionPolicy Bypass -File win7\patch_win7.ps1 -GameDir `"$win`")" -ForegroundColor Yellow
+        }
+        # and prove it: neither program in the finished folder may still want something Windows 8 has
+        & (Join-Path $Root "win7\check_win7.ps1") -GameDir $win
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "   Windows 7 check failed: this folder starts on Windows 10/11 only (see above)" -ForegroundColor Yellow
         }
     }
 ```
@@ -83,9 +113,11 @@ say where a process is from, it is not counted either.
   (the Universal CRT that `PFO.dll` links against) still have to be on the machine.
 - It does not touch `data.win`, `PFO.dll` or the save folder, so the Windows 7 and Windows 10/11
   players are the same build to the netcode (`c_BuildWire` is 4 either way) and share lobbies.
-- If the runner ever needs a flip-model swap chain (Windows 8+), Windows 7 still needs DXVK's
-  `dxgi.dll` + `d3d11.dll` (1.10.3) in the same folder. Whether it does is the open question in
-  `docs/WINDOWS7.md`; this script neither helps nor hurts there.
+- It does not decide the presentation question. The program asks for `IDXGIFactory2` first and has
+a plain path under it (`IDXGIFactory2 not available, falling back to legacy CreateSwapChain API`),
+which is what Windows 7's DXGI 1.1 should take — so DXVK's `dxgi.dll` + `d3d11.dll` (1.10.3) are
+likely not needed, but only a 7 machine says so; this script neither helps nor hurts there. The
+bench steps in [docs/WINDOWS7.md](../docs/WINDOWS7.md#when-to-try-dxvk) say when to reach for it.
 - Snapshots: the runner is recognised by its build stamp, image size and 15 code ranges, none of
   which these two name edits or the extra DLL touch — so they stay on. The log line to check is
   `PFOSTATE snapshots: on (...)`.
