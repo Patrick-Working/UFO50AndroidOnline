@@ -248,3 +248,6 @@ if ($Check) { Write-Host ""; Write-Host "(only checked: nothing was changed)"; e
 Write-Host ""
 Write-Host "Done: $GameDir starts on Windows 7, 10 and 11 alike." -ForegroundColor Green
 Write-Host "Windows 7 also needs KB2670838 (Direct3D 11) and KB2999226 (the C runtime PFO.dll uses)."
+# an explicit 0: build.ps1 calls this and checks $LASTEXITCODE, which a script that just returns
+# does not set (it would still hold whatever the last native program left there)
+exit 0
