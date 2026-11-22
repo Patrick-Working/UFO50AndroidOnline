@@ -72,8 +72,8 @@ to get these. Every device in a lobby needs the same build.
 - A dropped player who is being waited for keeps their seat in the game's pause menu.
 
 **Windows 7:** UFO 50 itself needs Windows 8 or later (its `ufo50.exe` won't start on 7, the Steam
-game included), and this build's Windows version needs Windows 10. See
-[docs/WINDOWS.md](docs/WINDOWS.md).
+game included), and this build's Windows version needed Windows 10: its PFO.dll no longer does,
+the runner still does. See [docs/WINDOWS7.md](docs/WINDOWS7.md).
 
 The full list: [CHANGELOG.md](CHANGELOG.md).
 

@@ -190,13 +190,16 @@ index 7abb85d..d7e2bed 100644
          }
      };
  
-@@ -934,6 +1044,10 @@ namespace
+@@ -934,6 +1044,13 @@ namespace
          }
      }
  
 +#if defined(__ANDROID__)
 +    void* AllocateRingBuffer(size_t bufferSize) { return AndroidAllocateRingBuffer(bufferSize); }
 +    void* AllocateLargeBuffer(size_t bufferSize) { return AndroidAllocateLargeBuffer(bufferSize); }
++#elif defined(PFO_WINDOWS_OURS)
++    void* AllocateRingBuffer(size_t bufferSize) { return pfo_win::AllocateRingBuffer(bufferSize); }
++    void* AllocateLargeBuffer(size_t bufferSize) { return pfo_win::AllocateLargeBuffer(bufferSize); }
 +#else
      void* AllocateRingBuffer(size_t bufferSize)
      {

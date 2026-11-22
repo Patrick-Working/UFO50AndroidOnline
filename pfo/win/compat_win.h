@@ -134,6 +134,50 @@ namespace pfo_win
     inline int Send(int s, const void* data, size_t n, int flags) { return ::send(static_cast<SOCKET>(s), static_cast<const char*>(data), static_cast<int>(n), flags); }
     inline int Recv(int s, void* data, size_t n, int flags) { return ::recv(static_cast<SOCKET>(s), static_cast<char*>(data), static_cast<int>(n), flags); }
     inline int CloseSocket(int s) { return ::closesocket(static_cast<SOCKET>(s)); }
+
+    // ---- the checksum ring buffer: one buffer mapped twice, back to back
+    // PFO 50's Windows code maps it with VirtualAlloc2's placeholders and MapViewOfFile3, the
+    // Windows 10 1803 API set (api-ms-win-core-memory-l1-1-6.dll), so a DLL that mentions them
+    // does not load at all on Windows 7. This does the same with the Windows 2000 API: reserve
+    // the two-buffer range, give it back and map both halves of one paging file's section into
+    // it. The two views must be exactly next to each other for a write that wraps around to stay
+    // one contiguous run of memory; MapViewOfFileEx only takes the address as a hint, so if
+    // something else grabs it in between, try again.
+    inline void* AllocateRingBuffer(size_t bufferSize)
+    {
+        SYSTEM_INFO info = {};
+        GetSystemInfo(&info);
+        const SIZE_T size = static_cast<SIZE_T>(bufferSize);
+        if (size == 0 || (size % info.dwAllocationGranularity) != 0 || size > SIZE_MAX / 2) return nullptr;
+
+        ULARGE_INTEGER sectionSize = {};
+        sectionSize.QuadPart = size;
+        HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, sectionSize.HighPart, sectionSize.LowPart, nullptr);
+        if (!section) return nullptr;
+
+        for (int attempt = 0; attempt < 100; attempt++)
+        {
+            void* base = VirtualAlloc(nullptr, size * 2, MEM_RESERVE, PAGE_NOACCESS);
+            if (!base) break;
+            VirtualFree(base, 0, MEM_RELEASE);
+            void* first = MapViewOfFileEx(section, FILE_MAP_WRITE, 0, 0, size, base);
+            if (!first) continue;
+            void* second = MapViewOfFileEx(section, FILE_MAP_WRITE, 0, 0, size, static_cast<uint8_t*>(base) + size);
+            if (second)
+            {
+                CloseHandle(section);
+                return first;
+            }
+            UnmapViewOfFile(first);
+        }
+        CloseHandle(section);
+        return nullptr;
+    }
+
+    inline void* AllocateLargeBuffer(size_t bufferSize)
+    {
+        return VirtualAlloc(nullptr, bufferSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    }
 }
 
 inline int __android_log_write(int prio, const char* tag, const char* text)

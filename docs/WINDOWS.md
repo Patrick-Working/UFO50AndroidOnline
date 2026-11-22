@@ -32,7 +32,8 @@ You need Windows 10 or 11 and UFO 50 1.9.5 from Steam.
 That's the game's own requirement, not this port's: UFO 50's `ufo50.exe` (GameMaker's runner) needs
 Windows 8 or later system files, so on Windows 7 it stops at once with "api-ms-win-core-path-l1-1-0.dll
 is missing", the Vanilla copy and the Steam game alike. No start option gets round that (there is no
-DirectX 9 mode: the runner draws with Direct3D 11 only). Our PFO.dll needs Windows 10 as well.
+DirectX 9 mode: the runner draws with Direct3D 11 only). Our PFO.dll needed Windows 10 as well; it
+doesn't any more, the runner still does: see [WINDOWS7.md](WINDOWS7.md).
 
 **Quick build** (nothing to install): double-click `build-windows.bat` (or run
 `build.bat -Windows`). The first run installs the mods with the UFO 50 Mod Loader, without a window (if

@@ -31,7 +31,9 @@ done
   -c "$ENET/win32.c" -o "$OUT/obj/enet_win32.o"
 "$CC" -O2 -I"$ENET/include" -c "$SRC/win/enet_hooks_win.c" -o "$OUT/obj/enet_hooks_win.o"
 
-"$CXX" -std=c++20 -O2 -DNDEBUG -DPFO_WINDOWS_OURS -DUNICODE -D_UNICODE \
+# _WIN32_WINNT 0x0601 (Windows 7) is the oldest the game runs on, and keeps newer Windows-only
+# calls out of the build: an import a Windows 7 KERNEL32 doesn't have stops the DLL loading at all
+"$CXX" -std=c++20 -O2 -DNDEBUG -DPFO_WINDOWS_OURS -D_WIN32_WINNT=0x0601 -DWINVER=0x0601 -DUNICODE -D_UNICODE \
   -ffile-prefix-map="$(cygpath -m "$SRC/..")"=. \
   -Wno-everything -fno-exceptions -fno-rtti \
   -I"$SRC/win/posix" -I"$SRC" -I"$ENET/include" \
