@@ -19,6 +19,11 @@ instead. `patch_win7.ps1` rewrites the two names and puts a `PathCch` stand-in i
 | `MFPlat!MFCreateDXGIDeviceManager` (delay-load) | `MFTGetInfo` | fails cleanly, as GameMaker expects | the same clean failure: video playback, which UFO 50 never uses (`data.win` has no `video_*` function in it) |
 | `api-ms-win-core-path-l1-1-0!PathCchCombine` | left alone; a copy of the name is put in the folder | the copy is the only implementation there is | **ignored**: the loader answers `api-ms-*` names from the API set schema (`kernelbase.dll`) and never looks in the folder |
 
+The one call to `SetProcessInformation` was read in the disassembly —
+`SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &state, 12)`, its result only
+tested for zero, so `GetProcessId` is enough: see
+[docs/WINDOWS7.md](../docs/WINDOWS7.md#why-getprocessid-is-a-safe-stand-in).
+
 The names are found by walking the import and delay-import tables, not by searching the file for the
 text: `MFCreateDXGIDeviceManager` also appears three times in the program's own log messages.
 

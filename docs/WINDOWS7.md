@@ -99,37 +99,89 @@ DLLs next to `ufo50.exe`, which Microsoft supports.
 
 ## Getting the game itself to start on Windows 7
 
-Not done here — it means changing a program this repository does not build. Two ways, both from
-outside this project:
+It means changing a program this repository does not build, so
+[win7/patch_win7.ps1](../win7/patch_win7.ps1) does it to a folder the Windows build has just made:
 
-- **VxKex** (the community "newer Windows APIs on 7" shim) is the one-step route: it implements
-  the Windows 8+ functions, including the two hard imports above, without touching `ufo50.exe`.
-- **Three narrow patches to `ufo50.exe`**, if you would rather not run a shim:
-  1. put the `PathCch*` stand-in DLL (`api-ms-win-core-path-l1-1-0.dll`, the Wine-based
-     [nalexandru/api-ms-win-core-path-HACK](https://github.com/nalexandru/api-ms-win-core-path-HACK))
-     next to `ufo50.exe`;
-  2. rewrite the imported name `SetProcessInformation` in the import table to a Windows 7
-     `KERNEL32` function that does nothing harmful — `GetProcessId` takes the same first
-     argument and only returns a number, so the call is a no-op that reports success;
-  3. rewrite `MFCreateDXGIDeviceManager` to `MFTGetInfo` (YellowAfterlife's patcher, or the same
-     edit by hand), which costs the game its `video_` playback and nothing else.
+```powershell
+powershell -ExecutionPolicy Bypass -File win7\patch_win7.ps1 -GameDir "work\windows\UFO 50 Online"
+```
 
-The names sit in the import table, NUL-terminated, so a replacement must be no longer than the
-original and be followed by a zero byte.
+It checks the program first (build stamp `0x6970f195`, image size `0xa72000` — the same two numbers
+the snapshots check — and refuses anything else unless `-Force`), then:
+
+1. rewrites `KERNEL32!SetProcessInformation` to `GetProcessId` (why that is safe: below);
+2. rewrites `MFPlat!MFCreateDXGIDeviceManager`, delay-loaded and so only in the way at start-up,
+   to `MFTGetInfo` — YellowAfterlife's fix, which costs the game `video_` playback and nothing
+   else;
+3. puts the `PathCch*` stand-in next to `ufo50.exe` (`api-ms-win-core-path-l1-1-0.dll`, the
+   Wine-based
+   [nalexandru/api-ms-win-core-path-HACK](https://github.com/nalexandru/api-ms-win-core-path-HACK),
+   checked against two pinned checksums and downloaded into `work\dl` like the build's other
+   downloads).
+
+`-Check` reports without changing anything, running it twice is safe (it says "already"), and the
+folder must not be playing. The names are found by walking the import and delay-import tables, not
+by searching the file for the text — `MFCreateDXGIDeviceManager` also appears three times in the
+program's own log messages.
+
+[win7/README.md](../win7/README.md) has the two lines that make the Windows build do this itself;
+until they are in, run it by hand as above.
+
+Both edits are harmless on Windows 8 and later, so this is the same folder for 7 and 10/11: the
+loader answers `api-ms-*` names from the API set schema and never looks at the copy in the folder,
+`MFTGetInfo` only costs video playback, and the power hint becomes the no-op described next.
+
+**VxKex** (the community "newer Windows APIs on 7" shim) is the alternative if you would rather not
+change `ufo50.exe` at all: it implements the Windows 8 functions themselves.
+
+### Why `GetProcessId` is a safe stand-in
+
+The program calls `SetProcessInformation` once, and the only reference to that import anywhere in
+it is that call (RVA `0x38e76a`; the scan covers `call`, `jmp` and `lea`/`mov` of the import slot in
+every section, so it is called, never taken by address):
+
+```
+14038e753: call  qword ptr [rip + ...]   ; GetCurrentProcess()
+14038e759: mov   r9d, 0xc                ; 12 bytes of state
+14038e75f: lea   r8, [rbp + 8]           ; { Version = 1, ControlMask = 4, StateMask = 0 }
+14038e763: mov   rcx, rax                ; the process
+14038e766: lea   edx, [r9 - 8]           ; ProcessPowerThrottling = 4
+14038e76a: call  qword ptr [rip + ...]   ; SetProcessInformation
+14038e770: test  eax, eax
+14038e772: jne   14038e78c               ; it worked: nothing to say
+14038e774: ...                            ; "!!! Couldn't set process power settings\n"
+```
+
+That is `SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &state, 12)` with
+`ControlMask = 0x4` — `PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION` — and `StateMask = 0`: "do
+not throttle this process's timer resolution", set right after the main thread is raised to
+`THREAD_PRIORITY_HIGHEST`, as the start of a game would.
+
+The result is only tested for zero: a failure writes that one line to the log and the program
+carries on. So a stand-in that returns a number without touching the process is enough, and
+`GetProcessId` is the closest one: it takes the same first argument (a process handle) and answers
+with the id, which is not zero for the current process, so the program takes the success path and
+never looks at the state it passed. The arguments it does not read — the class, the pointer, the
+size — sit in registers a one-argument function ignores on x64. Windows 7 has no timer-resolution
+throttling to opt out of (that arrived with the later power management), so the hint dropped is one
+Windows 7 would not act on anyway. Had it failed instead, the game would only have logged it.
 
 **Snapshots**: the runner bridge decides whether snapshots work by the program's build stamp,
-image size and the 15 code ranges listed above. Import-table and string edits touch none of those,
-so snapshots should stay on — the log says `snapshots: on (this is the runner they were worked out
-for, 15 places checked)`. That has not been tried with patched imports; if it says `snapshots: off,
-the runner's code at ...` instead, loads and rewinds replay the session as
-[WINDOWS.md](WINDOWS.md) describes.
+image size and the 15 code ranges listed above. Import-table edits touch none of those, and the
+patched program was checked against them here: stamp, image size and all 15 ranges still match. So
+the log should say `snapshots: on (this is the runner they were worked out for, 15 places
+checked)`. If it says `snapshots: off, the runner's code at ...` instead, loads and rewinds replay
+the session as [WINDOWS.md](WINDOWS.md) describes.
 
 ## Trying it
 
 ```bash
 bash build.sh --windows --kit     # work/kit/ufo50-online-windows-v0.4.1.dll (this build)
 bash build.sh --windows           # ...and the game folder, work/windows/UFO 50 Online
+powershell -ExecutionPolicy Bypass -File win7\patch_win7.ps1 -GameDir "work/windows/UFO 50 Online"
 ```
+
+The last line is the Windows 7 part (see above); the build does not run it by itself yet.
 
 `build.bat -Windows -WinDll <file>` uses a `PFO.dll` of your own. The file in `kit/` is still the
 one built before this change, and `build.ps1` pins its checksum: it was left alone.

@@ -56,6 +56,19 @@ rejoin); one look on both versions; tested on a real phone over Wi-Fi. The detai
 - **Tests:** `SOLO_PLAYERS=2 tests/win/sweep.py`: the sweep with P2 playing; the test relay switch
   (`RELAY=1`) is set again after the launch clears old switches (it had stopped taking effect).
 
+- **Windows 7: the Windows version starts on 7 too, from the same folder.** PFO.dll imported
+  `VirtualAlloc2` and `MapViewOfFile3` to build its checksum ring buffer, an API set Windows 10
+  1803 brought, so on Windows 7 the DLL did not load at all; the buffer is now mapped the Windows
+  2000 way (one page-file section, mapped twice back to back) and the build pins `_WIN32_WINNT` to
+  7, so a newer call is a compile error. UFO 50's own `ufo50.exe` needed more than the known
+  MFPlat fix: it imports `PathCchCombine` from a Windows 8 API set and `SetProcessInformation`
+  outright (both are resolved before the program runs), and `win7/patch_win7.ps1` now rewrites
+  those two names in the import tables at build time — the power hint becomes a no-op, whose single
+  call site was checked in the disassembly — and puts the `PathCch` stand-in in the folder. All of
+  it is harmless on Windows 8 and later (the loader answers `api-ms-*` names from the API set
+  schema and ignores the copy), so one folder and one build number serve 7, 10 and 11, and their
+  players share lobbies. Windows 7 still needs KB2670838 and KB2999226; nothing has been run on a 7
+  machine yet ([docs/WINDOWS7.md](docs/WINDOWS7.md), [win7/README.md](win7/README.md)).
 - **Windows: the online menu in UFO 50's own font.** The build exports the game's menu font from
   your copy into the game folder (as the phone build does for its overlay; nothing is shipped) and
   the menu draws it at whole-pixel sizes. Without the file it falls back to Consolas.
