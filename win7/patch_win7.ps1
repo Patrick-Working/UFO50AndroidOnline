@@ -75,6 +75,7 @@ $Patches = @(
 )
 
 # ---- reading the program --------------------------------------------------------------------
+if (-not (Test-Path -LiteralPath $GameDir)) { Die "no such folder: $GameDir" }
 $GameDir = (Resolve-Path -LiteralPath $GameDir).Path
 $exe = Join-Path $GameDir "ufo50.exe"
 if (-not (Test-Path -LiteralPath $exe)) { Die "no ufo50.exe in $GameDir" }
