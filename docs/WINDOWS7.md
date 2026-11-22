@@ -131,6 +131,12 @@ Both edits are harmless on Windows 8 and later, so this is the same folder for 7
 loader answers `api-ms-*` names from the API set schema and never looks at the copy in the folder,
 `MFTGetInfo` only costs video playback, and the power hint becomes the no-op described next.
 
+Tried on this machine (Windows 10 build 19045, x86_64): the patched program and the untouched one were
+started with the same `data.win`, each with a private `LOCALAPPDATA` so the Steam game's saves were
+never in reach. Both were still running eight seconds later, both with the window title `UFO 50`,
+both answering, both having written `ufo50\config.json` — the import edits cost the game nothing on
+10/11.
+
 **VxKex** (the community "newer Windows APIs on 7" shim) is the alternative if you would rather not
 change `ufo50.exe` at all: it implements the Windows 8 functions themselves.
 

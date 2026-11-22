@@ -71,9 +71,10 @@ to get these. Every device in a lobby needs the same build.
 - No more green frame around the screen after a key or controller press (Android).
 - A dropped player who is being waited for keeps their seat in the game's pause menu.
 
-**Windows 7:** UFO 50 itself needs Windows 8 or later (its `ufo50.exe` won't start on 7, the Steam
-game included), and this build's Windows version needed Windows 10: its PFO.dll no longer does,
-the runner still does. See [docs/WINDOWS7.md](docs/WINDOWS7.md).
+**Windows 7:** the Steam game won't start on 7, but this build's Windows version does: the build
+makes **one folder for Windows 7, 10 and 11** (it rewrites the two Windows 8 imports in the game's
+own `ufo50.exe` and puts a `PathCch` stand-in beside it, which changes nothing on 10 and 11).
+Windows 7 needs SP1 with KB2670838 and KB2999226. See [docs/WINDOWS7.md](docs/WINDOWS7.md).
 
 The full list: [CHANGELOG.md](CHANGELOG.md).
 
@@ -309,7 +310,7 @@ folder, so other games can use it too.
 
 ## Quick build
 
-You need **Windows 10 or 11** and **UFO 50 1.9.5 from Steam**. Nothing else to install.
+You need **Windows 10 or 11** to build it, and **UFO 50 1.9.5 from Steam**. Nothing else to install.
 
 1. Download this repository
    ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.4.1.zip)) and

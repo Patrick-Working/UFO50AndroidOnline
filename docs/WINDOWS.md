@@ -28,12 +28,20 @@ what happened; it holds network addresses, so look through it before you post it
 
 ## Building it
 
-You need Windows 10 or 11 and UFO 50 1.9.5 from Steam.
-That's the game's own requirement, not this port's: UFO 50's `ufo50.exe` (GameMaker's runner) needs
-Windows 8 or later system files, so on Windows 7 it stops at once with "api-ms-win-core-path-l1-1-0.dll
-is missing", the Vanilla copy and the Steam game alike. No start option gets round that (there is no
-DirectX 9 mode: the runner draws with Direct3D 11 only). Our PFO.dll needed Windows 10 as well; it
-doesn't any more, the runner still does: see [WINDOWS7.md](WINDOWS7.md).
+You need Windows 10 or 11 to build it, and UFO 50 1.9.5 from Steam.
+**The folder it makes runs on Windows 7 as well as on 10 and 11, from the same build**: the game's
+own `ufo50.exe` (GameMaker's runner) is written for Windows 8 and later — it imports
+`PathCchCombine` from a Windows 8 API set and `SetProcessInformation` — so the build rewrites those
+two names in its import tables and puts a `PathCch` stand-in beside it, and our `PFO.dll` no longer
+needs anything newer than Windows 7 either. On 10/11 the edits take away nothing the game uses: the
+patched runner and the untouched one start alike there (there is no DirectX 9 mode, and the runner
+draws with Direct3D 11 only, but that is not what the edits touch).
+
+The Steam game itself is not patched and still needs Windows 8 or later: on 7 it stops at once with
+"api-ms-win-core-path-l1-1-0.dll is missing", and so does the Vanilla copy (it is the same runner).
+Windows 7 needs SP1 with KB2670838 (Direct3D 11) and KB2999226 (the C runtime `PFO.dll` uses), and
+how the runner presents frames on 7 is still untried. `-NoWin7` leaves the fixups out, for a folder
+meant for 10/11 only. Details and the evidence: [WINDOWS7.md](WINDOWS7.md).
 
 **Quick build** (nothing to install): double-click `build-windows.bat` (or run
 `build.bat -Windows`). The first run installs the mods with the UFO 50 Mod Loader, without a window (if
