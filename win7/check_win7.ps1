@@ -10,7 +10,8 @@
 # It is a guard, not an OS analyser: it knows the names below, so a failure is trustworthy but a pass
 # is only as good as that list.
 
-param([Parameter(Mandatory = $true)][string]$GameDir)
+# -NoPfo: a folder of the plain game (build.ps1 -Vanilla), which has no PFO.dll to check
+param([Parameter(Mandatory = $true)][string]$GameDir, [switch]$NoPfo)
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "pe.ps1")
@@ -50,7 +51,9 @@ function Read-Whole([string]$path) {
     } catch { return $null }
 }
 
-foreach ($file in "ufo50.exe", "PFO.dll") {
+$files = @("ufo50.exe")
+if (-not $NoPfo) { $files += "PFO.dll" }
+foreach ($file in $files) {
     $path = Join-Path $GameDir $file
     if (-not (Test-Path -LiteralPath $path)) {
         Write-Host "   NO   ${file} is not in the folder" -ForegroundColor Red
@@ -106,5 +109,5 @@ if ($bad) {
     exit 1
 }
 Write-Host ""
-Write-Host "Windows 7 check: OK (nothing in ufo50.exe or PFO.dll is newer than Windows 7)"
+Write-Host ("Windows 7 check: OK (nothing in " + ($files -join " or ") + " is newer than Windows 7)")
 exit 0

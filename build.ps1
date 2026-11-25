@@ -1,7 +1,7 @@
 # UFO 50 Android Online - quick build.
 # Double-click build.bat (or run: powershell -ExecutionPolicy Bypass -File build.ps1).
 # Needs only Windows 10 or 11 to build, and UFO 50 from Steam. Everything else is downloaded into
-# work\. The Windows version it makes starts on Windows 7 as well.
+# work\. The Windows folders it makes are meant to start on Windows 7 as well (not yet tried there).
 #
 #   -Install         also install the APK on a phone connected with USB debugging (needs adb)
 #   -Runner <apk>    use this runner instead of the published runner kit (the full build passes its own)
@@ -37,16 +37,26 @@ $Pins = @{
     Utmt         = @("https://github.com/UnderminersTeam/UndertaleModTool/releases/download/0.9.2.0/UTMT_CLI_v0.9.2.0-Windows.zip", "e7573e45d107be34f81f955c6e4afc3c7c8f2628e5a6f307a871e3825b3dfb40", "utmt.zip")
     Loader       = @("https://github.com/phil-macrocheira/UFO-50-MOD-LOADER/releases/download/v2.3.0/UFO-50-Mod-Loader-win-Portable.zip", "4b9c5ade275916fe5cb4b05b2e516d1d31187aee2bd16336f1ddd1496f1126a4", "modloader.zip")
     Pfo          = @("https://gamebanana.com/dl/1778793", "fdf134dc776373bd6cb233c7dadf6cae1514174f48538152f72aa0016cfd08b1", "pfo50-0.10.0.zip")
-    Mmm          = @("https://gamebanana.com/dl/1836289", "9e4f97abcbb2fd04b71ffdfed86feb53c7625590f946b1bc77aced3b38b4ab99", "multimadnessmod-1.30.zip")
+    Mmm          = @("https://gamebanana.com/dl/1880505", "213dac222771179f6e800635bd28a8e660023cef3e460eec893949a6a9baa796", "multimadnessmod-1.31.zip")
+    # more mods for the Mod Loader, as their authors publish them on GameBanana: the folder in the
+    # zip is the mod's name. Add one here (and audition it first: docs/MODS.md) to build it in.
+    Extra        = @(
+        @{ Name = "Ultimate Pingolf Roster"; Pin = @("https://gamebanana.com/dl/1707774", "35e40ede3b3765a7170d0565c35ed29f314ea53e9d36fddd0057c15f1186d708", "ultimate_pingolf_roster-1.0.0.zip") }
+        @{ Name = "Star Waspir 2P";          Pin = @("https://gamebanana.com/dl/1766399", "5ff6a762aaf286bdf45770ca090c501c2a144ff37450c976872270101c600c2d", "star_waspir_2p-0.9.0.zip") }
+        @{ Name = "Hyper Contender+";        Pin = @("https://gamebanana.com/dl/1853715", "3dd5a9306d38dc6b41162ee134a404172f8618e216b7010887db04a6bb43a7fd", "hyper_contender_plus-1.6.10.zip") }
+    )
     # the runner kit: GameMaker's Android runner + the touch overlay + libPFO.so, no game data
     # (made by the full build: bash build.sh --kit)
-    Kit          = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.4.0/kit/ufo50-online-runner-v0.4.0.apk", "a8d0906bb5fabbf89650902c4aa8407ce7f67f13a6df669a05e91063ccc1e4b2", "ufo50-online-runner-v0.4.0.apk")
+    Kit          = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.5.0/kit/ufo50-online-runner-v0.5.0.apk", "a547f3da964f39a96fffa4aa0281361a758077f900f8171651f4b02c22a5ed2f", "ufo50-online-runner-v0.5.0.apk")
     # the Windows kit: our PFO.dll alone (made by the full build: bash build.sh --windows --kit),
-    # built without the Windows 10-only memory calls so the folder starts on 7, 10 and 11 alike.
-    # Pinned by commit, not by tag: it has to be the DLL this source tree builds today, and the
-    # v0.4.1 tag does not exist yet. (v0.4.0's kit is still in kit/ for that tag's own pin.)
-    WinKit       = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/d31cb31466e73ec90b5d103b327b774d3a499fce/kit/ufo50-online-windows-v0.4.1.dll", "b4e46b1aeaf469dad5c2690b3ac6e004e8757af6e55fff34e01f29e93f937a90", "ufo50-online-windows-v0.4.1.dll")
+    # built without the Windows 10-only memory calls, so the folder can start on 7 as well as 10/11.
+    # (The kits of earlier versions stay in kit/ for those tags' own pins.)
+    WinKit       = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.5.0/kit/ufo50-online-windows-v0.5.0.dll", "14971ceab109545bd3971e5c68f66652cd644f2a046cf2413421e79eec52a982", "ufo50-online-windows-v0.5.0.dll")
 }
+
+$ModNames = @("MultiMadnessMod", "PFO 50") + @($Pins.Extra | ForEach-Object { $_.Name })
+# what the modded copy was made from: a different list or a different file makes it again
+$ModStamp = (@($Pins.Pfo[1], $Pins.Mmm[1]) + @($Pins.Extra | ForEach-Object { $_.Pin[1] })) -join ","
 
 function Say($t) { Write-Host ""; Write-Host "== $t" -ForegroundColor Cyan }
 function Ok($t) { Write-Host "   ok   $t" }
@@ -119,7 +129,8 @@ Ok "UFO 50 $($Pins.GameVersion) ($GamePath)"
 # ---- VW. the vanilla game for Windows: a portable copy that doesn't need Steam ----------------
 # Your game folder without Steam's libraries (the game runs without them: its Steam calls find
 # nothing and it carries on), plus a .bat that starts it with its saves kept inside the folder.
-# No game file is changed.
+# No game data is changed; the copy's ufo50.exe gets the Windows 7 fixups (two import names, and
+# the PathCch stand-in beside it: win7/README.md) unless -NoWin7.
 if ($Vanilla -and $Windows) {
     Say "Copying the game"
     $steamFiles = @("Steamworks_x64.dll", "steam_api64.dll", "steam_api.dll", "steam_appid.txt")
@@ -149,11 +160,24 @@ if ($Vanilla -and $Windows) {
         'start "" "%~dp0ufo50.exe"')
     [IO.File]::WriteAllLines((Join-Path $win $bat), $lines, (New-Object Text.ASCIIEncoding))
     Ok "$($to.Count) files, $([math]::Round((& $size $to) / 1MB)) MB, without Steam's libraries"
+    # the same Windows 7 fixups as the Online folder (this copy's ufo50.exe only, never Steam's)
+    $win7 = $false
+    if ($NoWin7) { Write-Host "   Windows 7 fixups: skipped (-NoWin7)" -ForegroundColor Yellow }
+    else {
+        & (Join-Path $Root "win7\patch_win7.ps1") -GameDir $win -CacheDir $Dl
+        if ($LASTEXITCODE -ne 0) { Write-Host "   Windows 7 fixups: didn't go in (see above) - this folder starts on Windows 10/11 only" -ForegroundColor Yellow }
+        else {
+            & (Join-Path $Root "win7\check_win7.ps1") -GameDir $win -NoPfo
+            $win7 = $LASTEXITCODE -eq 0
+            if (-not $win7) { Write-Host "   Windows 7 check failed: this folder starts on Windows 10/11 only (see above)" -ForegroundColor Yellow }
+        }
+    }
     Write-Host ""
     Write-Host "Done: $win" -ForegroundColor Green
-    Write-Host "This is your game as Steam has it, without Steam: no game file is changed, only Steam's"
-    Write-Host "libraries are left out, so it runs with Steam closed or not installed (and has no"
-    Write-Host "achievements, cloud saves or online play)."
+    Write-Host "This is your game as Steam has it, without Steam: Steam's libraries are left out, so it"
+    Write-Host "runs with Steam closed or not installed (and has no achievements, cloud saves or online"
+    Write-Host "play). No game data is changed; ufo50.exe only gets the Windows 7 fixups (two import"
+    Write-Host "names), which change nothing on Windows 10 and 11. Windows 7 is untested so far."
     Write-Host "Start ""$bat"" in that folder: the saves then stay inside it (saves\) and the whole"
     Write-Host "folder can be moved to another PC. Starting ufo50.exe itself works too, but then it uses"
     Write-Host "this PC's save folder, %LOCALAPPDATA%\ufo50, which is the Steam game's."
@@ -173,19 +197,23 @@ if (-not $Vanilla) {
     $loaderZip = Fetch $Pins.Loader
     $pfoZip = Fetch $Pins.Pfo
     $mmmZip = Fetch $Pins.Mmm
+    $extraZips = @($Pins.Extra | ForEach-Object { @{ Name = $_.Name; Zip = (Fetch $_.Pin) } })
 }
 $localKit = Join-Path $Root ("kit\" + $Pins.Kit[2])   # the repository zip carries the kit
 $localWinKit = Join-Path $Root ("kit\" + $Pins.WinKit[2])
 if ($Windows) {
     if ($WinDll) { $winKit = (Resolve-Path $WinDll).Path; Ok "PFO.dll: $winKit" }
-    elseif ((Test-Path $localWinKit) -and ((Sha $localWinKit) -eq $Pins.WinKit[1])) { $winKit = $localWinKit; Ok "Windows kit v0.4.1" }
-    else { $winKit = Fetch $Pins.WinKit; Ok "Windows kit v0.4.1 (downloaded)" }
+    elseif ((Test-Path $localWinKit) -and ((Sha $localWinKit) -eq $Pins.WinKit[1])) { $winKit = $localWinKit; Ok "Windows kit v0.5.0" }
+    else { $winKit = Fetch $Pins.WinKit; Ok "Windows kit v0.5.0 (downloaded)" }
 }
 elseif ($Runner) { $kit = (Resolve-Path $Runner).Path; Ok "runner: $kit" }
-elseif ((Test-Path $localKit) -and ((Sha $localKit) -eq $Pins.Kit[1])) { $kit = $localKit; Ok "runner kit v0.4.0" }
-else { $kit = Fetch $Pins.Kit; Ok "runner kit v0.4.0 (downloaded)" }
+elseif ((Test-Path $localKit) -and ((Sha $localKit) -eq $Pins.Kit[1])) { $kit = $localKit; Ok "runner kit v0.5.0" }
+else { $kit = Fetch $Pins.Kit; Ok "runner kit v0.5.0 (downloaded)" }
 if ($Vanilla) { Ok "UndertaleModTool 0.9.2.0 (only its APK packer is used)" }
-else { Ok "UndertaleModTool 0.9.2.0, UFO 50 Mod Loader 2.3.0, PFO 50 0.10.0, MultiMadnessMod 1.30" }
+else {
+    Ok "UndertaleModTool 0.9.2.0, UFO 50 Mod Loader 2.3.0, PFO 50 0.10.0, MultiMadnessMod 1.31"
+    if ($Pins.Extra) { Ok ("and " + (($Pins.Extra | ForEach-Object { $_.Name + " " + ($_.Pin[2] -replace '^.*-(\d[\d.]*)\.zip$', '$1') }) -join ", ")) }
+}
 
 # ---- the APK: the runner's files plus a game folder, signed --------------------------------
 function PackApk($game, $apk, $plain) {
@@ -229,7 +257,9 @@ $modded = if ($ModdedDir) { $ModdedDir } else { Join-Path $loader "workspace\UFO
 # or failed has the DLL and the game's own data.win: the DLL alone doesn't say the mods are in.
 function ModdedOk {
     $d = Join-Path $modded "data.win"
-    (Test-Path (Join-Path $modded "PFO.dll")) -and (Test-Path $d) -and ((Sha $d) -ne $Pins.GameSha)
+    $stamp = Join-Path $modded "pfo_mods.txt"
+    (Test-Path (Join-Path $modded "PFO.dll")) -and (Test-Path $d) -and ((Sha $d) -ne $Pins.GameSha) -and
+        ($ModdedDir -or ((Test-Path $stamp) -and ((Get-Content -Raw $stamp).Trim() -eq $ModStamp)))
 }
 
 # The Mod Loader can install with no window (--headless), but 2.3.0 stops with an error before it
@@ -272,14 +302,14 @@ function LoaderHeadless {
         }
         # OverwriteMode would make the loader write into the game's own folder: always off here
         [ordered]@{ Version = "2.3.0"; GamePath = $GamePath; FirstTimeRun = $false; OverwriteMode = $false
-                    CopiedVanillaVersion = $Pins.GameVersion; EnabledMods = @("MultiMadnessMod", "PFO 50")
+                    CopiedVanillaVersion = $Pins.GameVersion; EnabledMods = $ModNames
                     CheckForUpdatesAutomatically = $false } |
             ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $ws "settings.json")
         $hook = Join-Path $loader "headless_hook.dll"
         if (Test-Path $hook) { Remove-Item -Force $hook }   # made afresh each time: it takes a second
         Add-Type -TypeDefinition $hookSource -OutputAssembly $hook -OutputType Library
         $mods = Join-Path $loader "UFO 50 mods"
-        $cli = "--headless --mod ""$mods\MultiMadnessMod"" --mod ""$mods\PFO 50"" --ignore-warnings"
+        $cli = "--headless " + (($ModNames | ForEach-Object { "--mod ""$mods\$_""" }) -join " ") + " --ignore-warnings"
         $env:DOTNET_STARTUP_HOOKS = $hook
         try {
             $p = Start-Process -FilePath (Join-Path $loader "current\UFO 50 Mod Loader.exe") -ArgumentList $cli `
@@ -291,6 +321,8 @@ function LoaderHeadless {
         }
         finally { Remove-Item env:DOTNET_STARTUP_HOOKS }
         if ($code -ne 0) { throw "the Mod Loader ended with code $code" }
+        if (-not (Test-Path (Join-Path $modded "PFO.dll"))) { throw "the Mod Loader said it was done, but the mods aren't in the copy" }
+        Set-Content -Encoding ASCII (Join-Path $modded "pfo_mods.txt") $ModStamp
         if (-not (ModdedOk)) { throw "the Mod Loader said it was done, but the mods aren't in the copy" }
         return $true
     }
@@ -315,13 +347,18 @@ if (-not (ModdedOk)) {
     Unzip $mmmZip $tmp
     if (Test-Path "$mods\MultiMadnessMod") { Remove-Item -Recurse -Force "$mods\MultiMadnessMod" }
     Move-Item "$tmp\MultiMadnessMod" "$mods\MultiMadnessMod"
+    foreach ($x in $extraZips) {
+        Unzip $x.Zip $tmp
+        if (Test-Path "$mods\$($x.Name)") { Remove-Item -Recurse -Force "$mods\$($x.Name)" }
+        Move-Item -LiteralPath (Join-Path $tmp $x.Name) "$mods\$($x.Name)"
+    }
     Remove-Item -Recurse -Force $tmp
-    Write-Host "   installing PFO 50 and MultiMadnessMod into a copy of the game (a minute or two)"
+    Write-Host "   installing $($ModNames -join ', ') into a copy of the game (a minute or two)"
     if ($ManualLoader -or -not (LoaderHeadless)) {
         if (Test-Path $modded) { Remove-Item -Recurse -Force $modded }
         $settings = Join-Path $loader "workspace\settings.json"
         if (-not (Test-Path $settings)) {
-            @{ GamePath = $GamePath; EnabledMods = @("MultiMadnessMod", "PFO 50"); CheckForUpdatesAutomatically = $false } |
+            @{ GamePath = $GamePath; EnabledMods = $ModNames; CheckForUpdatesAutomatically = $false } |
                 ConvertTo-Json | Set-Content -Encoding UTF8 $settings
         }
         Write-Host ""
@@ -345,11 +382,11 @@ if ($Windows) {
     New-Item -ItemType Directory -Force $win | Out-Null
     # everything but the two files we replace and Steam's: the build has no Steam library, so it
     # can't reach Steam, your Steam saves or the Steam version's lobbies
-    Get-ChildItem -LiteralPath $modded -Force | Where-Object { $steamFiles -notcontains $_.Name -and $_.Name -ne "data.win" -and $_.Name -ne "PFO.dll" } |
+    Get-ChildItem -LiteralPath $modded -Force | Where-Object { $steamFiles -notcontains $_.Name -and $_.Name -ne "data.win" -and $_.Name -ne "PFO.dll" -and $_.Name -ne "pfo_mods.txt" } |
         ForEach-Object { Copy-Item -Recurse -LiteralPath $_.FullName -Destination $win }
     Copy-Item -LiteralPath $winKit -Destination (Join-Path $win "PFO.dll")
     $out = Utmt @("load", (Join-Path $modded "data.win"), "-s", (Join-Path $Root "scripts\windows_patch.csx"), "-o", (Join-Path $win "data.win"), "-f") @{ PFO_SNAPSHOT_GML = (Join-Path $Root "scripts\pfo_snapshot.gml") }
-    $out | Where-Object { $_ -match "^(extension|save folder|lobby menu|screen|snapshots|runtime sprites|paths and grids|FAILED)" } | ForEach-Object { Write-Host "   $_" }
+    $out | Where-Object { $_ -match "^(extension|save folder|lobby menu|screen|snapshots|runtime sprites|paths and grids|Fixed|FAILED)" } | ForEach-Object { Write-Host "   $_" }
     $patched = ($out -match "^windows patch: OK") -and ($out -match "^save folder: game name ufo50 -> ufo50_online") -and (Test-Path (Join-Path $win "data.win"))
     $steamLeft = $steamFiles | Where-Object { Test-Path (Join-Path $win $_) }
     if (-not $patched -or $steamLeft) {
@@ -391,8 +428,9 @@ Say "Patching the game for Android (a few minutes)"
 $game = Join-Path $Work "game"
 if (Test-Path $game) { Remove-Item -Recurse -Force $game }
 Copy-Item -Recurse $modded $game
+Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $game "pfo_mods.txt")   # (the build's own note of the mods)
 $out = Utmt @("load", (Join-Path $modded "data.win"), "-s", (Join-Path $Root "scripts\android_patch.csx"), "-o", (Join-Path $game "data.win"), "-f") @{ PFO_SNAPSHOT_GML = (Join-Path $Root "scripts\pfo_snapshot.gml") }
-$out | Where-Object { $_ -match "hot seat|pad bindings|overlay support|lobby menu|quit:|join timeout|Steam lobby|snapshots|runtime sprites|paths and grids" } | ForEach-Object { Write-Host "   $_" }
+$out | Where-Object { $_ -match "hot seat|pad bindings|overlay support|lobby menu|quit:|join timeout|Steam lobby|snapshots|runtime sprites|paths and grids|Fixed" } | ForEach-Object { Write-Host "   $_" }
 $out = Utmt @("load", (Join-Path $game "data.win"), "-s", (Join-Path $Root "scripts\export_overlay_art.csx")) @{ OUT_DIR = $game }
 Ok "game data"
 

@@ -1,13 +1,28 @@
 # Changelog
 
-## Unreleased
+## v0.5.0 (2026-11-25)
 
-Highlights since v0.4.1: **several players on one device** (WHO'S PLAYING) on both versions;
+Highlights since v0.4.1: **more mods** (MultiMadnessMod 1.31, Ultimate Pingolf Roster, Star
+Waspir 2P, Hyper Contender+); **several players on one device** (WHO'S PLAYING) on both versions;
 **fast rejoin** (back in about a second); **save states and rejoins put the whole game back
 exactly** (six kinds of state that went missing or came back different, found by checking every
 kind GameMaker holds and comparing two devices frame by frame: 49 of 50 games the same throughout a
 rejoin); one look on both versions; tested on a real phone over Wi-Fi. The details:
 
+- **Mods: MultiMadnessMod 1.31, and Ultimate Pingolf Roster 1.0.0, Star Waspir 2P 0.9.0 and Hyper
+  Contender+ 1.6.10.** `build.ps1` keeps the mods in one list (`$Pins.Extra`: a name, a download and
+  its checksum each) and installs them afresh when it changes. Each was auditioned on a test copy
+  before going in (docs/MODS.md): the Mod Loader's merge of the code two mods both patch checked
+  (Pingolf's three objects, `scrInit`, the title screen), and each changed game's save states with
+  four players and an online fast rejoin compared item by item. Found and fixed on the way: Star
+  Waspir 2P stopped one-player games at once ("badEgger1 not set before reading it"; the build
+  gives the two variables a start), and MultiMadnessMod 1.31 moved the line one of our screen edits
+  is anchored to. The lobby build number goes to 5: v0.5.0 and earlier builds don't share lobbies.
+- **Fixed: a load across MultiMadnessMod's split screen** (four players apart in Onion Delivery or
+  Rock On! Island) left the views as they were: the screen handler's flag came back as saved while
+  this device's three extra cameras and doubled surface didn't, and its picture check failed. The
+  restore now switches split screen on or off with the mod's own scripts to match
+  (`tests/win/splitscreen.py`: loads both ways, twice, pass; all four failed before).
 - **Several players on one device: WHO'S PLAYING.** Every controller is a player of its own: on a
   phone the touch controls and each pad, on Windows the arrow keys, the numpad keys (the game's P2
   keys) and each pad. Before solo play (START SOLO PLAY) and, online, in the lobby (the Players
@@ -56,7 +71,8 @@ rejoin); one look on both versions; tested on a real phone over Wi-Fi. The detai
 - **Tests:** `SOLO_PLAYERS=2 tests/win/sweep.py`: the sweep with P2 playing; the test relay switch
   (`RELAY=1`) is set again after the launch clears old switches (it had stopped taking effect).
 
-- **Windows 7: the Windows version starts on 7 too, from the same folder.** PFO.dll imported
+- **Windows 7: the Windows version is made to start on 7 too, from the same folder** (not yet tried
+  on a Windows 7 PC; on Windows 10 the edited folder passes the save-state and online tests). PFO.dll imported
   `VirtualAlloc2` and `MapViewOfFile3` to build its checksum ring buffer, an API set Windows 10
   1803 brought, so on Windows 7 the DLL did not load at all; the buffer is now mapped the Windows
   2000 way (one page-file section, mapped twice back to back) and the build pins `_WIN32_WINNT` to
@@ -69,7 +85,7 @@ rejoin); one look on both versions; tested on a real phone over Wi-Fi. The detai
   schema and ignores the copy), so one folder and one build number serve 7, 10 and 11, and their
   players share lobbies. The quick build gets that DLL too: `kit/` carries it
   (`ufo50-online-windows-v0.4.1.dll`) and `build.ps1` pins it by commit, since it is the one this
-  tree builds and there is no v0.4.1 tag yet. A finished folder is now checked for anything newer
+  tree builds (it is newer than the v0.4.1 release, whose tag pins the older DLL). A finished folder is now checked for anything newer
   than Windows 7 in either program (`win7/check_win7.ps1`, which the build runs), and
   [docs/WINDOWS7.md](docs/WINDOWS7.md) has the steps for the 7 machine — the lines to look for in
   `pfo_online.log` and when DXVK is worth trying. Windows 7 still needs KB2670838 and KB2999226;

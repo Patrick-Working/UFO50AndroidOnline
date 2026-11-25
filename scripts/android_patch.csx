@@ -71,6 +71,24 @@ Console.WriteLine("Steam lobby/user functions now resolve to libPFO.so built-ins
     }
 }
 
+// Star Waspir 2P 0.9.0 sets badEgger1 / badEgger2 only with two players and reads them whenever no
+// egg is touched: one player (the default) stops with "local variable badEgger1 not set before
+// reading it" at once. They start as noone. (Only with that mod in; nothing to do without it.)
+{
+    string name = "gml_Object_o17_Player_Step_0";
+    string bad = "var egger, badEgger1, badEgger2;";
+    var code = Data.Code.ByName(name);
+    var ctx = new UndertaleModLib.Decompiler.GlobalDecompileContext(Data);
+    string text = code == null ? "" : new Underanalyzer.Decompiler.DecompileContext(ctx, code, Data.ToolInfo.DecompilerSettings).DecompileToString();
+    if (text.Contains(bad))
+    {
+        var group = new UndertaleModLib.Compiler.CodeImportGroup(Data);
+        group.QueueReplace(name, text.Replace(bad, "var egger = noone, badEgger1 = noone, badEgger2 = noone;"));
+        group.Import();
+        Console.WriteLine("Fixed Star Waspir 2P's one-player crash");
+    }
+}
+
 // ---- hot seat ----
 // Turn-based games read one player's controls at a time. Report that player (and the game's
 // own player count, numPlayers in each of these objects: Party House's settings change it, so the
@@ -168,12 +186,20 @@ Console.WriteLine("Steam lobby/user functions now resolve to libPFO.so built-ins
     var ctx = new UndertaleModLib.Decompiler.GlobalDecompileContext(Data);
     var group = new UndertaleModLib.Compiler.CodeImportGroup(Data);
     int n = 0;
+    // the CRT filter's line: MultiMadnessMod 1.31 adds "!splitScreenOn && " (no filter while the
+    // screen is split); the edit goes in front of it either way
+    string crt = "    if (global_scanlines && global_scale > 1)";
+    {
+        var sh = Data.Code.ByName("gml_Object_oScreenHandler_Draw_75");
+        string st = sh == null ? "" : new Underanalyzer.Decompiler.DecompileContext(ctx, sh, Data.ToolInfo.DecompilerSettings).DecompileToString();
+        if (!st.Contains(crt) && st.Contains("    if (!splitScreenOn && global_scanlines && global_scale > 1)")) crt = "    if (!splitScreenOn && global_scanlines && global_scale > 1)";
+    }
     var edits = new (string code, string find, string replace)[] {
         ("gml_Object_oScreenHandler_Draw_75", "var window_is_fullscreen = window_get_fullscreen();",
             "var window_is_fullscreen = window_get_fullscreen() || os_type == os_android;"),
         // 3. Report where the picture is drawn: the overlay crops save-state screenshots to it.
-        ("gml_Object_oScreenHandler_Draw_75", "    if (global_scanlines && global_scale > 1)",
-            "    pfo_android_screen(screenX, screenY, screenWidth, screenHeight, window_get_width(), window_get_height());\n    if (global_scanlines && global_scale > 1)"),
+        ("gml_Object_oScreenHandler_Draw_75", crt,
+            "    pfo_android_screen(screenX, screenY, screenWidth, screenHeight, window_get_width(), window_get_height());\n" + crt),
         // 4. PFO's "Delay: Nf" / catch-up text: the overlay's session pill shows those on Android.
         ("gml_Object_oController_Draw_64", "if (showDelay && (pfo_get_frame() > 4 || playingReplay))",
             "if (showDelay && os_type != os_android && (pfo_get_frame() > 4 || playingReplay))"),

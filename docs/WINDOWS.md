@@ -29,7 +29,9 @@ what happened; it holds network addresses, so look through it before you post it
 ## Building it
 
 You need Windows 10 or 11 to build it, and UFO 50 1.9.5 from Steam.
-**The folder it makes runs on Windows 7 as well as on 10 and 11, from the same build**: the game's
+**The folder it makes is meant to run on Windows 7 as well as on 10 and 11, from the same build**
+(not yet tried on a Windows 7 PC; on 10 it's tested: save states and online play work the same with the
+edits as without): the game's
 own `ufo50.exe` (GameMaker's runner) is written for Windows 8 and later — it imports
 `PathCchCombine` from a Windows 8 API set and `SetProcessInformation` — so the build rewrites those
 two names in its import tables and puts a `PathCch` stand-in beside it, and our `PFO.dll` no longer
@@ -37,8 +39,11 @@ needs anything newer than Windows 7 either. On 10/11 the edits take away nothing
 patched runner and the untouched one start alike there (there is no DirectX 9 mode, and the runner
 draws with Direct3D 11 only, but that is not what the edits touch).
 
-The Steam game itself is not patched and still needs Windows 8 or later: on 7 it stops at once with
-"api-ms-win-core-path-l1-1-0.dll is missing", and so does the Vanilla copy (it is the same runner).
+The Steam game itself is never patched: it needs Windows 10 (Steam's stated requirement), and on 7
+it stops at once with "api-ms-win-core-path-l1-1-0.dll is missing" (the first of the Windows 8
+functions it uses that Windows names; it also needs `SetProcessInformation` and
+`MFCreateDXGIDeviceManager`). The Vanilla folder the build makes gets the same fixups as the Online
+one.
 Windows 7 needs SP1 with KB2670838 (Direct3D 11) and KB2999226 (the C runtime `PFO.dll` uses), and
 how the runner presents frames on 7 is still untried. `-NoWin7` leaves the fixups out, for a folder
 meant for 10/11 only. Details and the evidence: [WINDOWS7.md](WINDOWS7.md).

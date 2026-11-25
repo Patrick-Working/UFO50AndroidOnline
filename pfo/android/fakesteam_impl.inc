@@ -54,8 +54,9 @@ namespace fakesteam
     // Which builds can share a lobby. It goes at the end of the lobby hello and of its answer, and
     // both sides want their own number back: a match between two versions would go out of step
     // (v0.4 has matches without snapshots, which earlier builds don't know). Builds up to v0.3.1
-    // send nothing there, which reads as 0.
-    constexpr uint8 c_BuildWire = 4;
+    // send nothing there, which reads as 0. 5 (v0.5.0): several players per device, and the game
+    // data has more mods in it (MultiMadnessMod 1.31 and three others): a different game to step.
+    constexpr uint8 c_BuildWire = 5;
     constexpr uint32 c_DisconnectGraceful = 1;
     // the other side ended its session on purpose (it left the match): nobody waits for it to
     // come back. Builds before this one send 1 for every close and read 2 as a timeout.

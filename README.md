@@ -1,6 +1,6 @@
 # UFO 50 Android Online: PFO 50 + MultiMadnessMod
 
-**v0.4.1** · Build your own Android version of **UFO 50** from your own Steam copy. It includes
+**v0.5.0** · Build your own Android version of **UFO 50** from your own Steam copy. It includes
 online multiplayer from **PFO 50**, 4+ players in many games from **MultiMadnessMod**, touch
 controls made for the game, and **save states**, in single player and online. Since v0.4.0 the same
 build also makes a **Windows version** that plays online with the phones.
@@ -27,16 +27,43 @@ the mods, the touch overlay and online play.
 > find, good or bad. What was tested and what wasn't: [docs/TESTING.md](docs/TESTING.md).
 
 **Quick start:** install UFO 50 from Steam, download this repository
-([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.4.1.zip)), unzip
+([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.5.0.zip)), unzip
 it, and double-click **`build-android.bat`** for the APK or **`build-windows.bat`** for the Windows
 version. See [Quick build](#quick-build).
 
-## What's new on main (since v0.4.1, not yet a release)
+## Features at a glance
 
-Build from the latest code ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/heads/main.zip))
-to get these. Every device in a lobby needs the same build.
+- **UFO 50 on Android**, built from your own Steam copy: nothing of the game is in this repository.
+- **A Windows version** that plays online with the phones, without Steam and with its own saves.
+- **A portable Windows copy** of the plain game that runs without Steam, saves kept in its folder.
+- **Online multiplayer** (PFO 50): lobbies on your network and over the internet, no port setup.
+- **Private lobbies** with a 6-character invite code you can share and paste.
+- **Several players on one device** (WHO'S PLAYING): touch, gamepads and keyboard each take a slot, P1-P8.
+- **Save states** in single player and online, every device back on the same frame.
+- **Online loads by vote**: everyone sees the save's picture and accepts or declines.
+- **Quick save and quick load** in one tap (F5 / F9 on a keyboard).
+- **Rewind** 15, 30 or 60 seconds to the exact frame, with the time it will take.
+- **Auto save when you pause**.
+- **Fast rejoin**: an app that closed or crashed is back in the match in about a second.
+- **Dropped players are waited for** for 90 seconds, then the match carries on.
+- **Touch controls made for the game**: its own key labels and font, and a layout editor.
+- **Gamepads and keyboard** drive the menus on phones and on Windows alike.
+- **4+ players in many games** (MultiMadnessMod), up to 8.
+- **More mods built in**: 12 Pingolf golfers, 2-player Star Waspir, 4-player Hyper Contender.
+- **Every game's save states checked**: all 50 games tested, and a rejoin compared frame by frame.
+- **Windows 7 ready** (made for it, not yet tried on a Windows 7 PC).
+
+## What's new in v0.5.0
+
+Download v0.5.0 ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.5.0.zip))
+and build it to get these. Every device in a lobby needs the same build: v0.5.0 and earlier versions don't
+share lobbies (different game data can't play in step).
 
 **New**
+- **More mods**: MultiMadnessMod 1.31 (The Big Bell Race for 8), **Ultimate Pingolf Roster** (12
+  golfers), **Star Waspir 2P** and **Hyper Contender+** (4 players, new modes). Each was
+  auditioned first: its games' save states with four players and an online rejoin compared
+  frame by frame. The build fixes a one-player crash in Star Waspir 2P. See [docs/MODS.md](docs/MODS.md).
 - **Several players on one device: WHO'S PLAYING.** Every controller is a player of its own: on a
   phone the touch controls and each gamepad, on Windows the arrow keys, the numpad keys and each
   gamepad. Before solo play and in an online lobby, each controller picks a slot P1-P8 and locks it
@@ -67,14 +94,18 @@ to get these. Every device in a lobby needs the same build.
   Result: after a rejoin, 49 of the 50 games are the same on both devices on every frame checked,
   and on the way back to the library (the 50th differs only in something it draws).
 - A rejoined phone no longer takes the Windows window's picture size.
+- Loading a save across MultiMadnessMod's split screen (four players apart in Onion Delivery or
+  Rock On! Island) put the views back wrong; it puts them right now.
 - QUICK LOAD in a lobby no longer starts solo play and leaves the lobby.
 - No more green frame around the screen after a key or controller press (Android).
 - A dropped player who is being waited for keeps their seat in the game's pause menu.
 
-**Windows 7:** the Steam game won't start on 7, but this build's Windows version does: the build
-makes **one folder for Windows 7, 10 and 11** (it rewrites the two Windows 8 imports in the game's
-own `ufo50.exe` and puts a `PathCch` stand-in beside it, which changes nothing on 10 and 11).
-Windows 7 needs SP1 with KB2670838 and KB2999226. See [docs/WINDOWS7.md](docs/WINDOWS7.md).
+**Windows 7 (untested):** UFO 50 itself needs Windows 10 (Steam's requirement) and won't start on
+7. This build's Windows folders are made to start there as well, **one folder for Windows 7, 10 and
+11**: the build rewrites two Windows 8 imports in its own copy of `ufo50.exe` (never the Steam game's)
+and puts a `PathCch` stand-in beside it, which changes nothing on 10 and 11 (tested there). It hasn't
+been run on a Windows 7 PC yet; 7 also needs SP1 with KB2670838 and KB2999226. See
+[docs/WINDOWS7.md](docs/WINDOWS7.md).
 
 The full list: [CHANGELOG.md](CHANGELOG.md).
 
@@ -144,6 +175,21 @@ The full list is in [CHANGELOG.md](CHANGELOG.md). How save states, rewind and re
 
 ## Screenshots
 
+**New in v0.5.0**
+
+| | |
+|---|---|
+| ![WHO'S PLAYING on a phone](docs/screenshots/whos_playing_phone.png) | ![WHO'S PLAYING on Windows, in an online lobby](docs/screenshots/whos_playing_windows.png) |
+| **WHO'S PLAYING on a phone**: the touch controls took P1, a gamepad P2 | **WHO'S PLAYING in an online lobby** (Windows): this PC's arrow keys in P1 and numpad in P2, the other PC's player in P3 |
+| ![Ultimate Pingolf Roster](docs/screenshots/mod_pingolf_roster.png) | ![Hyper Contender+](docs/screenshots/mod_hyper_contender.png) |
+| **Ultimate Pingolf Roster**: 12 golfers for 8-player Pingolf | **Hyper Contender+**: up to 4 contenders, new modes and a new character |
+| ![Star Waspir 2P](docs/screenshots/mod_star_waspir_2p.png) | ![MultiMadnessMod split screen](docs/screenshots/split_screen.png) |
+| **Star Waspir 2P**: two pilots, each with their own score and eggs | **Split screen** (MultiMadnessMod, Onion Delivery with 4): save states now load across it |
+| ![The Windows version's menu](docs/screenshots/windows_menu.png) | |
+| **Windows: the menu** in UFO 50's own font, the same look and words as on the phones | |
+
+**Earlier**
+
 | | |
 |---|---|
 | ![Lobby browser with a lobby found](docs/screenshots/lobby_browser.png) | ![In the lobby, both players listed](docs/screenshots/lobby_joined.png) |
@@ -156,8 +202,8 @@ The full list is in [CHANGELOG.md](CHANGELOG.md). How save states, rewind and re
 | **Rewind**: a rewind that will take 5 seconds or more asks first, with the estimate | **Rewinding**: your inputs replay at high speed to the exact frame, with the time left |
 | ![Waiting for a dropped player](docs/screenshots/waiting_for_player.png) | ![Rejoining a match](docs/screenshots/rejoin.png) |
 | **A dropped player**: everyone waits, with a countdown, until they're back | **Rejoining**: reopen the app and tap REJOIN to catch up with the match |
-| ![The Windows version's menu](docs/screenshots/windows_menu.png) | ![The Windows version's list of saves](docs/screenshots/windows_saves.png) |
-| **Windows: the menu** (F1, or both sticks pressed in), for keyboard and controller | **Windows: the list of saves**, with the chosen save's picture and how long it takes to load |
+| ![The Windows version's list of saves](docs/screenshots/windows_saves.png) | |
+| **Windows: the list of saves** (v0.4.0's font), with the chosen save's picture and how long it takes to load | |
 
 The first four pictures (lobby list, lobby, players panel, layout editor) are from v0.2. The overlay
 has changed since: the connection (LAN, DIRECT or RELAY) is no longer a tag under the player chip,
@@ -313,7 +359,7 @@ folder, so other games can use it too.
 You need **Windows 10 or 11** to build it, and **UFO 50 1.9.5 from Steam**. Nothing else to install.
 
 1. Download this repository
-   ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.4.1.zip)) and
+   ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.5.0.zip)) and
    unzip it anywhere.
 2. Double-click **`build-android.bat`** (or `build.bat`, which is the same). It finds UFO 50 in your Steam library and checks the version, then
    downloads the tools and mods into `work\`, each checked against a fixed checksum.
@@ -342,7 +388,8 @@ downloaded. It is the same app as the online build, signed with the same key: in
 replaces the other and keeps the saves. (The game still asks Steam for things every frame and the
 runner notes each one in the Android log; that is harmless.)
 `build.bat -Vanilla -Windows` makes `work\windows\UFO 50 Vanilla`, a portable copy of the plain game
-that doesn't need Steam: no game file is changed, Steam's libraries are left out. Start
+that doesn't need Steam: Steam's libraries are left out, and no game data is changed (`ufo50.exe`
+only gets the Windows 7 fixups, as the Online folder does). Start
 `UFO 50 Portable.bat` in it and the saves stay inside the folder (`saves\`), so the whole folder can
 be moved to another PC. (Starting `ufo50.exe` itself uses the PC's save folder, the Steam game's.)
 
@@ -421,14 +468,15 @@ Android tools. Everything else is in [docs/WINDOWS.md](docs/WINDOWS.md).
 
 ## Versions
 
-This release (**v0.4.1**) is made for exactly these versions. The patches are written against them,
+This version (**v0.5.0**) is made for exactly these versions. The patches are written against them,
 and the build checks the checksums.
 
 | part | version | from |
 |---|---|---|
 | UFO 50 | **1.9.5** (Steam) | [Mossmouth](https://50games.fun) |
 | PFO 50 | **0.10.0** | [GameBanana](https://gamebanana.com/mods/648717), source [Blaizer/PFO-50](https://github.com/Blaizer/PFO-50) @ `b8c9327` |
-| MultiMadnessMod | **1.30** | [GameBanana](https://gamebanana.com/mods/605308) |
+| MultiMadnessMod | **1.31** | [GameBanana](https://gamebanana.com/mods/605308) |
+| Ultimate Pingolf Roster, Star Waspir 2P, Hyper Contender+ | **1.0.0**, **0.9.0**, **1.6.10** | GameBanana: [679074](https://gamebanana.com/mods/679074), [698092](https://gamebanana.com/mods/698092), [604987](https://gamebanana.com/mods/604987) ([docs/MODS.md](docs/MODS.md)) |
 | UFO 50 Mod Loader | **2.3.0** (portable) | [phil-macrocheira/UFO-50-MOD-LOADER](https://github.com/phil-macrocheira/UFO-50-MOD-LOADER) |
 | UndertaleModTool CLI | **0.9.2.0** | [UnderminersTeam/UndertaleModTool](https://github.com/UnderminersTeam/UndertaleModTool) |
 | GameMaker runtime | **2024.14.1.253** (VM, Android) | [YoYo Games](https://gamemaker.io) |
@@ -528,10 +576,14 @@ game's save states passed (50 of 50) and the menu was walked through by keyboard
 for a controller. The Android sweep of every game's save states (150 of 150 runs) is from v0.3.1
 and wasn't repeated.
 
-Since v0.4.1 (on main): a real phone (a OnePlus 6T, arm64) played online against the Windows
-version through the real room server, both ways, and hosted a match with two players of its own;
-the quick regression (18 tests, both versions and the emulators) passes; and a fast rejoin into
-each of the 50 games was compared item by item with the other device (49 the same throughout).
+v0.5.0: a real phone (a OnePlus 6T, arm64) played online against the Windows version through the
+real room server, both ways, and hosted a match with two players of its own. On the final build the
+quick regression passes (18 tests: both versions, both emulators, cross-play each way), and so do
+the mods' games (save states with four players on Windows and Android, an online rejoin compared
+frame by frame) and loads across split screen. A fast rejoin into each of the 50 games was compared
+item by item with the other device (49 the same throughout; the 50th differs only in what it
+draws). The Windows 7 fixups were tested on Windows 10 (nothing changes there); **no Windows 7 PC
+has run it yet**.
 
 **Not tested yet:** a second PC, a real controller on Windows, three or more players online, and a
 `ufo50.exe` other than 1.9.5's. If you try any of these, please open an issue with how it went.
@@ -544,6 +596,10 @@ Details: [docs/TESTING.md](docs/TESTING.md).
   ([GameBanana](https://gamebanana.com/mods/648717)), MIT licence: the online multiplayer all of
   this is built on.
 - **[MultiMadnessMod](https://gamebanana.com/mods/605308)** by Jonesey13: 4+ players in many games.
+- **[Ultimate Pingolf Roster](https://gamebanana.com/mods/679074)** by Bubba256,
+  **[Star Waspir 2P](https://gamebanana.com/mods/698092)** by ToastGhost26 and
+  **[Hyper Contender+](https://gamebanana.com/mods/604987)** by greenhead352: more golfers, a second
+  Star Waspir player, and 4-player Hyper Contender.
 - **[UFO50AndroidUnofficial](https://github.com/Skyline969/UFO50AndroidUnofficial)** by Skyline969:
   the original Android build this repository is forked from.
 - **[UFO 50 Mod Loader](https://github.com/phil-macrocheira/UFO-50-MOD-LOADER)** by Phil

@@ -34,6 +34,7 @@
 // uses: layer_set_visible layer_vspeed layer_x layer_y method method_get_index method_get_self real
 // uses: room_get_name room_goto show_debug_message static_get static_set string string_copy
 // uses: ds_map_destroy ds_grid_destroy ds_stack_destroy ds_queue_destroy ds_priority_destroy
+// uses: surface_resize surface_get_width surface_get_height array_copy script_execute asset_get_index
 // uses: path_add path_exists path_get_number path_get_point_x path_get_point_y path_get_point_speed path_get_closed
 // uses: path_get_kind path_get_precision path_clear_points path_add_point path_set_closed path_set_kind path_set_precision
 // uses: path_start path_end mp_grid_create mp_grid_destroy mp_grid_get_cell mp_grid_clear_all mp_grid_add_cell
@@ -896,6 +897,45 @@ function pfo_snap_id_step()
     return global.pfo_snap_idstep;
 }
 
+// ---- split screen (MultiMadnessMod) ----
+// With four players apart (Onion Delivery, Rock On! Island) the screen handler splits the screen:
+// three more cameras, and the drawing surface twice the size; each step it turns that on or off
+// from what the game asked for (scrActivateSplitScreen / scrDeactivateSplitScreen, which act only
+// on a change of its splitScreenOn). A restore brings that flag back as the snapshot had it, while
+// this device's cameras and surface stay as they were: the next step would then switch the wrong
+// way, or not at all (one view where there should be four). So after a restore this device is put
+// the way the flag says, by the mod's own scripts.
+function pfo_snap_split_here()
+{
+    if (!instance_exists(oScreenHandler) || !variable_instance_exists(oScreenHandler.id, "splitScreenOn")) return undefined;
+    return oScreenHandler.splitScreenOn;
+}
+function pfo_snap_split_match(_dev)
+{
+    if (is_undefined(_dev)) return;
+    var _on = asset_get_index("scrActivateSplitScreen"), _off = asset_get_index("scrDeactivateSplitScreen");
+    if (_on < 0 || _off < 0) return;
+    var _want = pfo_snap_split_here();
+    if (is_undefined(_want)) return;
+    with (oScreenHandler)
+    {
+        // (switching off writes the cameras' places into these: the snapshot's are kept)
+        var _sx = variable_instance_exists(id, "splitScreenX") && is_array(splitScreenX) ? array_create(0) : undefined;
+        if (!is_undefined(_sx)) { array_copy(_sx, 0, splitScreenX, 0, array_length(splitScreenX)); var _sy = array_create(0); array_copy(_sy, 0, splitScreenY, 0, array_length(splitScreenY)); }
+        if (_want && _dev && (view_camera[1] < 0 || !view_visible[1]))
+        {
+            // split here too, but its cameras went with a room change: made again (the surface is
+            // already doubled: halved first, the mod's script doubles it)
+            surface_resize(application_surface, surface_get_width(application_surface) / 2, surface_get_height(application_surface) / 2);
+            splitScreenOn = false;
+            script_execute(_on);
+        }
+        else if (_want && !_dev) { splitScreenOn = false; script_execute(_on); }
+        else if (!_want && _dev) { splitScreenOn = true; script_execute(_off); }
+        if (!is_undefined(_sx)) { splitScreenX = _sx; splitScreenY = _sy; }
+    }
+}
+
 // an instance following a path: which, where on it, how
 function pfo_snap_path_of(_inst)
 {
@@ -999,6 +1039,7 @@ function pfo_snap_restore(_snap)
         return 1;
     }
     audio_stop_all();
+    var _devSplit = pfo_snap_split_here();
     global.pfo_snap_stages = "";
     var _map = _map0;
     global.pfo_snap_room_map = undefined;
@@ -1114,6 +1155,7 @@ function pfo_snap_restore(_snap)
         draw_set_halign(_dr[3]); draw_set_valign(_dr[4]);
         if (is_array(_dr[5]) && array_length(_dr[5]) >= 2) gpu_set_blendmode_ext(_dr[5][0], _dr[5][1]);
     }
+    pfo_snap_split_match(_devSplit);
     // cameras
     for (var i = 0; i < 8; i++)
     {

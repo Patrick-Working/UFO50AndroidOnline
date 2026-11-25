@@ -116,7 +116,7 @@ say where a process is from, it is not counted either.
 - It does not make Windows 7's own prerequisites go away: KB2670838 (Direct3D 11) and KB2999226
   (the Universal CRT that `PFO.dll` links against) still have to be on the machine.
 - It does not touch `data.win`, `PFO.dll` or the save folder, so the Windows 7 and Windows 10/11
-  players are the same build to the netcode (`c_BuildWire` is 4 either way) and share lobbies.
+  players are the same build to the netcode (the same `c_BuildWire` either way) and share lobbies.
 - It does not decide the presentation question. The program asks for `IDXGIFactory2` first and has
 a plain path under it (`IDXGIFactory2 not available, falling back to legacy CreateSwapChain API`),
 which is what Windows 7's DXGI 1.1 should take — so DXVK's `dxgi.dll` + `d3d11.dll` (1.10.3) are

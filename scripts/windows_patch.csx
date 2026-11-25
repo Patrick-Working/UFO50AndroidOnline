@@ -130,6 +130,24 @@ if (pfoFile == null) throw new ScriptException("the PFO extension has no PFO.dll
     }
 }
 
+// Star Waspir 2P 0.9.0 sets badEgger1 / badEgger2 only with two players and reads them whenever no
+// egg is touched: one player (the default) stops with "local variable badEgger1 not set before
+// reading it" at once. They start as noone. (Only with that mod in; nothing to do without it.)
+{
+    string name = "gml_Object_o17_Player_Step_0";
+    string bad = "var egger, badEgger1, badEgger2;";
+    var code = Data.Code.ByName(name);
+    var ctx = new UndertaleModLib.Decompiler.GlobalDecompileContext(Data);
+    string text = code == null ? "" : new Underanalyzer.Decompiler.DecompileContext(ctx, code, Data.ToolInfo.DecompilerSettings).DecompileToString();
+    if (text.Contains(bad))
+    {
+        var group = new UndertaleModLib.Compiler.CodeImportGroup(Data);
+        group.QueueReplace(name, text.Replace(bad, "var egger = noone, badEgger1 = noone, badEgger2 = noone;"));
+        group.Import();
+        Console.WriteLine("Fixed Star Waspir 2P's one-player crash");
+    }
+}
+
 // ---- private lobbies in the game's own online menu ----
 // The lobby list gets a third button, JOIN BY CODE, which opens our invite-code box
 // (pfo_android_ask_code); the buttons become two-line "compact" boxes so three fit above BACK:
@@ -208,10 +226,13 @@ if (pfoFile == null) throw new ScriptException("the PFO extension has no PFO.dll
 // showing frames there: the Draw events still run (the game does some of its work in them), only
 // the wait for the screen is skipped.
 {
-    const string name = "gml_Object_oScreenHandler_Draw_75", find = "    if (global_scanlines && global_scale > 1)";
+    const string name = "gml_Object_oScreenHandler_Draw_75";
     var ctx = new UndertaleModLib.Decompiler.GlobalDecompileContext(Data);
     var code = Data.Code.ByName(name);
     string t = code == null ? "" : new Underanalyzer.Decompiler.DecompileContext(ctx, code, Data.ToolInfo.DecompilerSettings).DecompileToString();
+    // the CRT filter's line; MultiMadnessMod 1.31 adds "!splitScreenOn && " (no filter while split)
+    string find = "    if (global_scanlines && global_scale > 1)";
+    if (!t.Contains(find) && t.Contains("    if (!splitScreenOn && global_scanlines && global_scale > 1)")) find = "    if (!splitScreenOn && global_scanlines && global_scale > 1)";
     int count = (t.Length - t.Replace(find, "").Length) / find.Length;
     if (t.Contains("pfo_android_screen(")) Console.WriteLine("screen: already reported");
     else if (count != 1) failures.Add($"screen: {name} edit not applied ({count} matches)");

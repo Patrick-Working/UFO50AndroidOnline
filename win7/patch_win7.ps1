@@ -67,8 +67,11 @@ $Shim = @{
 #   SetProcessInformation (Windows 8) is GameMaker asking for a power/memory hint. GetProcessId
 #     takes a process handle as well and only answers with a number: a no-op that reports success.
 #   MFCreateDXGIDeviceManager (Windows 8) is for video playback. MFTGetInfo exists in Windows 7's
-#     MFPlat.dll; GameMaker calls the first with a zero there, so it fails cleanly, and UFO 50
-#     doesn't use GameMaker's video_ functions at all (checked: none in its data.win).
+#     MFPlat.dll (the community's usual fix for GameMaker on 7). Its arguments don't match: the
+#     call passes two pointers to zeroed values, MFTGetInfo reads the first as a 16-byte class id
+#     (four zero bytes, then whatever is on the stack) and takes the rest from leftover registers.
+#     An unknown class id makes it fail before it writes anything, the result is checked, and UFO
+#     50 doesn't use GameMaker's video_ functions at all (checked: none in its data.win).
 $Patches = @(
     @{ Dll = "KERNEL32.dll"; Delay = $false; Old = "SetProcessInformation"; New = "GetProcessId" },
     @{ Dll = "MFPlat.DLL"; Delay = $true; Old = "MFCreateDXGIDeviceManager"; New = "MFTGetInfo" }
@@ -79,6 +82,12 @@ if (-not (Test-Path -LiteralPath $GameDir)) { Die "no such folder: $GameDir" }
 $GameDir = (Resolve-Path -LiteralPath $GameDir).Path
 $exe = Join-Path $GameDir "ufo50.exe"
 if (-not (Test-Path -LiteralPath $exe)) { Die "no ufo50.exe in $GameDir" }
+# Never a Steam installation (not even with -Force): this edits ufo50.exe in place, and only the
+# build's own folders are for that (they carry none of Steam's files, and live under work\windows).
+foreach ($f in @("steam_api64.dll", "steam_api.dll", "Steamworks_x64.dll", "steam_appid.txt")) {
+    if (Test-Path -LiteralPath (Join-Path $GameDir $f)) { Die "$GameDir has $f, so it's a Steam installation of the game: this only patches the folders the build makes (work\windows\...)" }
+}
+if ($GameDir -match '\\steamapps\\') { Die "$GameDir is in Steam's library: this only patches the folders the build makes (work\windows\...)" }
 
 # Is this folder's game running? Only this folder's: the Steam copy, or another build of this one,
 # is none of this script's business (a build used to refuse while any ufo50.exe was open at all).
@@ -184,7 +193,7 @@ if ($haveShim) {
 
 if ($Check) { Write-Host ""; Write-Host "(only checked: nothing was changed)"; exit 0 }
 Write-Host ""
-Write-Host "Done: $GameDir starts on Windows 7, 10 and 11 alike." -ForegroundColor Green
+Write-Host "Done: $GameDir is ready for Windows 7 as well as 10 and 11 (not yet tried on a Windows 7 PC)." -ForegroundColor Green
 Write-Host "Windows 7 also needs KB2670838 (Direct3D 11) and KB2999226 (the C runtime PFO.dll uses)."
 # an explicit 0: build.ps1 calls this and checks $LASTEXITCODE, which a script that just returns
 # does not set (it would still hold whatever the last native program left there)
