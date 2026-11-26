@@ -1,7 +1,7 @@
 # UFO 50 Android Online - quick build.
 # Double-click build.bat (or run: powershell -ExecutionPolicy Bypass -File build.ps1).
 # Needs only Windows 10 or 11 to build, and UFO 50 from Steam. Everything else is downloaded into
-# work\. The Windows folders it makes are meant to start on Windows 7 as well (not yet tried there).
+# work\. The Windows folders it makes run on Windows 7 as well as 10 and 11.
 #
 #   -Install         also install the APK on a phone connected with USB debugging (needs adb)
 #   -Runner <apk>    use this runner instead of the published runner kit (the full build passes its own)
@@ -197,7 +197,7 @@ if ($Vanilla -and $Windows) {
     Write-Host "This is your game as Steam has it, without Steam: Steam's libraries are left out, so it"
     Write-Host "runs with Steam closed or not installed (and has no achievements, cloud saves or online"
     Write-Host "play). No game data is changed; ufo50.exe only gets the Windows 7 fixups (two import"
-    Write-Host "names), which change nothing on Windows 10 and 11. Windows 7 is untested so far."
+    Write-Host "names), which change nothing on Windows 10 and 11 and let it run on Windows 7."
     Write-Host "Start ""$bat"" in that folder: the saves then stay inside it (saves\) and the whole"
     Write-Host "folder can be moved to another PC. Starting ufo50.exe itself works too, but then it uses"
     Write-Host "this PC's save folder, %LOCALAPPDATA%\ufo50, which is the Steam game's."

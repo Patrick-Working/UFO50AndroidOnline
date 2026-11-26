@@ -33,7 +33,7 @@ when the runner first sets up video playback: "The procedure entry point
 MFCreateDXGIDeviceManager could not be located in the dynamic link library MFPlat.dll".
 
 **The 2024.11 advice is not enough for this runner.** GameMaker dropped Windows 7 in 2024.11 and
-the usual fix — YellowAfterlife's patcher, which rewrites that one MFPlat name to `MFTGetInfo`, a
+the usual fix — [YellowAfterlife's patcher](https://yal.cc/gm2024-win7/), which rewrites that one MFPlat name to `MFTGetInfo`, a
 function Windows 7's `MFPlat.dll` does have and which fails gracefully — was worked out when the
 MFPlat call was the only thing in the way. This runner (2024.14) also has the two hard imports
 above, so it stops earlier and with a different message.

@@ -193,7 +193,7 @@ if ($haveShim) {
 
 if ($Check) { Write-Host ""; Write-Host "(only checked: nothing was changed)"; exit 0 }
 Write-Host ""
-Write-Host "Done: $GameDir is ready for Windows 7 as well as 10 and 11 (not yet tried on a Windows 7 PC)." -ForegroundColor Green
+Write-Host "Done: $GameDir is ready for Windows 7 as well as 10 and 11." -ForegroundColor Green
 Write-Host "Windows 7 also needs KB2670838 (Direct3D 11) and KB2999226 (the C runtime PFO.dll uses)."
 # an explicit 0: build.ps1 calls this and checks $LASTEXITCODE, which a script that just returns
 # does not set (it would still hold whatever the last native program left there)

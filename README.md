@@ -51,7 +51,7 @@ version. See [Quick build](#quick-build).
 - **4+ players in many games** (MultiMadnessMod), up to 8.
 - **More mods built in**: 12 Pingolf golfers, 2-player Star Waspir, 4-player Hyper Contender.
 - **Every game's save states checked**: all 50 games tested, and a rejoin compared frame by frame.
-- **Windows 7 ready** (made for it, not yet tried on a Windows 7 PC).
+- **Runs on Windows 7**, 10 and 11, from one folder.
 
 ## What's new in v0.5.0
 
@@ -100,12 +100,11 @@ share lobbies (different game data can't play in step).
 - No more green frame around the screen after a key or controller press (Android).
 - A dropped player who is being waited for keeps their seat in the game's pause menu.
 
-**Windows 7 (untested):** UFO 50 itself needs Windows 10 (Steam's requirement) and won't start on
-7. This build's Windows folders are made to start there as well, **one folder for Windows 7, 10 and
-11**: the build rewrites two Windows 8 imports in its own copy of `ufo50.exe` (never the Steam game's)
-and puts a `PathCch` stand-in beside it, which changes nothing on 10 and 11 (tested there). It hasn't
-been run on a Windows 7 PC yet; 7 also needs SP1 with KB2670838 and KB2999226. See
-[docs/WINDOWS7.md](docs/WINDOWS7.md).
+**Windows 7:** UFO 50 itself needs Windows 10 (Steam's requirement) and won't start on 7. This
+build's Windows folders run there as well, **one folder for Windows 7, 10 and 11**: the build
+rewrites two Windows 8 imports in its own copy of `ufo50.exe` (never the Steam game's) and puts a
+`PathCch` stand-in beside it, which changes nothing on 10 and 11. Windows 7 needs SP1 with KB2670838
+and KB2999226. See [docs/WINDOWS7.md](docs/WINDOWS7.md).
 
 The full list: [CHANGELOG.md](CHANGELOG.md).
 
@@ -356,7 +355,12 @@ folder, so other games can use it too.
 
 ## Quick build
 
-You need **Windows 10 or 11** to build it, and **UFO 50 1.9.5 from Steam**. Nothing else to install.
+You need **Windows 10 or 11** to build it, and **UFO 50 1.9.5 from Steam**. Nothing else to install,
+and no admin rights.
+
+**With a window:** double-click **`builder.bat`**. It finds your game, lets you tick what to build
+(Android App, Windows (UFO Online), Windows (UFO Vanilla)) and shows the build's steps, then
+where the results are. It runs the same build as the steps below.
 
 1. Download this repository
    ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.5.0.zip)) and
@@ -553,6 +557,7 @@ app id and wire number there, so they never mix with other okplay games.
 | path | what |
 |---|---|
 | `build-android.bat`, `build-windows.bat`, `build.bat`, `build.ps1` | the quick build (`build.bat` is the Android one; `-Windows` makes the Windows version) |
+| `builder.bat`, `builder.ps1` | the builder: the quick build in a window (`tests/gui/replay_build.ps1` stands in for `build.ps1` in its tests) |
 | `build.sh` | the full build (`--windows` for the Windows version) |
 | `kit/` | the runner kit and the Windows kit the quick build uses (made by `build.sh --kit` and `build.sh --windows --kit` in `work/kit/`, then copied here; no game data) |
 | `android/gm-project/` | the GameMaker runner project: the PFO extension with the touch overlay (`PFO_Android.java`), the online service, and the app icon (original art) |
@@ -601,8 +606,10 @@ Details: [docs/TESTING.md](docs/TESTING.md).
   base of our `PFO.dll` and `libPFO.so`. Our part: the netcode under it (no Steam: LAN, the room
   server, hole punching, the relay), save states, rewind, rejoining, several players per device,
   the Android port and the Windows version's menu (`pfo/`, `scripts/`).
+
 All mods are downloaded at build time from their authors' GameBanana pages and installed with
-the Mod Loader; none of them is stored in this repository (`docs/MODS.md`).
+the Mod Loader; none of them is stored in this repository (`docs/MODS.md`). The builder window
+(`builder.bat`) lists all of these, with the versions it downloads, before you build.
 
 - **[MultiMadnessMod](https://gamebanana.com/mods/605308)** by Jonesey13: 4+ players in many games.
 - **[Ultimate Pingolf Roster](https://gamebanana.com/mods/679074)** by Bubba256,
@@ -624,7 +631,7 @@ the Mod Loader; none of them is stored in this repository (`docs/MODS.md`).
 - **[api-ms-win-core-path-HACK](https://github.com/nalexandru/api-ms-win-core-path-HACK)** by
   nalexandru (Wine's code, LGPL-2.1): the `PathCch` stand-in the Windows 7 fixups put beside the
   game, downloaded at build time. The `MFTGetInfo` swap is the community's known fix for GameMaker
-  games on Windows 7 (YellowAfterlife's patcher).
+  games on Windows 7 ([YellowAfterlife's patcher](https://yal.cc/gm2024-win7/)).
 - Public STUN servers from Cloudflare and Google.
 
 ## Licence

@@ -12,6 +12,14 @@
   ...)"); before, the game only said the join failed. The game's MODS screen in the lobby lists
   "UFO 50 Online" with its version and hash beside the other mods. The lobby build number goes to
   6: v0.5.0 and earlier don't share lobbies with this build.
+- **The builder: the quick build in a window** (`builder.bat`). It lists, up top, everything it's
+  built with (each mod and tool with its author, its licence and the version it downloads) and
+  links this project's GitHub page; it finds the UFO 50 install directory and checks the version,
+  takes ticks for what to build (Android App, Windows (UFO Online), Windows (UFO Vanilla)) and
+  whether to install on a phone over USB, shows each build's steps as they go, and ends with where each result is, a button to open it, and what to do next.
+  A build that stops says why in plain words (no internet, wrong game version, a game still open,
+  no phone). It runs `build.ps1` as it is, so the two can't differ; no mod choices, as one version
+  is one set of mods. With several Android devices connected, the app goes on the USB phone.
 - **Credits** say what this project uses from PFO 50 (its game-side code and the base of its C++
   side), from the Windows 7 fix's authors and from GameBanana's mods.
 

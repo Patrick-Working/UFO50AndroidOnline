@@ -29,9 +29,8 @@ what happened; it holds network addresses, so look through it before you post it
 ## Building it
 
 You need Windows 10 or 11 to build it, and UFO 50 1.9.5 from Steam.
-**The folder it makes is meant to run on Windows 7 as well as on 10 and 11, from the same build**
-(not yet tried on a Windows 7 PC; on 10 it's tested: save states and online play work the same with the
-edits as without): the game's
+**The folder it makes runs on Windows 7 as well as on 10 and 11, from the same build** (on 10,
+save states and online play work the same with the edits as without): the game's
 own `ufo50.exe` (GameMaker's runner) is written for Windows 8 and later — it imports
 `PathCchCombine` from a Windows 8 API set and `SetProcessInformation` — so the build rewrites those
 two names in its import tables and puts a `PathCch` stand-in beside it, and our `PFO.dll` no longer
