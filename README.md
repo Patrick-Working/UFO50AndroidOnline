@@ -1,6 +1,6 @@
 # UFO 50 Android Online: PFO 50 + MultiMadnessMod
 
-**v0.5.0** · Build your own Android version of **UFO 50** from your own Steam copy. It includes
+**v0.5.1** · Build your own Android version of **UFO 50** from your own Steam copy. It includes
 online multiplayer from **PFO 50**, 4+ players in many games from **MultiMadnessMod**, touch
 controls made for the game, and **save states**, in single player and online. Since v0.4.0 the same
 build also makes a **Windows version** that plays online with the phones.
@@ -27,7 +27,7 @@ the mods, the touch overlay and online play.
 > find, good or bad. What was tested and what wasn't: [docs/TESTING.md](docs/TESTING.md).
 
 **Quick start:** install UFO 50 from Steam, download this repository
-([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.5.0.zip)), unzip
+([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.5.1.zip)), unzip
 it, and double-click **`build-android.bat`** for the APK or **`build-windows.bat`** for the Windows
 version. See [Quick build](#quick-build).
 
@@ -52,6 +52,20 @@ version. See [Quick build](#quick-build).
 - **More mods built in**: 12 Pingolf golfers, 2-player Star Waspir, 4-player Hyper Contender.
 - **Every game's save states checked**: all 50 games tested, and a rejoin compared frame by frame.
 - **Runs on Windows 7**, 10 and 11, from one folder.
+
+## What's new in v0.5.1
+
+Download v0.5.1 ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.5.1.zip))
+and build it. Every device in a lobby needs the same build: v0.5.1 doesn't share lobbies with v0.5.0
+or earlier.
+
+- **The builder**: double-click `builder.bat` for the quick build in a window. It lists what the
+  build is made with (each mod and tool, its author and the version it downloads), finds your UFO
+  50, builds the Android App, Windows (UFO Online) and Windows (UFO Vanilla), can install the app
+  on a phone over USB, and says in plain words why a build stopped.
+- **Lobbies check the whole build**: every build has an identity (its version and a hash of its
+  sources and mods), and only builds with the same one play together. A joiner with another build
+  is told so on screen instead of a plain "join failed".
 
 ## What's new in v0.5.0
 
@@ -363,7 +377,7 @@ and no admin rights.
 where the results are. It runs the same build as the steps below.
 
 1. Download this repository
-   ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.5.0.zip)) and
+   ([zip](https://github.com/Patrick-Working/UFO50AndroidOnline/archive/refs/tags/v0.5.1.zip)) and
    unzip it anywhere.
 2. Double-click **`build-android.bat`** (or `build.bat`, which is the same). It finds UFO 50 in your Steam library and checks the version, then
    downloads the tools and mods into `work\`, each checked against a fixed checksum.
@@ -462,7 +476,7 @@ step 3 of the [quick build](#quick-build). Start `ufo50.exe` in that folder.
   game turns them off, replays instead (about 4 seconds per minute played on the test PC), and a
   match with that player in it restarts from the save on every load.
 - **Use the same build on every device.** A lobby only takes players with its own build: the same
-  version, the same mods and the same patches (the build's identity, `0.5.0+1a2b3c4d` in the log
+  version, the same mods and the same patches (the build's identity, `0.5.1+1a2b3c4d` in the log
   and on the lobby's MODS screen). A joiner with another one is told so on screen.
 - The folder contains your copy of the game, like the APK: **keep it to yourself.**
 
@@ -473,7 +487,7 @@ Android tools. Everything else is in [docs/WINDOWS.md](docs/WINDOWS.md).
 
 ## Versions
 
-This version (**v0.5.0**) is made for exactly these versions. The patches are written against them,
+This version (**v0.5.1**) is made for exactly these versions. The patches are written against them,
 and the build checks the checksums.
 
 | part | version | from |

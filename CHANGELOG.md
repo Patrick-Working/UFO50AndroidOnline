@@ -1,6 +1,10 @@
 # Changelog
 
-## Not yet released
+## v0.5.1 (2026-11-26)
+
+- **Version 0.5.1, new kits for both platforms**: the game hands the build identity to
+  `PFO.dll` / `libPFO.so`, which the v0.5.0 kits can't take, so both kits are rebuilt and pinned to
+  the v0.5.1 tag.
 
 - **Lobbies check the whole build, not a number kept by hand.** Every build works out its identity,
   `<version>+<8 hex digits>`: a hash of our own sources and scripts and of every mod the Mod

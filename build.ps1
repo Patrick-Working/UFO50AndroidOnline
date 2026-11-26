@@ -47,11 +47,11 @@ $Pins = @{
     )
     # the runner kit: GameMaker's Android runner + the touch overlay + libPFO.so, no game data
     # (made by the full build: bash build.sh --kit)
-    Kit          = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.5.0/kit/ufo50-online-runner-v0.5.0.apk", "a547f3da964f39a96fffa4aa0281361a758077f900f8171651f4b02c22a5ed2f", "ufo50-online-runner-v0.5.0.apk")
+    Kit          = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.5.1/kit/ufo50-online-runner-v0.5.1.apk", "c8d3712443d075d53d5ec060c3a076ab92af86ddb001bd6ec2ac29b439cea7d9", "ufo50-online-runner-v0.5.1.apk")
     # the Windows kit: our PFO.dll alone (made by the full build: bash build.sh --windows --kit),
     # built without the Windows 10-only memory calls, so the folder can start on 7 as well as 10/11.
     # (The kits of earlier versions stay in kit/ for those tags' own pins.)
-    WinKit       = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.5.0/kit/ufo50-online-windows-v0.5.0.dll", "14971ceab109545bd3971e5c68f66652cd644f2a046cf2413421e79eec52a982", "ufo50-online-windows-v0.5.0.dll")
+    WinKit       = @("https://raw.githubusercontent.com/Patrick-Working/UFO50AndroidOnline/v0.5.1/kit/ufo50-online-windows-v0.5.1.dll", "4d3e4259a6bab6b0c65c5b2f208611679255d5faec7b217e78b0d5f9336d0a60", "ufo50-online-windows-v0.5.1.dll")
 }
 
 $ModNames = @("MultiMadnessMod", "PFO 50") + @($Pins.Extra | ForEach-Object { $_.Name })
@@ -223,12 +223,12 @@ $localKit = Join-Path $Root ("kit\" + $Pins.Kit[2])   # the repository zip carri
 $localWinKit = Join-Path $Root ("kit\" + $Pins.WinKit[2])
 if ($Windows) {
     if ($WinDll) { $winKit = (Resolve-Path $WinDll).Path; Ok "PFO.dll: $winKit" }
-    elseif ((Test-Path $localWinKit) -and ((Sha $localWinKit) -eq $Pins.WinKit[1])) { $winKit = $localWinKit; Ok "Windows kit v0.5.0" }
-    else { $winKit = Fetch $Pins.WinKit; Ok "Windows kit v0.5.0 (downloaded)" }
+    elseif ((Test-Path $localWinKit) -and ((Sha $localWinKit) -eq $Pins.WinKit[1])) { $winKit = $localWinKit; Ok "Windows kit v$Version" }
+    else { $winKit = Fetch $Pins.WinKit; Ok "Windows kit v$Version (downloaded)" }
 }
 elseif ($Runner) { $kit = (Resolve-Path $Runner).Path; Ok "runner: $kit" }
-elseif ((Test-Path $localKit) -and ((Sha $localKit) -eq $Pins.Kit[1])) { $kit = $localKit; Ok "runner kit v0.5.0" }
-else { $kit = Fetch $Pins.Kit; Ok "runner kit v0.5.0 (downloaded)" }
+elseif ((Test-Path $localKit) -and ((Sha $localKit) -eq $Pins.Kit[1])) { $kit = $localKit; Ok "runner kit v$Version" }
+else { $kit = Fetch $Pins.Kit; Ok "runner kit v$Version (downloaded)" }
 if ($Vanilla) { Ok "UndertaleModTool 0.9.2.0 (only its APK packer is used)" }
 else {
     Ok "UndertaleModTool 0.9.2.0, UFO 50 Mod Loader 2.3.0, PFO 50 0.10.0, MultiMadnessMod 1.31"

@@ -5,7 +5,7 @@ The build puts a set of mods into your copy of the game with the
 each is downloaded from its author's page and checked against a checksum. Nothing from the mods is
 stored in this repository.
 
-## In the build (v0.5.0)
+## In the build (v0.5.1)
 
 | mod | version | by | what it does |
 |---|---|---|---|

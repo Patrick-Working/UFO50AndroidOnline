@@ -56,7 +56,7 @@ namespace fakesteam
     // (v0.4 has matches without snapshots, which earlier builds don't know). Builds up to v0.3.1
     // send nothing there, which reads as 0. 5 (v0.5.0): several players per device, and the game
     // data has more mods in it (MultiMadnessMod 1.31 and three others): a different game to step.
-    // 6 (after v0.5.0): the build's identity follows the number (BuildId below), and both have to
+    // 6 (v0.5.1): the build's identity follows the number (BuildId below), and both have to
     // match. The number now only changes with this message's format.
     constexpr uint8 c_BuildWire = 6;
 
