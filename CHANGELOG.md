@@ -1,5 +1,20 @@
 # Changelog
 
+## Not yet released
+
+- **Lobbies check the whole build, not a number kept by hand.** Every build works out its identity,
+  `<version>+<8 hex digits>`: a hash of our own sources and scripts and of every mod the Mod
+  Loader put in (PFO 50's compat hash, worked out from each mod's files). The Android and the
+  Windows build of one tree with one set of mods get the same one; a new mod, another mod version
+  or a change of ours gives another, so a mismatched pair can't end up in one match and go out of
+  step. A host refuses a joiner with another identity, a joiner leaves a host with another one, and
+  the joiner is now told why on screen ("CAN'T JOIN: THE HOST HAS ANOTHER BUILD (theirs, YOURS
+  ...)"); before, the game only said the join failed. The game's MODS screen in the lobby lists
+  "UFO 50 Online" with its version and hash beside the other mods. The lobby build number goes to
+  6: v0.5.0 and earlier don't share lobbies with this build.
+- **Credits** say what this project uses from PFO 50 (its game-side code and the base of its C++
+  side), from the Windows 7 fix's authors and from GameBanana's mods.
+
 ## v0.5.0 (2026-11-25)
 
 Highlights since v0.4.1: **more mods** (MultiMadnessMod 1.31, Ultimate Pingolf Roster, Star

@@ -60,13 +60,17 @@ def one(host_dir, join_dir, name, check):
     b.keys("z", 8)                                    # join it
     host_new = host_dir == NEW
     if host_new:
-        said = a.wait_log(r"can't join: another version of the build \(theirs (\d+), ours (\d+)\)", ma, 10)
+        said = a.wait_log(r"can't join: another (?:version of the )?build \(theirs ([^,]+), ours ([^)]*)\)", ma, 10)
         check(bool(said), "%s: the host refuses the joiner" % name, said.group(0) if said else "")
     else:
         # (a host from before the version number lets anyone in, and the joiner leaves; one that has
         # a number of its own refuses the joiner itself)
-        said = b.wait_log(r"can't join: the host has another version of the build \(theirs (\d+), ours (\d+)\)", mb, 10) or a.wait_log(r"can't join: another version of the build \(theirs (\d+), ours (\d+)\)", ma, 1)
+        said = b.wait_log(r"can't join: the host has another (?:version of the )?build \(theirs ([^,]+), ours ([^)]*)\)", mb, 10) or a.wait_log(r"can't join: another (?:version of the )?build \(theirs ([^,]+), ours ([^)]*)\)", ma, 1)
         check(bool(said), "%s: the joiner leaves the host, or the host refuses it" % name, said.group(0) if said else "")
+    # the joiner is told why, on screen (a build that knows builds: from the identity on)
+    if join_dir == NEW:
+        told = b.wait_log(r"message: CAN.T JOIN: THE HOST HAS ANOTHER BUILD.*", mb, 8)
+        check(bool(told), "%s: the joiner is told the host has another build" % name, told.group(0)[-120:] if told else "")
     time.sleep(4)
     a.shot("gate_%s_host" % name); b.shot("gate_%s_join" % name)
     check(alive(pa, host_dir) and alive(pb, join_dir), "%s: both games still running" % name)

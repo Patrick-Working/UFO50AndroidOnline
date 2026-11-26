@@ -779,6 +779,7 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*)
     functionAdd("pfo_runner_rehide", &pfo_runner_rehide, 0, false); count++;
     functionAdd("pfo_runner_settle", &pfo_runner_settle, 0, false); count++;
     functionAdd("pfo_runner_maxid", &pfo_runner_maxid, 1, false); count++;
+    functionAdd("pfo_set_build_id", &pfo_set_build_id, 1, false); count++;
     char msg[96];
     snprintf(msg, sizeof(msg), "PFO: registered %d built-in functions", count);
     __android_log_write(ANDROID_LOG_INFO, "yoyo", msg);

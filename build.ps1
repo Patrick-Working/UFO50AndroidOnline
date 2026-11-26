@@ -58,6 +58,26 @@ $ModNames = @("MultiMadnessMod", "PFO 50") + @($Pins.Extra | ForEach-Object { $_
 # what the modded copy was made from: a different list or a different file makes it again
 $ModStamp = (@($Pins.Pfo[1], $Pins.Mmm[1]) + @($Pins.Extra | ForEach-Object { $_.Pin[1] })) -join ","
 
+# The build's identity, our side of it: the version and every source and script of ours that ends
+# up in the game data or in PFO.dll / libPFO.so, line endings set aside, so every PC and both
+# platforms get the same one from the same tree. scripts/*_patch.csx put it together with the hash
+# of the mods the Mod Loader put in (PFO 50's compat info) into "<version>+<hash>": only devices
+# with the same one share a lobby.
+function OwnHash {
+    $files = @("VERSION", "scripts\pfo_snapshot.gml", "scripts\android_patch.csx", "scripts\windows_patch.csx", "pfo\pfo50-android.patch") |
+        ForEach-Object { Join-Path $Root $_ }
+    $files += @(Get-ChildItem -LiteralPath (Join-Path $Root "pfo\android"), (Join-Path $Root "pfo\win") -File -Recurse | ForEach-Object { $_.FullName })
+    $rel = $files | ForEach-Object { @{ Name = $_.Substring($Root.Length + 1).Replace("\", "/").ToLowerInvariant(); Path = $_ } } | Sort-Object { $_.Name }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $all = New-Object System.IO.MemoryStream
+    foreach ($f in $rel) {
+        $text = [System.IO.File]::ReadAllText($f.Path) -replace "`r`n", "`n"
+        $b = [System.Text.Encoding]::UTF8.GetBytes($f.Name + "`n" + $text + "`n")
+        $all.Write($b, 0, $b.Length)
+    }
+    ($sha.ComputeHash($all.ToArray()) | ForEach-Object { $_.ToString("x2") }) -join ""
+}
+
 function Say($t) { Write-Host ""; Write-Host "== $t" -ForegroundColor Cyan }
 function Ok($t) { Write-Host "   ok   $t" }
 function Die($t) { Write-Host ""; Write-Host "ERROR: $t" -ForegroundColor Red; exit 1 }
@@ -309,7 +329,7 @@ function LoaderHeadless {
         if (Test-Path $hook) { Remove-Item -Force $hook }   # made afresh each time: it takes a second
         Add-Type -TypeDefinition $hookSource -OutputAssembly $hook -OutputType Library
         $mods = Join-Path $loader "UFO 50 mods"
-        $cli = "--headless " + (($ModNames | ForEach-Object { "--mod ""$mods\$_""" }) -join " ") + " --ignore-warnings"
+        $cli = "--headless " + (($ModNames | ForEach-Object { "--mod ""$mods\$_""" }) -join " ") + " --ignore-warnings --json"
         $env:DOTNET_STARTUP_HOOKS = $hook
         try {
             $p = Start-Process -FilePath (Join-Path $loader "current\UFO 50 Mod Loader.exe") -ArgumentList $cli `
@@ -321,6 +341,9 @@ function LoaderHeadless {
         }
         finally { Remove-Item env:DOTNET_STARTUP_HOOKS }
         if ($code -ne 0) { throw "the Mod Loader ended with code $code" }
+        # what it found between the mods (--json: one object per line); blocking ones would have stopped it
+        $c = Get-Content $log -ErrorAction SilentlyContinue | Where-Object { $_ -match '"event":"conflicts"' } | Select-Object -First 1
+        if ($c -match '"blocking":(\d+),"warnings":(\d+)') { Write-Host "   Mod Loader: $($Matches[1]) blocking conflicts, $($Matches[2]) warnings (two mods patching the same code: docs/MODS.md says how to check them)" }
         if (-not (Test-Path (Join-Path $modded "PFO.dll"))) { throw "the Mod Loader said it was done, but the mods aren't in the copy" }
         Set-Content -Encoding ASCII (Join-Path $modded "pfo_mods.txt") $ModStamp
         if (-not (ModdedOk)) { throw "the Mod Loader said it was done, but the mods aren't in the copy" }
@@ -385,8 +408,8 @@ if ($Windows) {
     Get-ChildItem -LiteralPath $modded -Force | Where-Object { $steamFiles -notcontains $_.Name -and $_.Name -ne "data.win" -and $_.Name -ne "PFO.dll" -and $_.Name -ne "pfo_mods.txt" } |
         ForEach-Object { Copy-Item -Recurse -LiteralPath $_.FullName -Destination $win }
     Copy-Item -LiteralPath $winKit -Destination (Join-Path $win "PFO.dll")
-    $out = Utmt @("load", (Join-Path $modded "data.win"), "-s", (Join-Path $Root "scripts\windows_patch.csx"), "-o", (Join-Path $win "data.win"), "-f") @{ PFO_SNAPSHOT_GML = (Join-Path $Root "scripts\pfo_snapshot.gml") }
-    $out | Where-Object { $_ -match "^(extension|save folder|lobby menu|screen|snapshots|runtime sprites|paths and grids|Fixed|FAILED)" } | ForEach-Object { Write-Host "   $_" }
+    $out = Utmt @("load", (Join-Path $modded "data.win"), "-s", (Join-Path $Root "scripts\windows_patch.csx"), "-o", (Join-Path $win "data.win"), "-f") @{ PFO_SNAPSHOT_GML = (Join-Path $Root "scripts\pfo_snapshot.gml"); PFO_BUILD_VERSION = $Version; PFO_BUILD_OWN = (OwnHash) }
+    $out | Where-Object { $_ -match "^(extension|save folder|lobby menu|screen|snapshots|runtime sprites|paths and grids|Fixed|build identity|FAILED)" } | ForEach-Object { Write-Host "   $_" }
     $patched = ($out -match "^windows patch: OK") -and ($out -match "^save folder: game name ufo50 -> ufo50_online") -and (Test-Path (Join-Path $win "data.win"))
     $steamLeft = $steamFiles | Where-Object { Test-Path (Join-Path $win $_) }
     if (-not $patched -or $steamLeft) {
@@ -429,8 +452,8 @@ $game = Join-Path $Work "game"
 if (Test-Path $game) { Remove-Item -Recurse -Force $game }
 Copy-Item -Recurse $modded $game
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $game "pfo_mods.txt")   # (the build's own note of the mods)
-$out = Utmt @("load", (Join-Path $modded "data.win"), "-s", (Join-Path $Root "scripts\android_patch.csx"), "-o", (Join-Path $game "data.win"), "-f") @{ PFO_SNAPSHOT_GML = (Join-Path $Root "scripts\pfo_snapshot.gml") }
-$out | Where-Object { $_ -match "hot seat|pad bindings|overlay support|lobby menu|quit:|join timeout|Steam lobby|snapshots|runtime sprites|paths and grids|Fixed" } | ForEach-Object { Write-Host "   $_" }
+$out = Utmt @("load", (Join-Path $modded "data.win"), "-s", (Join-Path $Root "scripts\android_patch.csx"), "-o", (Join-Path $game "data.win"), "-f") @{ PFO_SNAPSHOT_GML = (Join-Path $Root "scripts\pfo_snapshot.gml"); PFO_BUILD_VERSION = $Version; PFO_BUILD_OWN = (OwnHash) }
+$out | Where-Object { $_ -match "hot seat|pad bindings|overlay support|lobby menu|quit:|join timeout|Steam lobby|snapshots|runtime sprites|paths and grids|Fixed|build identity" } | ForEach-Object { Write-Host "   $_" }
 $out = Utmt @("load", (Join-Path $game "data.win"), "-s", (Join-Path $Root "scripts\export_overlay_art.csx")) @{ OUT_DIR = $game }
 Ok "game data"
 

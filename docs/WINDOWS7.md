@@ -242,7 +242,7 @@ order:
 | `W PFOSTATE: snapshots: off, the runner's code at ... isn't what they were worked out for` | the same, caught by a code hash — a different game version. |
 | `I yoyo: PFO LAN: joined via 192.168.…` | a match connection went through, over the local network. |
 | `I yoyo: PFO LAN: game connection to player XXXX: connected` | the two sides are talking: netplay works on 7. |
-| `W yoyo: PFO LAN: ... another version of the build (theirs N, ours N)` | the other device is another build — a version mismatch, not a Windows 7 problem (`c_BuildWire` is 4 on 7 and on 10/11). |
+| `W yoyo: PFO LAN: ... another build (theirs ..., ours ...)` | the other device is another build (another version, other mods or other patches), not a Windows 7 problem: the Windows 7 fixups change only `ufo50.exe`, which isn't part of the identity. |
 | `W yoyo: PFO LAN: no direct answer yet - trying the relay too` | the direct connection didn't get through (firewall, NAT) and it fell back to the relay: normal over the internet. |
 | `E PFOCRASH: fault ... at ..., ... (thread N)` and `called from: ...` | the runner crashed; those lines carry the address and the frames a report needs. |
 

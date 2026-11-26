@@ -56,7 +56,35 @@ namespace fakesteam
     // (v0.4 has matches without snapshots, which earlier builds don't know). Builds up to v0.3.1
     // send nothing there, which reads as 0. 5 (v0.5.0): several players per device, and the game
     // data has more mods in it (MultiMadnessMod 1.31 and three others): a different game to step.
-    constexpr uint8 c_BuildWire = 5;
+    // 6 (after v0.5.0): the build's identity follows the number (BuildId below), and both have to
+    // match. The number now only changes with this message's format.
+    constexpr uint8 c_BuildWire = 6;
+
+    // The build's identity, "<version>+<hash>": the build works it out from the version, every mod
+    // in the game data (PFO 50's compat hash) and our own sources and scripts, and the game hands
+    // it over at its start (pfo_set_build_id). Two devices play together only with the same one, so
+    // a new mod or a changed patch can't be forgotten the way a hand-kept number can.
+    std::mutex g_BuildIdMutex;
+    std::string g_BuildId, g_Refusal;
+    void SetBuildId(const std::string& id)
+    {
+        std::lock_guard<std::mutex> lock(g_BuildIdMutex);
+        if (g_BuildId == id) return;
+        g_BuildId = id.substr(0, 64);
+        __android_log_print(ANDROID_LOG_INFO, "yoyo", "PFO: build %s", g_BuildId.c_str());
+    }
+    std::string BuildId() { std::lock_guard<std::mutex> lock(g_BuildIdMutex); return g_BuildId; }
+    // why the last join was refused, for the menu or the overlay to show once
+    void SetRefusal(const std::string& why) { std::lock_guard<std::mutex> lock(g_BuildIdMutex); g_Refusal = why; }
+    std::string TakeRefusal() { std::lock_guard<std::mutex> lock(g_BuildIdMutex); std::string r; r.swap(g_Refusal); return r; }
+    // the other side's build, readably: the identity, or what an older build's number says
+    std::string BuildName(uint8 wire, const std::string& id)
+    {
+        if (!id.empty()) return id;
+        if (wire == 0) return "v0.3.1 or older";
+        if (wire < c_BuildWire) return "an older build (" + std::string(wire == 5 ? "v0.5.0" : wire == 4 ? "v0.4" : "older") + ")";
+        return "a newer build";
+    }
     constexpr uint32 c_DisconnectGraceful = 1;
     // the other side ended its session on purpose (it left the match): nobody waits for it to
     // come back. Builds before this one send 1 for every close and read 2 as a timeout.
@@ -997,13 +1025,14 @@ namespace fakesteam
             uint64 memberId = in.u64();
             std::string name = in.str();
             uint8 wire = in.ok && in.o + 1 <= in.n ? in.u8() : 0;
+            std::string theirBuild = wire == c_BuildWire && in.ok && in.o + 2 <= in.n ? in.str() : std::string();
             Out reply; reply.u8(static_cast<uint8>(Msg::JoinResult));
             bool ok = in.ok && g_IsOwner && lobbyId == g_Lobby.id && g_Lobby.joinable
                 && static_cast<int>(g_Lobby.members.size()) < g_Lobby.limit && memberId != 0 && memberId != g_MyId;
-            if (ok && wire != c_BuildWire)
+            if (ok && (wire != c_BuildWire || theirBuild != BuildId()))
             {
-                __android_log_print(ANDROID_LOG_WARN, "yoyo", "PFO LAN: player %04x can't join: another version of the build (theirs %d, ours %d)",
-                    static_cast<unsigned>(memberId & 0xffff), wire, c_BuildWire);
+                __android_log_print(ANDROID_LOG_WARN, "yoyo", "PFO LAN: player %04x can't join: another build (theirs %s, ours %s)",
+                    static_cast<unsigned>(memberId & 0xffff), BuildName(wire, theirBuild).c_str(), BuildId().c_str());
                 ok = false;
             }
             // An id that's already in the lobby: fine when it's that member joining again (their
@@ -1014,6 +1043,7 @@ namespace fakesteam
             if (ok && old && old->address.host != peer->address.host && ENET_TIME_DIFFERENCE(enet_time_get(), old->lastReceiveTime) < 5000) ok = false;
             reply.u8(ok);
             reply.u8(c_BuildWire);
+            reply.str(BuildId());
             Send(peer, c_ChanControl, reply, true);
             if (!ok)
             {
@@ -1040,11 +1070,14 @@ namespace fakesteam
             if (peer != g_OwnerPeer) return;
             bool ok = in.u8() != 0;
             uint8 wire = in.ok && in.o + 1 <= in.n ? in.u8() : 0;
-            if (ok && wire != c_BuildWire)
+            std::string hostBuild = wire == c_BuildWire && in.ok && in.o + 2 <= in.n ? in.str() : std::string();
+            if (wire != c_BuildWire || hostBuild != BuildId())
             {
-                // (a host from before v0.4 let us in: it doesn't look at versions)
-                __android_log_print(ANDROID_LOG_WARN, "yoyo", "PFO LAN: can't join: the host has another version of the build (theirs %d, ours %d)", wire, c_BuildWire);
-                enet_peer_disconnect_later(peer, 0);
+                // (a host from before v0.4 lets anyone in: it doesn't look at versions; any other
+                // refuses us itself, and says which build it is)
+                __android_log_print(ANDROID_LOG_WARN, "yoyo", "PFO LAN: can't join: the host has another build (theirs %s, ours %s)", BuildName(wire, hostBuild).c_str(), BuildId().c_str());
+                SetRefusal("CAN'T JOIN: THE HOST HAS ANOTHER BUILD (" + BuildName(wire, hostBuild) + ", YOURS " + BuildId() + ")");
+                if (ok) enet_peer_disconnect_later(peer, 0);
                 ok = false;
             }
             if (!ok)
@@ -1233,7 +1266,7 @@ namespace fakesteam
                 }
                 if (ev.peer == g_OwnerPeer)
                 {
-                    Out o; o.u8(static_cast<uint8>(Msg::HelloLobby)); o.u64(g_JoinLobbyId); o.u64(g_MyId); o.str(g_MyName); o.u8(c_BuildWire);
+                    Out o; o.u8(static_cast<uint8>(Msg::HelloLobby)); o.u64(g_JoinLobbyId); o.u64(g_MyId); o.str(g_MyName); o.u8(c_BuildWire); o.str(BuildId());
                     Send(ev.peer, c_ChanControl, o, true);
                 }
                 else if (HSteamNetConnection h = P2PFromTag(ev.peer->data))

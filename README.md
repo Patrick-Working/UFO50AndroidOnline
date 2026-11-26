@@ -457,8 +457,9 @@ step 3 of the [quick build](#quick-build). Start `ufo50.exe` in that folder.
   within a few frames). They are made for the `ufo50.exe` of UFO 50 1.9.5: with another one the
   game turns them off, replays instead (about 4 seconds per minute played on the test PC), and a
   match with that player in it restarts from the save on every load.
-- **Use the same version on every device.** A lobby only takes players with its own version of the
-  build.
+- **Use the same build on every device.** A lobby only takes players with its own build: the same
+  version, the same mods and the same patches (the build's identity, `0.5.0+1a2b3c4d` in the log
+  and on the lobby's MODS screen). A joiner with another one is told so on screen.
 - The folder contains your copy of the game, like the APK: **keep it to yourself.**
 
 The quick build takes `PFO.dll` from the **Windows kit** (`kit/ufo50-online-windows-v0.4.0.dll`,
@@ -502,8 +503,8 @@ app id and wire number there, so they never mix with other okplay games.
   then each controller picks a slot and locks it in.
 - **Online**: choose *Online* from the main menu.
   - HOST PUBLIC to be listed, HOST PRIVATE to get a code, JOIN BY CODE to enter one.
-  - Everyone needs the same version of this build (Android or Windows), with the same game version
-    and the same mods.
+  - Everyone needs the same build (Android or Windows), with the same game version and the same
+    mods. A lobby that won't take you says so: CAN'T JOIN: THE HOST HAS ANOTHER BUILD.
 - **Names**: players panel > NAME. Change it while you're not in a lobby.
 - **Save states**: the disk icon (top right). In single player, START SOLO PLAY first. Online,
   SAVE NOW saves for everyone and LOAD asks the others.
@@ -594,7 +595,15 @@ Details: [docs/TESTING.md](docs/TESTING.md).
 - **UFO 50** by [Mossmouth](https://50games.fun). Please buy it.
 - **[PFO 50](https://github.com/Blaizer/PFO-50)** by Blaizer
   ([GameBanana](https://gamebanana.com/mods/648717)), MIT licence: the online multiplayer all of
-  this is built on.
+  this is built on. What we use: its game-side code, which the Mod Loader puts in as the mod
+  "PFO 50" (about 70 of the game's scripts: the lobby screens, keeping players' inputs in step,
+  starting a session, the screen that compares players' mods), and its C++ (`dllmain.cpp`), the
+  base of our `PFO.dll` and `libPFO.so`. Our part: the netcode under it (no Steam: LAN, the room
+  server, hole punching, the relay), save states, rewind, rejoining, several players per device,
+  the Android port and the Windows version's menu (`pfo/`, `scripts/`).
+All mods are downloaded at build time from their authors' GameBanana pages and installed with
+the Mod Loader; none of them is stored in this repository (`docs/MODS.md`).
+
 - **[MultiMadnessMod](https://gamebanana.com/mods/605308)** by Jonesey13: 4+ players in many games.
 - **[Ultimate Pingolf Roster](https://gamebanana.com/mods/679074)** by Bubba256,
   **[Star Waspir 2P](https://gamebanana.com/mods/698092)** by ToastGhost26 and
@@ -612,6 +621,10 @@ Details: [docs/TESTING.md](docs/TESTING.md).
 - **GameMaker** by YoYo Games: the Android runner.
 - **[llvm-mingw](https://github.com/mstorsjo/llvm-mingw)** by Martin Storsjö: compiles the Windows
   version's `PFO.dll`.
+- **[api-ms-win-core-path-HACK](https://github.com/nalexandru/api-ms-win-core-path-HACK)** by
+  nalexandru (Wine's code, LGPL-2.1): the `PathCch` stand-in the Windows 7 fixups put beside the
+  game, downloaded at build time. The `MFTGetInfo` swap is the community's known fix for GameMaker
+  games on Windows 7 (YellowAfterlife's patcher).
 - Public STUN servers from Cloudflare and Google.
 
 ## Licence

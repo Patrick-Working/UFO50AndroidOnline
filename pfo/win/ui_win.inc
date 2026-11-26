@@ -1381,6 +1381,11 @@ namespace pfo_win_ui
             }
         }
 
+        // a lobby that wouldn't let us in: another build
+        {
+            std::string why = fakesteam::TakeRefusal();
+            if (!why.empty()) Say(pfo_win::Wide(why.c_str()), 6000, true);
+        }
         // online: a player's connection dropped, and the match is frozen until they're back or time runs out
         int waitMask = g_Session.m_OnlineState == EOnlineState::Online ? static_cast<int>(g_WaitMask.load()) : 0;
         int waitSeconds = g_WaitSecondsLeft.load(), rejoinSeq = g_RejoinSeq.load();

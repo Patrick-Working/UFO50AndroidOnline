@@ -120,6 +120,7 @@ public class PFO_Android extends ExtensionBase {
     static native int[] nativeWaiting();                     // online: seats we're frozen waiting for, seconds left, reconnections
     static native String nativeRejoinOffer();                // a match we were in and didn't see end: "<s ago>|<seat>|<names>" or ""
     static native int nativeRejoinResult();                  // 1 rejoined, -1 couldn't, 0 nothing new
+    static native String nativeTakeRefusal();                // why a lobby wouldn't let us in (another build), once
     static native int nativeOfferRefused();                  // a save that can't load in this match: its player count
     static native int[] nativeEstimates();                   // rewind 15/30/60 s estimates (ms, -1 not possible), replay frames/s
     static native boolean nativeSnapReady(int slot);         // the slot loads from its snapshot (about a second)
@@ -2609,6 +2610,9 @@ public class PFO_Android extends ExtensionBase {
             try { r = nativeRejoinResult(); } catch (Throwable t) { }
             if (r == 1) showBanner("BACK IN THE MATCH", 2200);
             else if (r == -1) showBanner("COULDN'T REJOIN THE MATCH", 2500, ATTN);
+            String why = "";
+            try { why = nativeTakeRefusal(); } catch (Throwable t) { }
+            if (why != null && !why.isEmpty()) showBanner(why, 6000, ATTN);
         }
 
         void rejoinTap(float x, float y) {

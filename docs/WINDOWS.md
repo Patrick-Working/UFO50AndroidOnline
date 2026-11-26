@@ -179,10 +179,11 @@ environment. Without snapshots:
 
 ## Playing with other versions
 
-**Everyone needs the same version.** v0.3.1 and earlier can't play with v0.4.0, and the lobby keeps
-the versions apart: a host refuses a joiner of another version, and a joiner leaves a host of
-another version (v0.3.1 hosts let anyone in). The game only says the join failed; the reason is in
-`pfo_online.log` ("another version of the build"). Lobbies of another version still show in the
+**Everyone needs the same build.** Every build has an identity, `<version>+<hash>` (the hash of our
+sources and scripts and of every mod in the game data; `PFO: build ...` in `pfo_online.log`), and
+the lobby keeps builds apart: a host refuses a joiner with another identity, and a joiner leaves a
+host with another one (v0.3.1 hosts let anyone in). The joiner is told on screen, CAN'T JOIN: THE
+HOST HAS ANOTHER BUILD, with both identities; the log says "another build (theirs ..., ours ...)". Lobbies of another version still show in the
 list of oldkid.net rooms, and those on your own network don't.
 
 Everything else is the same code as on Android: the room server, LAN discovery, direct connection

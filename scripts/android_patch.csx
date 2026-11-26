@@ -89,6 +89,60 @@ Console.WriteLine("Steam lobby/user functions now resolve to libPFO.so built-ins
     }
 }
 
+// ---- the build's identity ----
+// Only devices with the same identity share a lobby (pfo/android/fakesteam_impl.inc BuildId). It
+// is "<version>+<hash>", the hash of our own sources and scripts (build.ps1 hands it over in
+// PFO_BUILD_OWN) and of PFO 50's compat hash, which the Mod Loader worked out from every mod's
+// files: so the Android and the Windows build of one tree with one set of mods get the same one,
+// and any other mod, mod version or change of ours gives another. The game hands it to the
+// netcode at its start, and "UFO 50 Online" goes into PFO's own list of mods, so the lobby's
+// MODS screen shows it next to the others.
+{
+    string ver = Environment.GetEnvironmentVariable("PFO_BUILD_VERSION") ?? "";
+    string own = Environment.GetEnvironmentVariable("PFO_BUILD_OWN") ?? "";
+    if (ver == "" || own == "") failures.Add("build identity: PFO_BUILD_VERSION / PFO_BUILD_OWN not set (build.ps1 sets them)");
+    else
+    {
+        var ext = Data.Extensions.ByName("PFO");
+        var opt = ext == null ? null : ext.Options.FirstOrDefault(o => o.Name.Content == "compat");
+        System.Text.Json.Nodes.JsonObject compat = null;
+        if (opt != null)
+        {
+            try { compat = System.Text.Json.Nodes.JsonNode.Parse(System.Text.Encoding.UTF8.GetString(System.Convert.FromBase64String(opt.Value.Content))) as System.Text.Json.Nodes.JsonObject; }
+            catch { compat = null; }
+        }
+        string modsHash = compat != null && compat["hash"] != null ? compat["hash"].ToString() : "";
+        string hex;
+        using (var sha = System.Security.Cryptography.SHA256.Create())
+            hex = string.Concat(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(own + "|" + modsHash)).Take(4).Select(b => b.ToString("x2")));
+        string id = ver + "+" + hex;
+        if (compat != null)
+        {
+            var mods = compat["mods"] as System.Text.Json.Nodes.JsonArray;
+            if (mods != null && !mods.Select(m => m?.ToString()).Contains("UFO 50 Online"))
+            {
+                mods.Insert(0, "UFO 50 Online"); mods.Insert(1, ver); mods.Insert(2, hex);
+            }
+            compat["hash"] = id;
+            opt.Value = Data.Strings.MakeString(System.Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(compat.ToJsonString())));
+        }
+        if (Data.Functions.ByName("pfo_set_build_id") == null) Data.Functions.Add(new UndertaleFunction { Name = Data.Strings.MakeString("pfo_set_build_id") });
+        const string where = "gml_Object_oController_Create_0";
+        var code = Data.Code.ByName(where);
+        if (code == null) failures.Add("build identity: no " + where);
+        else
+        {
+            var ictx = new UndertaleModLib.Decompiler.GlobalDecompileContext(Data);
+            string t = new Underanalyzer.Decompiler.DecompileContext(ictx, code, Data.ToolInfo.DecompilerSettings).DecompileToString();
+            t = System.Text.RegularExpressions.Regex.Replace(t, "^pfo_set_build_id\\(\"[^\"]*\"\\);\\r?\\n", "");
+            var igroup = new UndertaleModLib.Compiler.CodeImportGroup(Data);
+            igroup.QueueReplace(where, "pfo_set_build_id(\"" + id + "\");\n" + t);
+            igroup.Import();
+            Console.WriteLine("build identity: " + id + (compat == null ? " (no PFO compat info: our sources only)" : ""));
+        }
+    }
+}
+
 // ---- hot seat ----
 // Turn-based games read one player's controls at a time. Report that player (and the game's
 // own player count, numPlayers in each of these objects: Party House's settings change it, so the
@@ -334,7 +388,7 @@ string[] SnapshotFunctions(string source)
 {
     return source.Split('\n').Where(l => l.StartsWith("// uses:"))
         .SelectMany(l => l.Substring(8).Split(new[] { ' ', ',', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries))
-        .Concat(new[] { "pfo_runner_mark", "pfo_runner_rehide", "pfo_runner_settle", "pfo_runner_maxid" }).Distinct().ToArray();
+        .Concat(new[] { "pfo_runner_mark", "pfo_runner_rehide", "pfo_runner_settle", "pfo_runner_maxid", "pfo_set_build_id" }).Distinct().ToArray();
 }
 
 

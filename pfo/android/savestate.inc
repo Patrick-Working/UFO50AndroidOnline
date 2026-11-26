@@ -4249,6 +4249,23 @@ namespace pfo_android
 static void pfo_runner_mark(RValue& r, CInstance*, CInstance*, int, RValue*) { pfo_android::gmi::Mark(); r.kind = VALUE_UNDEFINED; }
 static void pfo_runner_rehide(RValue& r, CInstance*, CInstance*, int, RValue*) { init_real(r, pfo_android::gmi::Rehide()); }
 static void pfo_runner_settle(RValue& r, CInstance*, CInstance*, int, RValue*) { init_real(r, pfo_android::gmi::Settle()); }
+// pfo_set_build_id(id): the build's identity (the game hands it over at its start; build.ps1 works
+// it out): only devices with the same one share a lobby (fakesteam_impl.inc BuildId)
+// (oController's Create event calls it, before the runner initialises the extension and hands
+// over the interface YYGetString goes through: read it with the runner's own function, which this
+// library looked up when it loaded)
+static void pfo_set_build_id(RValue& r, CInstance*, CInstance*, int argc, RValue* arg)
+{
+    r.kind = VALUE_UNDEFINED;
+    if (argc < 1) return;
+#if defined(__ANDROID__)
+    if (!pfo_android::g_Interface.YYGetString) return;
+    const char* s = pfo_android::g_Interface.YYGetString(arg, 0);
+#else
+    const char* s = YYGetString(arg, 0);
+#endif
+    if (s) fakesteam::SetBuildId(s);
+}
 // pfo_runner_maxid(set): the runner's instance id counter, before setting it to set (when set >= 0)
 static void pfo_runner_maxid(RValue& r, CInstance*, CInstance*, int argc, RValue* arg) { init_real(r, pfo_android::gmi::MaxId(argc > 0 ? static_cast<int>(YYGetReal(arg, 0)) : -1)); }
 
@@ -4374,6 +4391,12 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_unofficial_ufo50_PFO_1Android_nati
 extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeOfferRefused(JNIEnv*, jclass)
 {
     return pfo_android::g_OfferRefused.exchange(0);
+}
+
+// why the last lobby join was refused (another build), once; "" if nothing new
+extern "C" JNIEXPORT jstring JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeTakeRefusal(JNIEnv* env, jclass)
+{
+    return env->NewStringUTF(fakesteam::TakeRefusal().c_str());
 }
 
 extern "C" JNIEXPORT jint JNICALL Java_com_unofficial_ufo50_PFO_1Android_nativeRejoinResult(JNIEnv*, jclass)
